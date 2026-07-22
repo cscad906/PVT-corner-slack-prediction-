@@ -1,0 +1,24 @@
+# 3nm BoomCoreV3 -- SETUP SI-aware corner prediction.
+# Corner grid: 5 V x 8 T = 40 corners, NO RC axis. Here the second continuous OLS
+# axis is TEMPERATURE (this dataset predicts across T rather than splitting it) --
+# demonstrating that the axis choice is config-driven, not hardcoded.
+data:
+  annotated_dir: /home/hyunss/PVT_prediction/3nm/deliver/annotation/setup_si/annotated
+  crosstalk_dir: /home/hyunss/PVT_prediction/3nm/deliver/real_crosstalk/last_real_setup
+  ref_corner: TT_0p7V_25C
+  cache: cache/gt3/setup/dataset.npz
+
+split:
+  hidden_voltages: [0.75]
+  hidden_temps: [70]
+
+base:
+  axes:
+    - {name: v, ref: 0.7, order: 3}                                  # cubic in V (dv4 rank-deficient at 4 seen V -> auto-dropped)
+    - {name: t, ref: 25, order: 4, fit_scale: 100, token_scale: 100} # quartic in T; dt = (T-25)/100 (won the basis ablation: 10.2 vs 43 ps)
+  # bandwidths in (dv volts, dt/100) units; null = global fit
+  adaptive_grid: [[0.03, 0.30], [0.05, 0.35], [0.05, 0.45], [0.08, 0.45],
+                  [0.12, 0.45], [0.08, 0.80], [0.12, 0.80], null]
+
+train:
+  out_dir: runs/gt3/setup/v1

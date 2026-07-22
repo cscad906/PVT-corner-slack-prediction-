@@ -1,0 +1,58 @@
+# =====================================================================
+# TEMPLATE for a NEW dataset (e.g. another company's deliverable).
+# Copy this to configs/<dataset>/<sta>_<split>.yaml and fill it in.
+# Only the fields below are needed; everything else comes from _defaults.yaml.
+#
+# The engine predicts per-path slack at UNMEASURED corners over the CONTINUOUS
+# axes you declare under `base.axes` (typically voltage + BEOL/RC). Anything that
+# should be a SEPARATE model -- temperature, process, setup-vs-hold -- is NOT an
+# axis: make one config (one cache, one run) per such split. See docs/PARSING.md
+# for exactly which arrays your parser must put in the .npz.
+# =====================================================================
+
+data:
+  annotated_dir: /abs/path/to/annotation/<sta>/<split>/annotated   # PrimeTime fixed-path annotated reports
+  crosstalk_dir: /abs/path/to/crosstalk/<sta>                      # per-path crosstalk reports (omit for slew)
+  temp: m40                        # which temperature this model covers (a SPLIT, not an axis)
+  corner_prefix: TT                # process token leading corner labels/filenames
+                                   #   (e.g. FFPG / SSPG in another deliverable;
+                                   #    process is a SPLIT -> one config per prefix)
+  rc_corners: [Cmin, Cnom, Cmax]   # 2nd-axis level sub-folder names in YOUR data (any names)
+  ref_corner: TT_0p8V_Cnom         # path-selection anchor; must be a SEEN corner
+                                   #   (use YOUR prefix/level names, e.g. FFPG_0p55V_Ctyp)
+  cache: cache/<dataset>/<sta>_<split>/dataset.npz
+  # If your reports use a different filename/label format, override the patterns
+  # (defaults shown) instead of editing code:
+  # patterns:
+  #   annotated_suffix: _fixed_annotated.txt
+  #   crosstalk_suffix: .by_path.rpt
+  #   voltage_regex: '_tt(0p\d+)v'     # group 1 = voltage token like 0p605
+
+split:
+  # SEEN = the measured (coarse) voltage grid; every other V is hidden.
+  seen_voltages: [0.6, 0.65, 0.7, 0.75, 0.8]
+  # or, instead: hidden_voltages: [0.72]
+  hidden_rc: []                    # 2nd-axis levels to hold out (or hidden_temps: [...] for a T axis)
+
+base:
+  # The CONTINUOUS OLS axes. axis 0 must be voltage. Each axis:
+  #   name        - short id used in term names (v, rc, t, proc, ...)
+  #   ref         - the reference-corner value on this axis (dv = value - ref)
+  #   order       - polynomial order on this axis (the 3rd-/4th-order choice).
+  #                 Terms needing more distinct seen levels than available are
+  #                 dropped automatically (e.g. order 4 with only 4 seen levels).
+  #   fit_scale   - divide the coordinate by this before fitting (100 for a T axis)
+  #   token_scale - coordinate unit for the neural features (default 0.1 for V, else 1.0)
+  axes:
+    - {name: v,  ref: 0.8, order: 3}
+    # a CATEGORICAL 2nd axis (BEOL/process): `levels` maps YOUR level names to
+    # coordinates -- rename/renumber freely; omit to use the Cmin/Cnom/Cmax default.
+    - {name: rc, ref: 0.0, order: 2, levels: {Cmin: -1, Cnom: 0, Cmax: 1}}
+    # ...or a NUMERIC 2nd axis (temperature): drop `levels`, add fit_scale/token_scale:
+    # - {name: t, ref: 25, order: 4, fit_scale: 100, token_scale: 100}
+  weighting: adaptive              # plain | local | adaptive (best)
+  # bandwidths in (dv, d<axis1>) units; null = global fit. Omit to auto-derive.
+  adaptive_grid: [[0.02, 1.0], [0.05, 1.0], [0.08, 2.0], [0.12, 2.0], null]
+
+train:
+  out_dir: runs/<dataset>/<sta>_<split>/v1

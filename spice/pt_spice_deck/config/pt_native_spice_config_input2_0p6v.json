@@ -1,0 +1,115 @@
+{
+ "version": 1,
+ "project": {
+  "root": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck",
+  "work_dir": "/home/KSW/code/pt_spice_deck/py",
+  "output_root": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/output/input2"
+ },
+ "reference_pt": {
+  "description": "input2 BoomCore Cnom/25C PT setup used for boundary-condition extraction and native SPICE deck generation.",
+  "top": "BoomCore",
+  "verilog": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/design_files/BoomCore.route_opt.pt.v.gz",
+  "sdc": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/design_files/BoomCore.func__tt0p8v25c.sdc",
+  "spef": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/design_files/Cnom_temp_all/BoomCore_14nm.starrc_coupled.Cnom_model_25.spef",
+  "lib_db": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/0p6V/saed14rvt_tt0p6v25c_ccs_rth0p01_full385_3ns250fj_mono.db",
+  "delay_type": "max",
+  "use_throughs": true
+ },
+ "path_registry": {
+  "description": "Fixed paths regenerated from input2 Cnom/25C PT setup.",
+  "type": "fixed_tcl",
+  "index_base": 1,
+  "fixed_tcl": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/tcl/BoomCore_input2_Cnom25_fixed_paths_3000.tcl"
+ },
+ "prime_time": {
+  "setup_script": "/home/synopsys_tool/prime.bashrc",
+  "tcl": "/home/KSW/code/pt_spice_deck/tcl/run_pt_native_spice_deck.tcl",
+  "log_name": "pt.log"
+ },
+ "spice_model": {
+  "description": "input2 transistor model and stdcell SPF.",
+  "process": "TT",
+  "model_strategy": "input2_tt_model",
+  "model_card": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/modelcard/saed14nm_hspice_local.lib",
+  "cell_spf": "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/modelcard/saed14nm_rvt.spf",
+  "extra_spice_includes": [
+   "/home/KSW/auto_spice_breakdown/codex/pt_spice_deck/input2/modelcard/saed14nm_cksplt_alias.sp"
+  ],
+  "model_sections": [
+   "T_nfet",
+   "T_pfet",
+   "T_nfet_15",
+   "T_pfet_15",
+   "T_nfet_18",
+   "T_pfet_18",
+   "T_n08_lvt",
+   "T_p08_lvt",
+   "T_n08_slvt",
+   "T_p08_slvt",
+   "T_n08_hvt",
+   "T_p08_hvt",
+   "T_nd",
+   "T_tond",
+   "T_pd",
+   "T_topd",
+   "T_res",
+   "T_pres",
+   "FIN",
+   "cap"
+  ]
+ },
+ "target_corner_defaults": {
+  "description": "Only used if patching is enabled. This input2 correlation run skips patching and keeps PT-generated deck boundary conditions.",
+  "vdd": 0.6,
+  "temp": 25,
+  "allow_ml_row_override": true
+ },
+ "ml_input": {
+  "format": "csv",
+  "path_id_column": "path_id",
+  "required_columns": [
+   "path_id",
+   "input_slew_ps",
+   "output_load_ff"
+  ],
+  "optional_columns": [
+   "target_vdd",
+   "target_temp"
+  ],
+  "units": {
+   "input_slew": "ps",
+   "output_load": "ff"
+  }
+ },
+ "deck_generation": {
+  "output_basename_format": "path_{path_id:06d}",
+  "ground_coupling_capacitors": true,
+  "transient_step_ns": 0.001,
+  "transient_stop_ns": 6.0,
+  "initial_delay_ns": 1.0,
+  "minimum_transition_ns": 0.001
+ },
+ "deck_patch": {
+  "patch_vdd": true,
+  "patch_temp": true,
+  "patch_input_slew": true,
+  "patch_output_load": true,
+  "output_load_cap_name": "C_ML_OUT_LOAD",
+  "output_load_ground_node": "VSS",
+  "keep_original_deck_backup": true
+ },
+ "hspice": {
+  "setup_script": "/home/synopsys_tool/prime.bashrc",
+  "command": "hspice",
+  "output_suffix": "_hspice",
+  "require_job_concluded": true,
+  "fail_on_hspice_error": true,
+  "fail_on_measure_failed": false
+ },
+ "results": {
+  "summary_csv": "native_spice_summary.csv",
+  "cell_delay_csv": "native_spice_cell_delay.csv",
+  "net_delay_csv": "native_spice_net_delay.csv",
+  "raw_measure_csv": "native_spice_raw_measure.csv"
+ }
+}

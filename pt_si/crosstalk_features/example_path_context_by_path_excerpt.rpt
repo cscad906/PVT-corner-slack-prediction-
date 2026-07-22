@@ -1,0 +1,125 @@
+################################################################################
+# EXAMPLE (excerpt) — path_context_sweep 산출물 TT_<V>V_<T>C.path_context_si_compact.by_path.rpt
+# 디자인: SmallBoomV2 / SAED14 / TT 0.8V 25C / Cnom / setup
+# 전체 파일은 path 수천 개 — 여기는 첫 FIXED_PATH 1개 블록만 발췌.
+# 탭 구분 14컬럼: path_segment, victim_net, aggressor_net, crosstalk_delta,
+#   aggressor_bump, number_of_aggressors, victim_load_pin,
+#   victim_load_min/max_arrival, aggressor_driver_pin,
+#   aggressor_driver_min/max_arrival, aggressor_driver_slew_max, coupling_cap_ff
+# aggressor_net=0 인 행 = 그 victim arc 에 active aggressor 없음(윈도우/필터로 배제).
+################################################################################
+### FIXED_PATH idx=1 key=iregister_read_exe_reg_rs1_data_1_reg_1_->iregister_read_exe_reg_rs2_data_1_reg_63_#1
+# Startpoint: iregister_read_exe_reg_rs1_data_1_reg_1_
+# Endpoint: iregister_read_exe_reg_rs2_data_1_reg_63_
+# Path Group: myCLK
+# Path Type: max
+# Slack: MET 0.0203
+path_segment	victim_net	aggressor_net	crosstalk_delta	aggressor_bump	number_of_aggressors	victim_load_pin	victim_load_min_arrival	victim_load_max_arrival	aggressor_driver_pin	aggressor_driver_min_arrival	aggressor_driver_max_arrival	aggressor_driver_slew_max	coupling_cap_ff
+launch_clock	clock	0	0	0	0	ZCTSBUF_695644_52234/X	0.006516	0.006697	0	0	0	0	0
+launch_clock	ZCTSNET_2728	0	0	0	288	ZCTSBUF_695572_52233/A	0.013292	0.013343	0	0	0	0	0
+launch_clock	ZCTSNET_2727	0	0	0	79	ZCTSBUF_561084_51942/A	0.029573	0.033618	0	0	0	0	0
+launch_clock	ZCTSNET_2629	0	0	0	208	ZCTSBUF_537293_51917/A	0.049643	0.054459	0	0	0	0	0
+launch_clock	ZCTSNET_2609	0	0	0	245	ZCTSBUF_534187_51916/A	0.085901	0.098364	0	0	0	0	0
+launch_clock	ZCTSNET_2608	0	0	0	144	ZCTSBUF_534147_51914/A	0.107461	0.120477	0	0	0	0	0
+launch_clock	ZCTSNET_2606	0	0	0	127	iregister_read_exe_reg_rs1_data_1_reg_1_/CK	0.131978	0.147279	0	0	0	0	0
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	iregister_read_io_exe_reqs_1_bits_rs1_data[3]	0.0300361	0.073092	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	iregister_read_exe_reg_rs1_data_1_reg_3_/QN	0.244747	0.255567	0.086806	8.880000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	iregister_read_io_exe_reqs_1_bits_rs2_data[4]	0.0300361	0.042772	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	iregister_read_exe_reg_rs2_data_1_reg_4_/QN	0.189402	0.197083	0.037073	3.505000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	n27041	0.0300361	0.036393	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	iregister_read_exe_reg_rs1_data_1_reg_36_/Q	0.190552	0.201516	0.061792	3.690000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	iregister_read_io_exe_reqs_1_bits_rs1_data[19]	0.0300361	0.028703	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	iregister_read_exe_reg_rs1_data_1_reg_19_/QN	0.194679	0.207973	0.095351	3.636000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	iregister_read_io_exe_reqs_1_bits_rs1_data[9]	0.0300361	0.022050	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	iregister_read_exe_reg_rs1_data_1_reg_9_/QN	0.191732	0.204550	0.091695	2.740000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	n_T_282[14]	0.0300361	0.014267	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	U26424/X	0.217913	1.098705	0.117677	2.040000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	csr_exe_unit_div_div/n348	0.0300361	0.012970	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	csr_exe_unit_div_div/ctmTdsLR_3_24545/X	0.151875	0.257926	0.032926	0.945000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	n38476	0.0300361	0.012970	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	ctmTdsLR_1_13937/X	0.215466	2.649949	0.038555	0.922000
+data	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	iregister_read_io_exe_reqs_1_bits_rs2_data[15]	0.0300361	0.012101	211	ctmTdsLR_2_24864/B2	0.181655	0.258597	iregister_read_exe_reg_rs2_data_1_reg_15_/QN	0.184691	0.191787	0.028068	0.892000
+data	n37393	intadd_24_A_0_	0.0405018	0.066775	101	U22755/A	0.190554	0.396491	U26914/X	0.257754	0.454024	0.094640	2.503000
+data	n37393	n37802	0.0405018	0.049577	101	U22755/A	0.190554	0.396491	U37869/X	0.217530	1.424477	0.039507	1.220000
+data	n37393	csr_exe_unit_io_iresp_bits_data[28]	0.0405018	0.046678	101	U22755/A	0.190554	0.396491	U26886/X	0.142155	0.888592	0.044644	1.003000
+data	n37393	iregister_read_io_exe_reqs_1_bits_rs1_data[1]	0.0405018	0.027558	101	U22755/A	0.190554	0.396491	iregister_read_exe_reg_rs1_data_1_reg_1_/QN	0.213991	0.226050	0.081503	0.932000
+data	n37393	n_T_282[21]	0.0405018	0.022828	101	U22755/A	0.190554	0.396491	U26870/X	0.210733	0.962285	0.085293	0.768000
+data	n37393	n_T_282[52]	0.0405018	0.020798	101	U22755/A	0.190554	0.396491	U35557/X	0.202608	0.974765	0.082056	0.686000
+data	n37393	n37614	0.0405018	0.016999	101	U22755/A	0.190554	0.396491	ctmTdsLR_1_66983/X	0.228950	1.349563	0.041866	0.420000
+data	n37393	csr_exe_unit_io_iresp_bits_data[5]	0.0405018	0.014359	101	U22755/A	0.190554	0.396491	U33250/X	0.150313	1.002506	0.054586	0.335000
+data	n37393	csr_exe_unit_io_iresp_bits_data[23]	0.0405018	0.012635	101	U22755/A	0.190554	0.396491	U33254/X	0.146640	0.888796	0.044849	0.271000
+data	n37395	tmp_net33131	0.00628995	0.043138	34	U21589/B	0.221343	0.453843	ctmTdsLR_1_69406/X	0.226947	0.720076	0.035509	0.357000
+data	n37395	n37403	0.00628995	0.016633	34	U21589/B	0.221343	0.453843	ctmTdsLR_1_73217/X	0.226890	0.519395	0.048669	0.159000
+data	n37395	n33193	0.00628995	0.012391	34	U21589/B	0.221343	0.453843	U32264/X	0.184019	0.418978	0.101157	0.152000
+data	n37494	0	0	0	0	ctmTdsLR_1_30101/A1	0.200195	0.498216	0	0	0	0	0
+data	n37399	0	0	0	0	U37510/B	0.211557	0.513168	0	0	0	0	0
+data	n43820	iregister_read_io_exe_reqs_1_bits_uop_ctrl_fcn_dw	0.000203036	0.025117	19	ctmTdsLR_4_41187/B1	0.223012	0.527483	iregister_read_exe_reg_uops_1_ctrl_fcn_dw_reg/QN	0.151023	0.164517	0.064726	0.290000
+data	intadd_23_CI	0	0	0	0	intadd_23_U5/B	0.202347	0.549637	0	0	0	0	0
+data	intadd_23_n4	0	0	0	0	intadd_23_U4/B	0.220171	0.581773	0	0	0	0	0
+data	intadd_23_n3	0	0	0	0	intadd_23_U3/B	0.211520	0.612869	0	0	0	0	0
+data	intadd_23_n2	0	0	0	0	intadd_23_U2/B	0.218943	0.644410	0	0	0	0	0
+data	intadd_23_n1	0	0	0	0	U32684/C1	0.226335	0.677992	0	0	0	0	0
+data	n37513	0	0	0	0	U32685/A2	0.193192	0.713767	0	0	0	0	0
+data	n34368	0	0	0	0	ctmTdsLR_1_30562/B	0.188574	0.746798	0	0	0	0	0
+data	n33487	0	0	0	0	U32689/B	0.177191	0.756284	0	0	0	0	0
+data	n37434	0	0	0	0	U21750/B	0.191681	0.779047	0	0	0	0	0
+data	n33840	0	0	0	0	U21751/B	0.198284	0.822913	0	0	0	0	0
+data	n33502	0	0	0	0	U21858/B	0.208898	0.854401	0	0	0	0	0
+data	n33773	0	0	0	0	U33031/B	0.204511	0.889989	0	0	0	0	0
+data	n43814	0	0	0	0	U33034/A	0.209095	0.921390	0	0	0	0	0
+data	n33776	0	0	0	0	ctmTdsLR_3_16230/A2	0.217481	0.932214	0	0	0	0	0
+data	intadd_24_CI	0	0	0	0	intadd_24_U5/B	0.199745	0.950634	0	0	0	0	0
+data	intadd_24_n4	0	0	0	0	intadd_24_U4/B	0.223191	0.981012	0	0	0	0	0
+data	intadd_24_n3	0	0	0	0	intadd_24_U3/B	0.228788	1.012603	0	0	0	0	0
+data	intadd_24_n2	0	0	0	0	intadd_24_U2/B	0.212629	1.042147	0	0	0	0	0
+data	intadd_24_n1	0	0	0	0	U21854/CI	0.209377	1.075173	0	0	0	0	0
+data	n37565	0	0	0	0	U21511/CI	0.236432	1.107229	0	0	0	0	0
+data	n37350	0	0	0	0	U21590/CI	0.193053	1.139861	0	0	0	0	0
+data	n37415	0	0	0	0	U21679/CI	0.221382	1.172056	0	0	0	0	0
+data	n37473	0	0	0	0	U21747/CI	0.225012	1.204202	0	0	0	0	0
+data	n37581	0	0	0	0	U21508/CI	0.217379	1.237282	0	0	0	0	0
+data	n37599	0	0	0	0	U21588/CI	0.202576	1.271863	0	0	0	0	0
+data	n37750	0	0	0	0	U21676/CI	0.222508	1.307614	0	0	0	0	0
+data	n37772	0	0	0	0	U21746/CI	0.225538	1.343819	0	0	0	0	0
+data	n37790	0	0	0	0	U21520/CI	0.226050	1.374277	0	0	0	0	0
+data	n37807	0	0	0	0	U21602/CI	0.202576	1.412922	0	0	0	0	0
+data	n34626	0	0	0	0	ctmTdsLR_1_43925/A1	0.189542	1.456128	0	0	0	0	0
+data	n34608	0	0	0	0	U34089/B	0.170152	1.470557	0	0	0	0	0
+data	n34676	0	0	0	0	U34152/B2	0.182608	1.490211	0	0	0	0	0
+data	n35106	0	0	0	0	U34628/C2	0.209114	1.524604	0	0	0	0	0
+data	n35145	0	0	0	0	U34629/CI	0.211371	1.562899	0	0	0	0	0
+data	n35126	0	0	0	0	ctmTdsLR_1_20094/A	0.214553	1.592318	0	0	0	0	0
+data	tmp_net6893	0	0	0	0	ctmTdsLR_2_20095/A1	0.220574	1.601871	0	0	0	0	0
+data	n35168	0	0	0	0	U34656/B2	0.182898	1.616059	0	0	0	0	0
+data	n35193	0	0	0	0	U21703/CI	0.206061	1.650884	0	0	0	0	0
+data	n35424	0	0	0	0	ctmTdsLR_2_54993/B	0.223169	1.690998	0	0	0	0	0
+data	tmp_net24546	0	0	0	0	ctmTdsLR_1_54992/B	0.205815	1.702499	0	0	0	0	0
+data	n35490	0	0	0	0	U35230/CI	0.201091	1.716645	0	0	0	0	0
+data	n35672	0	0	0	0	U35390/CI	0.217551	1.756956	0	0	0	0	0
+data	n35684	0	0	0	0	U35397/CI	0.178909	1.795580	0	0	0	0	0
+data	n35705	0	0	0	0	U35420/CI	0.196252	1.830946	0	0	0	0	0
+data	n35722	0	0	0	0	U35436/CI	0.178674	1.867142	0	0	0	0	0
+data	n35736	0	0	0	0	U35450/CI	0.185736	1.897025	0	0	0	0	0
+data	n35751	0	0	0	0	U35465/CI	0.187217	1.934069	0	0	0	0	0
+data	n35764	0	0	0	0	U35477/CI	0.185840	1.966237	0	0	0	0	0
+data	n35780	0	0	0	0	U21470/CI	0.182893	1.997222	0	0	0	0	0
+data	n35802	0	0	0	0	U21514/CI	0.181484	2.029150	0	0	0	0	0
+data	n35821	0	0	0	0	U21473/CI	0.182943	2.060616	0	0	0	0	0
+data	n35843	0	0	0	0	U21476/CI	0.210767	2.092870	0	0	0	0	0
+data	n35880	0	0	0	0	U21546/CI	0.201159	2.125147	0	0	0	0	0
+data	n35899	0	0	0	0	U21632/CI	0.185090	2.157393	0	0	0	0	0
+data	n35932	0	0	0	0	U21708/CI	0.205314	2.197623	0	0	0	0	0
+data	n35960	0	0	0	0	U21772/CI	0.212812	2.230923	0	0	0	0	0
+data	n35986	0	0	0	0	U21883/CI	0.216067	2.264735	0	0	0	0	0
+data	n36026	0	0	0	0	U35703/B2	0.220846	2.314617	0	0	0	0	0
+data	n36057	0	0	0	0	U35731/C2	0.177317	2.359445	0	0	0	0	0
+data	n36084	0	0	0	0	U21707/CI	0.200771	2.403762	0	0	0	0	0
+data	n36121	0	0	0	0	U21474/CI	0.212047	2.439066	0	0	0	0	0
+data	n36157	0	0	0	0	U21475/CI	0.191892	2.473220	0	0	0	0	0
+data	n36203	0	0	0	0	U35856/B2	0.187319	2.506741	0	0	0	0	0
+data	n38471	0	0	0	0	U21631/CI	0.177738	2.535298	0	0	0	0	0
+data	n38474	0	0	0	0	U21706/A2	0.194568	2.571820	0	0	0	0	0
+data	n38571	0	0	0	0	ctmTdsLR_1_13937/A2	0.215332	2.609539	0	0	0	0	0
+data	n38476	0	0	0	0	ctmTdsLR_3_20421/A1	0.208682	2.657919	0	0	0	0	0
+data	n22137	0	0	0	0	ctmTdsLR_1_72333/A	0.231745	2.725773	0	0	0	0	0
+data	n38550	0	0	0	0	ctmTdsLR_2_31201/A1	0.249619	2.753834	0	0	0	0	0
+data	n22134	0	0	0	0	iregister_read_exe_reg_rs2_data_1_reg_63_/D	0.163826	2.878729	0	0	0	0	0
+capture_clock	clock	0	0	0	0	ZCTSBUF_695644_52234/X	0.006516	0.006697	0	0	0	0	0
+capture_clock	ZCTSNET_2728	0	0	0	288	ZCTSBUF_695572_52233/A	0.013292	0.013343	0	0	0	0	0
+capture_clock	ZCTSNET_2727	0	0	0	79	ZCTSBUF_561084_51942/A	0.029573	0.033618	0	0	0	0	0
+capture_clock	ZCTSNET_2629	0	0	0	0	ZCTSBUF_561025_51909/A	0.049602	0.054417	0	0	0	0	0
+capture_clock	ZCTSNET_2601	0	0	0	0	ZCTSBUF_553817_51900/A	0.065432	0.073167	0	0	0	0	0
+capture_clock	ZCTSNET_2592	0	0	0	0	iregister_read_exe_reg_rs2_data_1_reg_63_/CK	0.091491	0.102477	0	0	0	0	0
+
