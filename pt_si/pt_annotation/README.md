@@ -100,6 +100,13 @@ python3 run_sweep.py \
   --max-paths 3000 --edge-aware-fixed-paths
 ```
 
+> **주의 — 이 예시(run_sweep.py)는 "worst top-N" 추출이다.** `--max-paths 3000` 은
+> "가장 나쁜 3000개"를 뽑는 것이므로 violation 이 그보다 많으면 **전부를 담지
+> 못한다.** "violation 전부(+위반 위험 리스트)" 가 필요하면 아래
+> **"위반/위험 경로 전수 추출 (extract_violation_paths.py)"** 섹션의 방식을 쓴다
+> (slack 임계 기반 전수 추출 → `--emit-fixed-paths-tcl` → 본 러너의
+> `--reuse-strict-tcl` 로 연결).
+
 - `--mode setup|hold` → `report_timing -delay_type max|min`
 - `--si`: PrimeTime SI + `read_parasitics -keep_capacitive_coupling`.
   실행 전 SPEF 에 coupling cap 이 실재하는지 pre-flight 검사하며, 없으면 즉시 중단
@@ -219,7 +226,23 @@ python3 extract_violation_paths.py \
   --exclude-vtags 0p795 \
   --slack-threshold 0.0 \
   --max-paths 50000 --max-workers 3 \
+  --emit-fixed-paths-tcl \
   --out-dir  /data/results/mycore_violscan_setup
+
+# ── 2단계: 위에서 emit 된 tcl 을 run_sweep 에 물려 재측정 + annotation ──
+python3 run_sweep.py \
+  --design MyCore --top MyCore \
+  --spef-prefix mycore_14nm \
+  --mode setup \
+  --verilog  /data/deliver/mycore_icc2.v \
+  --sdc      /data/deliver/mycore.sdc \
+  --spef-root /data/deliver/spef \
+  --spef-name-format '{prefix}.{rc}_model_{temp}.spef' --spef-temp 25 \
+  --db-root  /data/lib_db/db --lib-root /data/lib_db/lib \
+  --ref-db   /data/lib_db/db/<아무 측정 코너>.db \
+  --reuse-strict-tcl /data/results/mycore_violscan_setup/MyCore_setup_violation_fixed_paths_<N>.tcl \
+  --out-dir  /data/results/mycore_violscan_annotated
+# → annotated/<RC>/<corner>_fixed_annotated.txt (union 경로들의 코너별 재측정 + Dist/Res/Cpin)
 ```
 
 ### 산출물
