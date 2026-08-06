@@ -13,8 +13,9 @@ PrimeTime 으로 (1) 고정 경로를 여러 PVT 코너에서 재측정하며 Di
 그 입력이 되는 coupling 유지 SPEF 는 StarRC 로 먼저 뽑는다(`spef_extraction/`,
 아래 파이프라인 0 — **이미 coupled SPEF 를 받아 쓰는 사이트는 건너뛴다**).
 
-실행 순서: **파이프라인 0 (SPEF 생산) → 1 (annotation) → 2/3 (crosstalk)**.
-2/3 은 1 의 산출물(`annotation/`)을 참조하므로 1 보다 먼저 돌리지 않는다.
+실행 순서: **파이프라인 0 (SPEF 생산) → 1 (annotation) → 2 (crosstalk)**.
+**2 는 1 의 annotated 리포트가 있어야 돌아가고, 넘기기 전에 디렉토리 재배치가
+필요하다**(파이프라인 2 절 첫머리 참조). **3 은 1/2 와 무관하게 단독 실행 가능**하다.
 
 ## 실행 전 체크 (5분)
 
@@ -246,6 +247,43 @@ python3 extract_violation_paths.py ... \
 
 ## 파이프라인 2 — crosstalk path_context_sweep
 
+> **선행 조건: 파이프라인 1 의 annotated 리포트가 있어야 한다.** 7단계 중 ①단계
+> (`parse_annotated_with_clock_segments.py`)의 입력이 바로 그 파일이고, 러너가 job
+> 마다 존재를 확인한다(`run_sweep.py:169`). 없으면 그 job 은 못 돈다.
+> (파이프라인 3 은 annotation 이 **필요 없다** — 독립 실행 가능.)
+
+### ⚠️ 먼저 할 일 — annotation 을 파이프라인 2 가 찾는 자리에 놓는다
+
+두 파이프라인의 디렉토리 규약이 다르다. **pt_annotation 을 돌렸다고 자동으로
+저 자리에 놓이지 않는다.**
+
+```
+pt_annotation 이 쓰는 곳:
+  <out-dir>/annotated/<RC>/<db_stem>_fixed_annotated.txt
+
+path_context_sweep 이 찾는 곳 (run_sweep.py:115):
+  <data-root>/annotation/<setup_sion|hold_sion>/temp_<T>/annotated/<RC>/<db_stem>_fixed_annotated.txt
+                         └────────── 이 두 계층이 더 있다 ──────────┘
+```
+
+뒤쪽 `annotated/<RC>/<db_stem>_fixed_annotated.txt` 는 **양쪽이 완전히 같다.**
+따라서 심볼릭 링크 한 번이면 된다(복사해도 되지만 용량이 크다):
+
+```bash
+# setup + 25C 예. mode/온도 조합마다 한 번씩.
+mkdir -p /data/mycore_iter/annotation/setup_sion/temp_25
+ln -s /data/results/mycore_violscan_setup_annotated/annotated \
+      /data/mycore_iter/annotation/setup_sion/temp_25/annotated
+```
+
+- `setup` → `setup_sion`, `hold` → `hold_sion` (`ANALYSES`, `run_sweep.py:44`).
+  이름이 `_sion` 인 데서 보듯 **SI 를 켜고(`--si`) 만든 annotation** 을 전제한다.
+- `temp_<T>` 의 `T` 는 `25` / `m40` / `125`. pt_annotation 은 out-dir 하나당
+  **온도 1개**만 다루므로(`--spef-temp`), 온도마다 별도 run + 별도 링크가 필요하다.
+- 파일명의 `<db_stem>` 은 `DB_STEM_FORMAT` (`run_sweep.py:40`)이 만든다. db 파일명이
+  우리 규약과 다르면 **`XTALK_DB_STEM_FORMAT` 환경변수로 덮어쓴다** — 코드 수정 불필요.
+- 제대로 놓였는지는 `--dry-run` 이 알려준다. **전체 실행 전 반드시 한 번 돌린다.**
+
 **환경변수로** 디자인 입력을 준다. 기본값이 우리 smallboom 케이스라 반드시 덮어쓴다.
 
 ```bash
@@ -272,6 +310,11 @@ python3 run_sweep.py --jobs 12
 (`TEMPS`/`VOLTAGES`/`DB_STEM_FORMAT`/`Job`)에 모여 있다.
 
 ## 파이프라인 3 — crosstalk coupling_pair_features
+
+> **파이프라인 1/2 와 무관하게 단독으로 돌릴 수 있다.** 넷리스트·SDC·SPEF·db 와
+> 시작/끝 레지스터 인스턴스 이름만 있으면 된다. annotation 산출물을 안 본다.
+> (코드에 보이는 `annotated_delay_delta_max` 는 PrimeTime **넷 attribute 이름**이지
+> pt_annotation 산출물이 아니다.)
 
 단일 고정 경로(시작 FF ~ 끝 FF)에 대한 전압 스윕. **환경변수로** 준다.
 
@@ -325,6 +368,8 @@ lmutil lmstat -a -c $SNPSLMD_LICENSE_FILE | grep -i prime   # ③ PrimeTime 좌�
 | 2단계에서 경로 수가 1단계 union 보다 적음 | 데이터 핀 체인이 없는 경로는 tcl 에 안 실림 | 정상. summary 의 `PATHS_NO_DATA_CHAIN` 개수와 대조 |
 | 전압마다 같은 idx 의 경로/엣지가 다름 | edge-aware 를 안 켬 | 1단계에 `--edge-aware-fixed-paths` 를 주고 재실행. run_sweep 쪽에 줘도 무시된다 |
 | `summary` 의 `THROUGH_POLICY=SAMPLED(N)` | `--fixed-through-count` 에 양수를 줌 | `0`(기본, 전체 체인)으로 재실행. 샘플링은 쌍둥이 경로를 뭉갠다 |
+| 파이프라인 2 `--dry-run` 이 annotated 리포트 없다고 함 | pt_annotation 산출물이 `annotation/<분석>_sion/temp_<T>/` 계층 아래에 없음 | 파이프라인 2 절의 `ln -s` 로 재배치. 뒤쪽 `annotated/<RC>/...` 는 양쪽이 같으므로 링크 하나면 된다 |
+| 파이프라인 2 가 db_stem 을 못 찾음 | db 파일명이 `DB_STEM_FORMAT` 기본 패턴과 다름 | `XTALK_DB_STEM_FORMAT` 환경변수로 덮어쓴다(코드 수정 불필요) |
 
 ## Claude 를 못 쓰는 환경일 때 (사람이 직접)
 
@@ -338,7 +383,8 @@ lmutil lmstat -a -c $SNPSLMD_LICENSE_FILE | grep -i prime   # ③ PrimeTime 좌�
    처럼 직접 호출해도 된다 — 러너가 하위 파서를 `sys.executable` 로 부르므로 따라온다).
 3. **인자 확인**: 모든 러너가 `--help` 를 지원한다. 이 문서의 예시 인자와 대조.
 4. **순서대로 실행**: 파이프라인 0(필요시) → **1-B 스모크** → 1-B 1단계 → **게이트
-   확인** → 1-B 2단계 → 3단계 QC → (필요시) 파이프라인 2/3.
+   확인** → 1-B 2단계 → 3단계 QC → (필요시) **annotation 재배치(`ln -s`) →
+   파이프라인 2 `--dry-run` → 파이프라인 2**. 파이프라인 3 은 아무 때나 단독 실행.
    `--mode setup` 과 `--mode hold` 를 각각 1세트씩.
 5. **막히면**: 위 트러블슈팅 표를 먼저 본다. 대부분 여기 있다.
 
