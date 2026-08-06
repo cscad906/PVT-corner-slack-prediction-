@@ -26,6 +26,48 @@ python3 -c "import networkx"   # pt_annotation 에만 필요. 없으면 pip inst
 which StarXtract         # 파이프라인 0(SPEF 직접 추출)을 돌릴 때만. 없으면 STARRC_ROOT 세팅
 ```
 
+## 받은 SPEF 점검 (파이프라인 0 을 돌릴지 판단)
+
+SPEF 를 이미 받았더라도 **그대로 쓸 수 있는지 두 가지를 먼저 본다.** 둘 다 SPEF
+헤더/본문만 읽으므로 몇 초면 끝난다.
+
+```bash
+SPEF=/data/deliver/mycore.Cnom_model_25.spef
+
+# ① 단위 — 코드가 정규화하지 않고 원시값 그대로 쓰므로 출력 단위 = 이 선언
+grep -m4 -iE '^\*[TCRL]_UNIT' $SPEF
+
+# ② coupling cap 유무 — SI/crosstalk 가능 여부 (러너 pre-flight 와 같은 규칙)
+python3 -c "
+import sys
+p=sys.argv[1]; in_cap=False
+for line in open(p,errors='ignore'):
+    if line.startswith('*CAP'): in_cap=True; continue
+    if line.startswith('*'): in_cap=False; continue
+    if in_cap:
+        t=line.split()
+        if len(t)==4 and t[2].startswith('*'):
+            print('COUPLED  -> 그대로 사용 가능'); break
+else: print('GROUNDED -> SI/crosstalk 불가. 파이프라인 0 으로 재추출 필요')
+" $SPEF
+```
+
+정상 출력 예(우리 14nm 케이스):
+```
+*T_UNIT 1.0 NS      ← 시간 ns. --slack-threshold 0.05 = 50ps 가 성립하는 전제
+*C_UNIT 1.0 FF
+*R_UNIT 1.0 OHM
+*L_UNIT 1.0 HENRY
+```
+
+- **`*T_UNIT` 이 NS 가 아니면 `--slack-threshold` 를 그 스케일로 환산**해서 준다
+  (기본 0.05 는 ns 기준 50ps).
+- `*C_UNIT`/`*R_UNIT` 이 다른 SPEF 로 만든 데이터셋은 **Dist/Res/Cpin 스케일이 달라
+  한 학습셋에 섞으면 안 된다**(한 데이터셋 내부는 통일되어 문제없음).
+- ②가 `GROUNDED` 면 SI/crosstalk 결과가 무의미하다. `--si` 로 돌리면
+  pt_annotation 이 pre-flight 에서 자동 중단시킨다(의도된 동작).
+  **SI 없이 타이밍만 볼 거라면 grounded SPEF 로도 파이프라인 1 은 돌아간다.**
+
 PrimeTime 검증 버전: **V-2023.12-SP4**. SI/crosstalk 는 **PrimeTime SI 라이선스** +
 **coupling cap 이 유지된 SPEF**(StarRC `COUPLING_CAP: YES`) 필요. grounded SPEF 로 SI 를
 돌리면 러너가 pre-flight 에서 막는다(의도된 동작).
@@ -361,7 +403,7 @@ lmutil lmstat -a -c $SNPSLMD_LICENSE_FILE | grep -i prime   # ③ PrimeTime 좌�
 | db 코너 정렬이 뒤죽박죽 | db 파일명이 `tt0pNvNNc` 전압 토큰 규약과 다름 | 파일명을 규약에 맞추거나 러너 상단 파싱부 수정 |
 | SPEF 를 못 찾음 | 파일명 포맷 불일치 | pt_annotation `--spef-name-format`, crosstalk 는 `XTALK_SPEF_PREFIX`/상단 포맷 확인 |
 | PT 라이선스 부족으로 job 대기/실패 | `--max-workers`/`--jobs` 가 가용 라이선스 초과 | 값을 낮춘다 (가용 SI 라이선스 수 이하) |
-| Res/Cpin/시간 값 스케일이 예상과 다름 | 코드가 SPEF `*R_UNIT`/`*C_UNIT`/`*L_UNIT`·Liberty 단위를 정규화하지 않고 **원시값 그대로** 사용 | SPEF 헤더 단위(OHM vs KOHM, FF vs PF 등)와 PT 시간 단위를 확인. 출력 단위 = 입력 단위. **서로 다른 단위의 데이터셋을 한 학습셋에 섞지 말 것** (한 데이터셋 내부는 통일되어 문제없음) |
+| Res/Cpin/시간 값 스케일이 예상과 다름 | 코드가 SPEF `*R_UNIT`/`*C_UNIT`/`*L_UNIT`·Liberty 단위를 정규화하지 않고 **원시값 그대로** 사용 | `grep -m4 -iE '^\*[TCRL]_UNIT' <spef>` 로 확인("받은 SPEF 점검" 절). 출력 단위 = 입력 단위. **서로 다른 단위의 데이터셋을 한 학습셋에 섞지 말 것** (한 데이터셋 내부는 통일되어 문제없음) |
 | N/A 매칭 실패가 대량 발생 | SPEF/netlist 이름 규약이 코드가 아는 평탄화 변형과 다름 (다른 추출 툴/표기) | 이름 매칭 실패는 CONN(핀 연결) 매칭이 대부분 흡수하나, 인스턴스·핀 토큰까지 다르면 뚫린다. `res.py` 의 `bus_flatten_variants`/평탄화 규칙을 그쪽 SPEF 규약에 맞게 확장. N/A 는 `summary` 의 `na_tokens`/`na_lines` 로 자가 집계되니 돌려보면 감지된다 |
 | summary 에 `TRUNCATED?` | 코너 리포트가 `--max-paths` 상한에 닿음 | `--max-paths` 를 키워 **재실행**. 잘린 채 union 하면 코너 간 비교가 무의미 |
 | union 경로 수가 0 | TH 안쪽에 경로가 없음 | `--slack-threshold` 를 올려 재실행. 기본 0.05 에서도 0 이면 그 코너 집합엔 위험 경로가 없는 것 — SDC 시간 단위가 ns 가 맞는지도 확인 |
