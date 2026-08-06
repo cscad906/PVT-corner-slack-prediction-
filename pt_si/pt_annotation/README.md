@@ -183,14 +183,30 @@ Dist/Res/Cpin 3컬럼이 이 파이프라인이 추가하는 feature 다.
 
 | 인자 | 기본값 | 의미 |
 |---|---|---|
-| `--slack-threshold` | `0.0` | slack < TH 인 path 만 추출. **0.0 = violation 만**; 양수면 위험 마진(risky) 포함(예: `0.05` → slack < 0.05ns 인 위험 경로까지). |
+| `--slack-threshold` | `0.05` | slack < TH 인 path 만 추출. **단위는 SDC 시간 단위**(통상 ns) → 기본 `0.05` = **50ps 마진**, 즉 위반 + 위반 위험을 함께 뽑는다. `0.0` 을 주면 violation 만. |
 | `--nworst` | mode 분기 (**setup 3 / hold 10**) | endpoint 당 최대 리포트 path 수 = **고정 정책값** (endpoint 당 상위 후보 몇 개를 담을지). hidden corner 에서 endpoint 내 순위가 뒤바뀔 수 있어 상위 몇 개를 확보하는 것이 목적이며, hold 는 짧은 경로가 촘촘해 조금 더 크게 잡는다. 위반이 많은 데이터에서는 truncated 가 떠도 **올리지 않는 것을 권장** — 올리면 `--max-paths` 예산을 소수 endpoint 가 깊이로 잠식해 endpoint 커버리지(폭)가 줄어든다. |
 | `--max-paths` | `50000` | 코너당 리포트 path **안전 상한**. 리포트 path 수가 이 값과 같으면 잘렸을 수 있으므로 summary 에 `TRUNCATED?` 경고를 표기한다. |
 | `--rc-corners` | `Cmax,Cnom,Cmin` | 스윕할 SPEF RC 코너 콤마 목록. |
 | `--exclude-vtags` | (없음) | 제외할 전압 태그 콤마 목록(**hidden corner**). 예: `0p75,0p795` → 그 전압 코너를 측정 목록에서 뺀다. |
 | `--max-workers` | `3` | 병렬 실행 코너 수(= 동시 PT 라이선스 소비 수). |
 | `--emit-fixed-paths-tcl` | off | path-level union 전체를 기존 `FIXED_PATHS` tcl 로 내보낸다(`<out-dir>/<design>_<mode>_violation_fixed_paths_<N>.tcl`). `run_sweep.py --reuse-strict-tcl` 이 그대로 소비. |
-| `--fixed-through-count` | `8` | `--emit-fixed-paths-tcl` 에서 경로당 샘플링할 through 핀 수(run_sweep `--n-through` 기본과 동일). |
+| `--fixed-through-count` | `0` | 경로당 `-through` 핀 수. **0 = 내부 데이터 핀 전부**(`make_strict_fixed_paths_tcl.py` 와 같은 strict 정책, 권장). 양수를 주면 그 개수만 균등 샘플링(하위 호환) — 아래 경고 참조. |
+| `--edge-aware-fixed-paths` | off | 각 핀의 전이 방향(r/f)을 5번째 필드로 실어 `-rise_from`/`-fall_through` 로 엣지까지 고정. `run_sweep.py` 의 동명 옵션과 같은 효과. 전체 체인(`--fixed-through-count 0`)일 때만 적용된다. |
+
+> **`--emit-fixed-paths-tcl` 로 만든 tcl 은 `--reuse-strict-tcl` 자리에 들어간다 —
+> 즉 `make_strict_fixed_paths_tcl.py` 단계를 대체한다.** `run_sweep.py` 는
+> `--reuse-strict-tcl` 이 주어지면 strict tcl 생성 단계를 통째로 건너뛰므로
+> (`run_sweep.py:366`), 여기서 내보내는 tcl 이 **strict 와 같은 등급**이어야 한다.
+> 그래서 through 기본값이 "전체 체인"이고, 엣지 고정이 필요하면
+> `--edge-aware-fixed-paths` 를 여기서 켜야 한다(run_sweep 쪽에 줘도 무시됨).
+>
+> **샘플링(`--fixed-through-count N>0`)을 쓰면 안 되는 이유.** union 의 경로 정체성은
+> 전체 핀 체인인데 `-through` 제약만 일부면, 같은 `(start,end)` 를 공유하면서 샘플
+> 지점 밖에서만 갈리는 **쌍둥이 경로**들의 제약이 완전히 같아진다. `report_fixed_paths.tcl`
+> 은 항목마다 `-max_paths 1 -sort_by slack` 으로 리포트하므로 둘 다 worst 하나로
+> 수렴 → **한쪽은 중복 측정되고 다른 쪽은 통째로 누락**되며, 이 사고는 조용히 일어난다
+> (summary 에 경고가 안 뜬다). 예: 내부 핀 11개에 `N=8` 이면 샘플러는 인덱스
+> 1,2,3,4,6,7,8,9 만 집어 **0/5/10 에서 갈리는 경로 쌍을 구분하지 못한다.**
 
 > **nworst 는 고정 정책값(setup 3 / hold 10).** union 의 목적은 "위험한 endpoint 를
 > **넓게** 커버하되, endpoint 마다 상위 후보 몇 개(순위 교체 대비)를 확보하는 것"
@@ -207,6 +223,15 @@ Dist/Res/Cpin 3컬럼이 이 파이프라인이 추가하는 feature 다.
 > 양수 TH 는 **위반 + 위반 위험(risky) 경로**를 함께 뽑는다. 위험 마진을 넓힐수록
 > 코너별 path 수가 늘고 union 도 커진다(단, `--max-paths` 상한에 걸려 잘리면 비교가
 > 무의미해지므로 상한을 넉넉히 준다).
+>
+> **기본값은 `0.05`(= SDC 단위가 ns 일 때 50ps 마진)** 로, 위반과 위험을 한 번에
+> 담는 쪽을 택했다. 뽑은 뒤 **위반만 보고 싶으면 CSV 에서 걸러내면 되지만**
+> (`n_corners_violating > 0`), 반대로 TH 를 좁게 잡고 돌린 뒤 위험 경로를 되살릴
+> 방법은 없다 — 리포트 자체에 안 남아 **재실행뿐**이다. 그래서 기본을 넓게 둔다.
+>
+> ⚠️ **SDC 시간 단위가 ns 가 아니면 0.05 는 50ps 가 아니다.** 클럭 주기가 ps 나 다른
+> 스케일로 쓰인 디자인이면 TH 도 그 스케일로 환산해서 준다
+> (`grep -i units <design>.sdc` 또는 `report_units` 로 확인).
 
 ### 실행 예시
 
@@ -224,9 +249,9 @@ python3 extract_violation_paths.py \
   --db-root  /data/lib_db/db --lib-root /data/lib_db/lib \
   --rc-corners Cmax,Cnom,Cmin \
   --exclude-vtags 0p795 \
-  --slack-threshold 0.0 \
+  --slack-threshold 0.05 \
   --max-paths 50000 --max-workers 3 \
-  --emit-fixed-paths-tcl \
+  --emit-fixed-paths-tcl --edge-aware-fixed-paths \
   --out-dir  /data/results/mycore_violscan_setup
 
 # ── 2단계: 위에서 emit 된 tcl 을 run_sweep 에 물려 재측정 + annotation ──
@@ -243,6 +268,19 @@ python3 run_sweep.py \
   --reuse-strict-tcl /data/results/mycore_violscan_setup/MyCore_setup_violation_fixed_paths_<N>.tcl \
   --out-dir  /data/results/mycore_violscan_annotated
 # → annotated/<RC>/<corner>_fixed_annotated.txt (union 경로들의 코너별 재측정 + Dist/Res/Cpin)
+```
+
+> `--reuse-strict-tcl` 을 쓰면 run_sweep 의 `--edge-aware-fixed-paths` /
+> `--max-fanout` / `--max-paths`(top-N 추출용) 는 **적용되지 않는다** — strict tcl
+> 생성 단계 자체를 건너뛰기 때문이다. 엣지 고정은 1단계(extract)에서 켠다.
+> `--max-fanout` 상당의 필터는 이 route 에 없으므로, fanout 이 큰 넷이 낀 경로를
+> 빼고 싶으면 `union_paths_bypath.csv` 를 후처리해 tcl 을 걸러 쓴다.
+
+**2단계 후 필수 QC.** 코너 간 경로/엣지가 실제로 유지됐는지 확인한다:
+
+```bash
+python3 qc/check_fixed_path_edge_consistency.py \
+  --reports-dir /data/results/mycore_violscan_annotated/reports/Cnom
 ```
 
 ### 산출물
@@ -288,8 +326,9 @@ python3 run_sweep.py \
   through 로 경로 정체성을 유지하는 이유가, 같은 FF쌍 사이에도 through 가 다른 별개
   물리 경로가 있기 때문이다. `--emit-fixed-paths-tcl` 로 path-level union 을 그대로
   `FIXED_PATHS` tcl 로 떨궈 `run_sweep.py --reuse-strict-tcl` 에 물릴 수 있다. through 는
-  각 경로의 **worst corner** rpt 에서 뽑아(`--fixed-through-count`, 기본 8개 샘플)
-  기존 `sample_through_pins` 규약과 동일하게 기록한다.
+  각 경로의 **worst corner** rpt 체인에서 **내부 데이터 핀 전부**를 기록한다
+  (`make_strict_fixed_paths_tcl.py` 와 동일한 strict 정책). `--edge-aware-fixed-paths`
+  를 켜면 그 worst corner 의 핀별 전이 방향(r/f)도 함께 실린다.
 - 한 코너의 리포트 path 수가 `--max-paths` 와 같으면 잘렸을 수 있어(=globally-worst
   전부를 담지 못함) summary 에 `TRUNCATED?` 를 붙인다. 잘린 코너는 pair 수준 비교가
   불안정하므로 `--max-paths` 를 키워 재실행한다.
@@ -329,7 +368,8 @@ python3 run_sweep.py \
 | db 온도 토큰 ≠ `--spef-temp` (예: v125c db + 25C SPEF) | **경고 출력** — db·SPEF 온도 불일치는 물리적으로 비일관 |
 | 일부 코너 실패(라이선스 부족 등) | **계속 진행** — summary 에 `FAILED` 목록, union 은 부분 결과, **exit code 2**. 원인 해결 후 재실행 |
 | union 이 0 페어 | 위반/위험이 없는 것. 위험 리스트가 필요하면 `--slack-threshold` 를 올려서 재실행 |
-| 같은 (start,end) 페어의 **다른 through 경로** | **path-level union 으로 해소됨.** `union_paths_bypath.csv` 가 through 시퀀스까지 넣은 signature 단위로 별개 물리 경로를 구분하고, `--emit-fixed-paths-tcl` 로 그 경로들을 기존 `FIXED_PATHS` tcl(run_sweep `--reuse-strict-tcl` 호환)로 내보낸다. `union_paths.csv`(페어 단위)는 거친 요약으로 함께 제공 |
+| 같은 (start,end) 페어의 **다른 through 경로** | **path-level union 으로 해소됨.** `union_paths_bypath.csv` 가 through 시퀀스까지 넣은 signature 단위로 별개 물리 경로를 구분하고, `--emit-fixed-paths-tcl` 로 그 경로들을 기존 `FIXED_PATHS` tcl(run_sweep `--reuse-strict-tcl` 호환)로 내보낸다. tcl 의 `-through` 도 **전체 체인**이라 쌍둥이 경로가 PT 에서 같은 경로로 수렴하지 않는다(`--fixed-through-count 0`, 기본). `union_paths.csv`(페어 단위)는 거친 요약으로 함께 제공 |
+| 코너마다 rise/fall **worst 가 뒤바뀜** | `--edge-aware-fixed-paths` 로 해소. 끄면 같은 `idx` 에 전압별로 rise 경로와 fall 경로가 섞여 들어가 cross-corner delta 가 오염될 수 있다. 켜지 않았다면 `qc/check_fixed_path_edge_consistency.py` 로 반드시 확인 |
 | 코너 간 **경로 매칭** | signature=(startpoint,endpoint,데이터-핀 튜플). 같은 넷리스트를 공유하므로 through 핀 이름이 코너 무관하게 동일 → 같은 물리 경로는 코너 간 byte-identical signature 로 매칭된다(라이브러리 celltype 차이는 핀 이름을 바꾸지 않아 매칭에 영향 없음). 서로 다른 코너에서 endpoint 의 worst 가 **다른 물리 경로**로 바뀌는 것은 매칭 실패가 아니라 실제 현상 — `--nworst` 를 올리면 양쪽 경로가 두 코너에 다 잡혀 매칭된다 |
 | 데이터-핀 체인이 없는 경로(포트 시작/끝 등 FF-Q..FF-D 아님) | `union_paths_bypath.csv` 에는 `(start,end,())` 로 병합되어 남지만 `FIXED_PATHS` tcl 에는 실리지 않는다(기존 fixed-path 파이프라인도 이런 경로는 skip). summary 의 `PATHS_NO_DATA_CHAIN` 로 개수 집계 |
 | 다중 클럭/path group 디자인 | `report_timing` 이 전 path group 을 함께 리포트 — slack 의 기준 클럭이 페어마다 다를 수 있다. 그룹별 분리가 필요하면 rpt 의 Path Group 을 참조해 후처리 |

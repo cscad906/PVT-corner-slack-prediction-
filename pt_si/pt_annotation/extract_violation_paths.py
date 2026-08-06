@@ -80,13 +80,18 @@ def _finalize_path_chain(cur):
         "endpoint": cur["endpoint"],
         "lines": cur.pop("_lines"),
     }
-    pins = lib.extract_data_pin_chain(block)
+    # 핀 선택 규칙은 extract_data_pin_chain 과 동일하고, 각 핀의 전이 방향(r/f)을
+    # 함께 받는다(edge-aware FIXED_PATHS emission 용). 방향은 sig 에 넣지 않는다 --
+    # 경로 정체성은 핀 체인이고, 방향은 그 경로를 PT 에서 다시 집을 때의 제약이다.
+    pin_dirs = lib.extract_data_pin_chain_with_dirs(block)
+    pins = [p for p, _ in pin_dirs]
     if len(pins) >= 2:
         cur["chain_ok"] = True
         cur["from_pin"] = pins[0]
         cur["to_pin"] = pins[-1]
         cur["through"] = tuple(pins[1:-1])
         cur["pins"] = tuple(pins)
+        cur["dirs"] = tuple(d for _, d in pin_dirs)
         cur["sig"] = (cur["startpoint"], cur["endpoint"], tuple(pins))
     else:
         cur["chain_ok"] = False
@@ -94,6 +99,7 @@ def _finalize_path_chain(cur):
         cur["to_pin"] = None
         cur["through"] = ()
         cur["pins"] = ()
+        cur["dirs"] = ()
         cur["sig"] = (cur["startpoint"], cur["endpoint"], ())
 
 
@@ -383,6 +389,7 @@ def build_union_bypath(corner_results, corner_order, slack_th):
                 "from_by_col": {},
                 "to_by_col": {},
                 "through_by_col": {},
+                "dirs_by_col": {},
             })
             s = r["slack"]
             if col not in e["cols"] or s < e["cols"][col]:
@@ -390,6 +397,7 @@ def build_union_bypath(corner_results, corner_order, slack_th):
                 e["from_by_col"][col] = r["from_pin"]
                 e["to_by_col"][col] = r["to_pin"]
                 e["through_by_col"][col] = r["through"]
+                e["dirs_by_col"][col] = r.get("dirs", ())
     rows = []
     for sig, e in union.items():
         cols = e["cols"]
@@ -410,6 +418,7 @@ def build_union_bypath(corner_results, corner_order, slack_th):
             "worst_from": e["from_by_col"][worst_col],
             "worst_to": e["to_by_col"][worst_col],
             "worst_through": e["through_by_col"][worst_col],
+            "worst_dirs": e["dirs_by_col"].get(worst_col, ()),
         })
     # worst_slack 오름차순 후 path_idx(1..N) 부여
     rows.sort(key=lambda x: (x["worst_slack"], x["startpoint"], x["endpoint"], x["sig"]))
@@ -441,20 +450,37 @@ def write_union_bypath_csv(csv_path: Path, bypath_rows, corner_results, corner_o
             w.writerow(base + wide)
 
 
-def write_fixed_paths_tcl(tcl_path: Path, bypath_rows, n_through: int):
-    """path-level union 을 기존 FIXED_PATHS 형식으로 쓴다.
+def write_fixed_paths_tcl(tcl_path: Path, bypath_rows, n_through: int, edge_aware: bool):
+    """path-level union 을 FIXED_PATHS 형식으로 쓴다 (make_strict 와 동일 등급).
 
-    형식은 ptann_lib.write_fixed_tcl_from_ref_report 와 동일:
-      {path_key {from_pin} {to_pin} { {through1} {through2} ... }}
+    형식은 make_strict_fixed_paths_tcl.py 와 동일:
+      legacy:     {path_key {from_pin} {to_pin} { {thr1} {thr2} ... }}
+      edge-aware: {path_key {from_pin} {to_pin} { {thr1} ... } {from_dir thr_dir... to_dir}}
     -> tcl/report_fixed_paths.tcl 이 소비하고 run_sweep --reuse-strict-tcl 이 받는다.
-    through 는 각 경로 worst corner 의 핀 체인에서 기존과 동일하게
-    ptann_lib.sample_through_pins 로 샘플링한다(과잉 -through 제약 방지).
+
+    **through 는 기본적으로 worst corner 핀 체인의 내부 핀 전부(pins[1:-1])** 다 --
+    make_strict_fixed_paths_tcl.py 와 같은 "strict" 정책. union signature 는 전체 핀
+    체인인데 -through 제약만 일부라면, 같은 (start,end) 를 공유하는 쌍둥이 경로들이
+    PT 에서 같은 경로로 수렴해(-max_paths 1 -sort_by slack) 한쪽이 중복 측정되고
+    다른 쪽이 통째로 누락된다. 전체 체인을 걸면 그 붕괴가 원천 차단된다.
+    n_through > 0 을 명시하면 예전처럼 샘플링한다(하위 호환; 권장하지 않음).
+
+    edge_aware=True 면 각 핀의 전이 방향(r/f)을 5번째 필드로 함께 실어
+    -rise_from/-fall_through 로 엣지까지 고정한다. 코너(전압)가 바뀔 때 같은
+    핀 체인의 rise/fall 중 worst 가 뒤바뀌어 같은 idx 에 다른 물리 측정이 들어가는
+    것을 막는다. 방향을 모르는 핀이 하나라도 있으면 그 경로만 legacy 로 떨어진다.
+
     체인이 없는 경로(chain_ok=False)는 기존 파이프라인처럼 skip 한다.
     """
     emitted = 0
     skipped = 0
+    edge_emitted = 0
+    edge_fallback = 0
     with tcl_path.open("w", encoding="utf-8") as f:
         f.write("# Auto-generated fixed paths (from violation-path union)\n")
+        f.write("# through = all internal data pins of the worst-corner chain (strict)\n")
+        if edge_aware:
+            f.write("# Edge-aware mode: each entry includes an edge list aligned to {from, through..., to}\n")
         f.write("set FIXED_PATHS {\n")
         for row in bypath_rows:
             if not row["chain_ok"]:
@@ -463,14 +489,40 @@ def write_fixed_paths_tcl(tcl_path: Path, bypath_rows, n_through: int):
             from_pin = row["worst_from"]
             to_pin = row["worst_to"]
             pins = [from_pin] + list(row["worst_through"]) + [to_pin]
-            through_pins = lib.sample_through_pins(pins, n_through)
+            if n_through > 0:
+                through_pins = lib.sample_through_pins(pins, n_through)
+            else:
+                through_pins = pins[1:-1]
             path_key = "{}->{}#{}".format(row["startpoint"], row["endpoint"], row["path_idx"])
             thr_list = " ".join("{{{}}}".format(pin) for pin in through_pins)
-            f.write("  {{{{{}}} {{{}}} {{{}}} {{{}}}}}\n".format(path_key, from_pin, to_pin, thr_list))
+
+            dirs = list(row.get("worst_dirs", ()))
+            # 엣지 리스트는 {from, through..., to} 와 길이가 정확히 맞아야 tcl 이 쓴다
+            # (report_fixed_paths.tcl 의 use_edges 조건). 샘플링을 켠 경우 through 가
+            # 부분집합이 되어 정렬이 깨지므로 edge-aware 는 전체 체인일 때만 적용한다.
+            use_edges = (
+                edge_aware
+                and n_through <= 0
+                and len(dirs) == len(pins)
+                and all(d in ("r", "f") for d in dirs)
+            )
+            if use_edges:
+                edge_list = " ".join("{{{}}}".format(d) for d in dirs)
+                f.write("  {{{{{}}} {{{}}} {{{}}} {{{}}} {{{}}}}}\n".format(
+                    path_key, from_pin, to_pin, thr_list, edge_list))
+                edge_emitted += 1
+            else:
+                if edge_aware:
+                    edge_fallback += 1
+                f.write("  {{{{{}}} {{{}}} {{{}}} {{{}}}}}\n".format(
+                    path_key, from_pin, to_pin, thr_list))
             emitted += 1
         f.write("}\n\n")
-        f.write("# each entry: {path_key {from_pin} {to_pin} { {through1} {through2} ... }}\n")
-    return emitted, skipped
+        if edge_aware:
+            f.write("# each entry: {path_key {from_pin} {to_pin} { {through1} ... } {from_dir through_dir... to_dir}}\n")
+        else:
+            f.write("# each entry: {path_key {from_pin} {to_pin} { {through1} {through2} ... }}\n")
+    return emitted, skipped, edge_emitted, edge_fallback
 
 
 # ------------------------------------------------------------ argparse
@@ -505,8 +557,12 @@ def parse_args():
     p.add_argument("--extra-libs", default="",
                    help="매크로/IO 등 추가 라이브러리(link_path 에 append)")
     # --- 이 도구의 새 인자 ---
-    p.add_argument("--slack-threshold", type=float, default=0.0,
-                   help="slack < TH 인 path 만 추출. 0.0=violation 만; 양수면 위험 마진(risky) 포함.")
+    p.add_argument("--slack-threshold", type=float, default=0.05,
+                   help="slack < TH 인 path 만 추출. **단위는 SDC 시간 단위**(통상 ns) -- "
+                        "기본 0.05 = 50ps 마진, 즉 '진짜 위반(slack<0) + 위반 위험' 을 함께 뽑는다. "
+                        "0.0 을 주면 violation 만. TH 밖의 path 는 리포트에 아예 안 남아 "
+                        "사후 복구가 안 되므로(재실행 필요) 넉넉히 주는 편이 안전하다. "
+                        "위반/위험 구분은 union CSV 의 n_corners_violating/n_corners_risky 로 한다.")
     p.add_argument("--nworst", type=int, default=None,
                    help="endpoint 당 최대 리포트 path 수. 기본은 mode 분기(setup 3 / hold 10).")
     p.add_argument("--max-paths", type=int, default=50000,
@@ -524,9 +580,17 @@ def parse_args():
                    help="path-level union 전체를 기존 FIXED_PATHS 형식 tcl 로 내보낸다 "
                         "(run_sweep --reuse-strict-tcl 이 소비). "
                         "<out-dir>/<design>_<mode>_violation_fixed_paths_<N>.tcl")
-    p.add_argument("--fixed-through-count", type=int, default=8,
-                   help="--emit-fixed-paths-tcl 에서 경로당 샘플링할 through 핀 수 "
-                        "(run_sweep 의 --n-through 기본과 동일=8).")
+    p.add_argument("--fixed-through-count", type=int, default=0,
+                   help="--emit-fixed-paths-tcl 의 경로당 through 핀 수. "
+                        "기본 0 = 내부 데이터 핀 **전부**(make_strict 와 동일한 strict 정책, 권장). "
+                        "양수를 주면 그 개수만 균등 샘플링한다(하위 호환) -- 같은 (start,end) 의 "
+                        "쌍둥이 경로가 PT 에서 같은 경로로 수렴해 중복/누락이 생길 수 있으므로 권장하지 않는다. "
+                        "샘플링을 켜면 --edge-aware-fixed-paths 는 자동 무시된다.")
+    p.add_argument("--edge-aware-fixed-paths", action="store_true",
+                   help="--emit-fixed-paths-tcl 에서 각 핀의 전이 방향(r/f)을 함께 실어 "
+                        "-rise_from/-fall_through 로 엣지까지 고정한다 "
+                        "(run_sweep 의 동명 옵션과 같은 효과; 전압 간 rise/fall worst 뒤바뀜 방지). "
+                        "전체 체인(--fixed-through-count 0)일 때만 적용된다.")
     return p.parse_args()
 
 
@@ -741,11 +805,20 @@ def main():
     # (선택) FIXED_PATHS tcl emission
     fixed_tcl_path = None
     fixed_emitted = fixed_skipped = 0
+    fixed_edge_emitted = fixed_edge_fallback = 0
     if args.emit_fixed_paths_tcl:
         n_emit = sum(1 for r in bypath_rows if r["chain_ok"])
         fixed_tcl_path = out / f"{args.design}_{args.mode}_violation_fixed_paths_{n_emit}.tcl"
-        fixed_emitted, fixed_skipped = write_fixed_paths_tcl(
-            fixed_tcl_path, bypath_rows, args.fixed_through_count)
+        fixed_emitted, fixed_skipped, fixed_edge_emitted, fixed_edge_fallback = write_fixed_paths_tcl(
+            fixed_tcl_path, bypath_rows, args.fixed_through_count,
+            args.edge_aware_fixed_paths)
+        if args.fixed_through_count > 0:
+            print(f"[WARN] --fixed-through-count={args.fixed_through_count} (샘플링 모드): "
+                  "같은 (start,end) 의 쌍둥이 경로가 PT 에서 같은 경로로 수렴해 "
+                  "중복 측정/누락이 발생할 수 있다. 0(전체 체인) 권장.")
+        if args.edge_aware_fixed_paths and fixed_edge_fallback:
+            print(f"[WARN] edge-aware: {fixed_edge_fallback} 경로는 방향 정보가 불완전해 "
+                  "legacy(엣지 없음) 포맷으로 내보냈다.")
 
     # summary
     summary_path = out / "summary.txt"
@@ -754,7 +827,8 @@ def main():
         sf.write(f"OUT_DIR={out}\n")
         sf.write(f"DESIGN={args.design}\n")
         sf.write(f"STA_MODE={args.mode} DELAY_TYPE={delay_type}\n")
-        sf.write(f"SLACK_THRESHOLD={args.slack_threshold}  (0.0=violation only, +margin=risky list)\n")
+        sf.write(f"SLACK_THRESHOLD={args.slack_threshold}  "
+                 f"(SDC 시간 단위; 0.0=violation only, +margin=violation+risky. 기본 0.05=50ps@ns)\n")
         sf.write(f"NWORST={nworst}  MAX_PATHS={args.max_paths}\n")
         sf.write(f"SI={'ON' if args.si else 'OFF'}  FORCE_BASIC_RC={force_basic_rc}\n")
         sf.write(f"RC_CORNERS={rc_list}\n")
@@ -809,8 +883,12 @@ def main():
         if n_nochain:
             sf.write(f"PATHS_NO_DATA_CHAIN(sig=start,end,() 로 병합, tcl 미포함)={n_nochain}\n")
         if fixed_tcl_path is not None:
+            through_policy = ("ALL_INTERNAL_PINS(strict)" if args.fixed_through_count <= 0
+                              else f"SAMPLED({args.fixed_through_count})")
             sf.write(f"FIXED_PATHS_TCL_EMITTED={fixed_emitted} SKIPPED_NOCHAIN={fixed_skipped} "
-                     f"THROUGH_COUNT={args.fixed_through_count}\n")
+                     f"THROUGH_POLICY={through_policy}\n")
+            sf.write(f"FIXED_PATHS_TCL_EDGE_AWARE={1 if args.edge_aware_fixed_paths else 0} "
+                     f"EDGE_EMITTED={fixed_edge_emitted} EDGE_FALLBACK_LEGACY={fixed_edge_fallback}\n")
         sf.write(f"\n# nworst 충분성 자가진단 (endpoint 단위, --max-paths 상한과는 별개)\n")
         sf.write(f"NWORST={nworst}\n")
         sf.write(f"NWORST_TRUNCATED_ENDPOINTS_TOTAL={total_trunc_eps}\n")

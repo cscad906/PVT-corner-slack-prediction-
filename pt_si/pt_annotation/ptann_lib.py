@@ -35,6 +35,12 @@ NET_ROW_RE = re.compile(r'^(?P<prefix>.*\(net\)\s+\d+\s+[-+]?\d*\.?\d+(?:[eE][-+
 STARTPOINT_RE = re.compile(r'^\s*Startpoint:\s*(\S+)')
 ENDPOINT_RE = re.compile(r'^\s*Endpoint:\s*(\S+)')
 PIN_RE = re.compile(r'^\s*(\S+/\S+)\s+\(([^)]+)\)')
+# 리포트 라인 끝의 전이 방향(r/f). make_strict_fixed_paths_tcl.py 와 동일 패턴.
+PIN_DIR_RE = re.compile(
+    r'^\s*(?P<point>\S+/\S+)\s+\((?P<cell>[^)]+)\).*?'
+    r'\s(?P<dir>[rf])\s*$',
+    flags=re.IGNORECASE,
+)
 
 
 def now():
@@ -291,6 +297,47 @@ def extract_data_pin_chain(block):
             break
 
     if len(pins) >= 2 and pins[-1] == f'{end_inst}/D':
+        return pins
+    return []
+
+
+def extract_data_pin_chain_with_dirs(block):
+    """extract_data_pin_chain 과 동일한 체인을, 핀별 전이 방향(r/f)과 함께 반환.
+
+    반환: [(pin, dir), ...]  dir 은 'r' | 'f' | None (리포트 라인에 방향이 없을 때).
+    핀 선택 규칙은 extract_data_pin_chain 과 **완전히 동일**하다 -- 방향 파싱이
+    실패해도 핀을 건너뛰지 않고 dir=None 으로 둔다(체인이 달라지면 signature 가
+    깨지므로). 호출부는 dir 이 하나라도 None 이면 edge-aware emission 을 포기하고
+    legacy(방향 없는) 포맷으로 떨어지는 식으로 쓴다.
+    """
+    start_inst = block['startpoint']
+    end_inst = block['endpoint']
+    pins = []
+    collecting = False
+
+    for line in block['lines']:
+        s = line.strip().lower()
+        if s.startswith('data arrival time'):
+            break
+        m_pin = PIN_RE.match(line)
+        if not m_pin:
+            continue
+        pin = m_pin.group(1)
+        cell = m_pin.group(2).lower()
+        if cell == 'net':
+            continue
+        m_dir = PIN_DIR_RE.match(line)
+        direction = m_dir.group('dir').lower() if m_dir else None
+        if not collecting:
+            if pin == f'{start_inst}/Q' or pin == f'{start_inst}/QN':
+                pins.append((pin, direction))
+                collecting = True
+            continue
+        pins.append((pin, direction))
+        if pin == f'{end_inst}/D':
+            break
+
+    if len(pins) >= 2 and pins[-1][0] == f'{end_inst}/D':
         return pins
     return []
 
