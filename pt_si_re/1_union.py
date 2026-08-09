@@ -156,6 +156,9 @@ CODE_INFO = {
                    "--dir 로 준 폴더에 코너별 report_timing 결과를 넣어 주세요."),
     "E-NOFILE":   ("필요한 입력 파일이 없습니다",
                    "0_check.py 를 돌리면 무엇이 없는지 알려줍니다."),
+    "E-THTIGHT":  ("--slack-max 가 너무 좁아 남은 경로가 0개입니다",
+                   "위 '몇 개로 줄일까' 표를 보고 문턱값을 키워 주세요. "
+                   "리포트를 다시 뽑을 필요는 없습니다."),
     "E-NOPATH":   ("리포트에서 경로를 하나도 못 읽었습니다",
                    "report_timing 에 -input_pins 를 넣어 다시 뽑아 주세요."),
     "E-NONET":    ("리포트에 '(net)' 줄이 없습니다",
@@ -345,6 +348,14 @@ def main():
 
     if not union:
         print("")
+        # 문턱값 때문에 0개가 된 것과, 리포트를 아예 못 읽은 것은 원인이 다르다.
+        if best_slack and args.slack_max is not None:
+            code("E-THTIGHT",
+                 "[ 실패 ] --slack-max %.4f 로 걸러서 남은 경로가 0개입니다."
+                 % args.slack_max,
+                 "         리포트에는 경로가 %d개 있고, 그중 가장 나쁜 slack 은 "
+                 "%.4f 입니다." % (len(best_slack), min(best_slack.values())),
+                 "         --slack-max 를 그보다 크게 주세요. 위 표를 참고하세요.")
         code("E-NOPATH",
              "[ 실패 ] 쓸 수 있는 경로가 하나도 없습니다.",
              "         report_timing 에 -input_pins 가 빠졌을 가능성이 큽니다.")
