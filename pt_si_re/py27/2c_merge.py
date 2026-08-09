@@ -7,7 +7,8 @@
 입력   timing.rpt    원본 리포트
        cpin.tsv      1a 결과
        distres.tsv   1b 결과
-출력   annotated.txt '(net)' 줄 끝에 Dist / Res / Cpin 3열이 붙은 리포트
+출력   <코너>_fixed_annotated.txt   '(net)' 줄 끝에 Dist / Res / Cpin 3열이 붙은 리포트
+       (기존 운영 산출물과 같은 이름 규약. 코너 이름은 폴더 이름을 쓴다)
 
 계산은 하지 않는다. 줄 번호로 값을 찾아 붙이기만 하므로 즉시 끝난다.
 둘 중 하나가 없어도 있는 것만 붙인다(없는 열은 N/A).
@@ -22,7 +23,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 from find_rpt import find_rpt
-from names import annotated_path
+from names import annotated_path, find_annotated
 
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 
@@ -77,6 +78,8 @@ CODE_INFO = {
     # 코드            (한 줄 설명,                          무엇을 하면 되는지)
     "E-NORPT":    ("리포트 파일(.rpt)을 못 찾았습니다",
                    "--dir 로 준 폴더에 코너별 report_timing 결과를 넣어 주세요."),
+    "E-ISPARENT": ("코너 폴더가 아니라 코너들이 든 상위 폴더를 주셨습니다",
+                   "코너 폴더까지 지정하거나, 4_all_corners.py --root 를 쓰세요."),
     "E-RPTMANY":  ("폴더에 .rpt 가 여러 개라 어느 것인지 모르겠습니다",
                    "--rpt <파일> 로 하나를 지정하거나, 코너마다 폴더를 나눠 주세요."),
     "E-NOFILE":   ("필요한 입력 파일이 없습니다",
@@ -137,7 +140,8 @@ def code(c, *msg):
 
 def main():
     ap = argparse.ArgumentParser(description="Dist/Res/Cpin 을 리포트에 붙인다.")
-    ap.add_argument("--dir", default=".")
+    ap.add_argument("--dir", default=".",
+                    help="**코너 폴더 하나** (그 안에 .rpt 가 있는 폴더). 여러 코너를 한 번에 하려면 4_all_corners.py --root")
     ap.add_argument("--rpt", default=None)
     ap.add_argument("--cpin", default=None)
     ap.add_argument("--distres", default=None)
@@ -227,12 +231,12 @@ def main():
     print("-" * 68)
     if n_full == n_net:
         code("OK-MERGE",
-             "[ 정상 ] 3열 %d/%d. 다음:  $PY 3_crosstalk.py --dir %s"
-             % (n_full, n_net, d))
+             "[ 정상 ] 3열 %d/%d. 다음:  %s 5a_contexts.py --dir %s"
+             % (n_full, n_net, sys.executable, d))
     else:
         code("W-NA",
              "[ 주의 ] N/A 가 %d개 있습니다 (전체 %d)." % (n_net - n_full, n_net),
-             "         원인:  $PY 9_diagnose.py --dir %s" % d)
+             "         원인:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
 
 
 if __name__ == "__main__":

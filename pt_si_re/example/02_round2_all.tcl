@@ -56,7 +56,7 @@ if {![file exists $FIXED]} {
     puts "    무엇이   : fixed_paths.tcl 이 없습니다."
     puts "               찾아본 곳: $FIXED"
     puts "    하실 일  : 셸에서 1_union.py 를 먼저 돌리세요."
-    puts "                 \$PY 1_union.py --dir <1회차 리포트 폴더>"
+    puts "                 python3 1_union.py --dir <1회차 리포트 폴더>"
     puts "               경로가 다르면 위 FIXED 줄을 고치세요."
     puts ""
     puts "    에러 코드: E-NOFIXEDTCL"
@@ -116,6 +116,6 @@ if {$R2_BAD > 0} {
     puts "  한 코너만 다시 보려면 02_round2.tcl 을 쓰세요."
 } else {
     puts "  전부 정상. 다음은 셸에서:"
-    puts "      \$PY 4_all_corners.py --root $OUTTOP --spef <SPEF> --phase 1"
+    puts "      python3 4_all_corners.py --root $OUTTOP --spef <SPEF> --phase 1"
 }
 puts "===================================================================="

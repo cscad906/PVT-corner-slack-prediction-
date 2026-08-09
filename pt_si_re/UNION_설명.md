@@ -35,7 +35,7 @@
 실행:
 
 ```bash
-$PY 1_union.py --dir round1/corners
+python3 1_union.py --dir round1/corners
 ```
 
 ---

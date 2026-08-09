@@ -16,15 +16,12 @@ cd <이 패키지 폴더>
 python3 0_check.py --dir .
 ```
 
-화면에 `setenv PY ...` 한 줄이 나옵니다. 그대로 복사해서 실행하세요.
-이후 모든 명령에서 `python3` 대신 **`$PY`** 를 씁니다.
-
-```csh
-setenv PY /usr/synopsys/pt/V-2023.12-SP4/etc/Python/bin/python3
-```
+화면에 **어떤 파이썬을 쓸지** 나옵니다. `python3` 을 쓰라고 하면 그대로,
+전체 경로가 나오면 그 경로를 명령 앞에 붙여 쓰시면 됩니다.
 
 > 시스템 `python3` 이 2.7 이나 3.6 이어도 상관없습니다. `0_check.py` 가
 > PT 안에 들어 있는 3.6 을 찾아 줍니다.
+> 각 단계가 끝날 때 다음 명령이 경로까지 통째로 찍히니 복사만 하시면 됩니다.
 
 ---
 
@@ -70,7 +67,7 @@ redirect -file round1/corners/<코너이름>.rpt {
 셸(pt_shell 아님)에서:
 
 ```bash
-$PY 1_union.py --dir example/round1/corners
+python3 1_union.py --dir example/round1/corners
 ```
 
 ```
@@ -167,13 +164,12 @@ crosstalk 단계(PT 1차/2차)는 **나중에 따로 돕니다.** 그때 이 폴
 SPEF 를 그 폴더에 `design.spef` 라는 이름으로 놓거나 링크합니다.
 
 ```bash
-setenv D example/round2/tt0p7v25c_Cnom
-ln -s <SPEF 파일> $D/design.spef
+ln -s <SPEF 파일> example/round2/<코너>/design.spef
 
-$PY 0_check.py     --dir $D      # 입력이 다 있는지 먼저 확인
-$PY 2a_cpin.py     --dir $D      # -> cpin.tsv      (약 1초)
-$PY 2b_distres.py  --dir $D      # -> distres.tsv   (SPEF 크기에 따라 10초~2분)
-$PY 2c_merge.py    --dir $D      # -> <코너>_fixed_annotated.txt
+python3 0_check.py     --dir $D      # 입력이 다 있는지 먼저 확인
+python3 2a_cpin.py     --dir $D      # -> cpin.tsv      (약 1초)
+python3 2b_distres.py  --dir $D      # -> distres.tsv   (SPEF 크기에 따라 10초~2분)
+python3 2c_merge.py    --dir $D      # -> <코너>_fixed_annotated.txt
 ```
 
 정상이면 이렇게 나옵니다.
@@ -195,7 +191,7 @@ $PY 2c_merge.py    --dir $D      # -> <코너>_fixed_annotated.txt
 
 단위: `Dist` = µm, `Res` = Ω, `Cpin` = pF.
 
-> 한 번에 하고 싶으면 `$PY 2_annotate.py --dir $D` 로 2a+2b+2c 를 대신할 수
+> 한 번에 하고 싶으면 `python3 2_annotate.py --dir $D` 로 2a+2b+2c 를 대신할 수
 > 있습니다. 나눠 놓은 이유는 어디서 틀어졌는지 보기 위해서입니다.
 
 ---
@@ -208,21 +204,21 @@ $PY 2c_merge.py    --dir $D      # -> <코너>_fixed_annotated.txt
 그래서 PT 를 두 번 더 지나갑니다.
 
 ```bash
-$PY 5a_contexts.py --dir $D      # -> PT 에 물어볼 넷 목록 (중복 제거)
+python3 5a_contexts.py --dir $D      # -> PT 에 물어볼 넷 목록 (중복 제거)
 ```
 ```
 pt_shell> cd $D
 pt_shell> source <패키지>/pt/xtalk_calc.tcl      # PT 1차, 약 30초
 ```
 ```bash
-$PY 5b_pairs.py --dir $D         # -> 쌍 13,947줄
+python3 5b_pairs.py --dir $D         # -> 쌍 13,947줄
 ```
 ```
 pt_shell> cd $D
 pt_shell> source <패키지>/pt/xtalk_windows.tcl   # PT 2차, 약 30초
 ```
 ```bash
-$PY 5c_report.py --dir $D        # -> <코너>.path_context_si_compact.by_path.rpt
+python3 5c_report.py --dir $D        # -> <코너>.path_context_si_compact.by_path.rpt
 ```
 
 PT 2차가 따로 필요한 이유: aggressor 는 **우리 경로 밖의 남의 넷**이라
@@ -246,20 +242,20 @@ pt_shell> source example/02_round2.tcl
 
 ```bash
 # 셸
-$PY 4_all_corners.py --root example/round2 --spef <SPEF> --phase 1
+python3 4_all_corners.py --root example/round2 --spef <SPEF> --phase 1
 ```
 ```
 # pt_shell — 화면에 찍힌 파일을 그대로 source (고칠 것 없음)
 pt_shell> source example/round2/run_pt1_xtalk_calc.tcl
 ```
 ```bash
-$PY 4_all_corners.py --root example/round2 --phase 2
+python3 4_all_corners.py --root example/round2 --phase 2
 ```
 ```
 pt_shell> source example/round2/run_pt2_xtalk_windows.tcl
 ```
 ```bash
-$PY 4_all_corners.py --root example/round2 --phase 3
+python3 4_all_corners.py --root example/round2 --phase 3
 ```
 
 `run_pt*.tcl` 두 개는 `4_all_corners.py` 가 **자동으로 만들어 줍니다.**
@@ -281,7 +277,7 @@ $PY 4_all_corners.py --root example/round2 --phase 3
   tt0p7v25c_Cnom          E-NOFILE      -             -             -
 
   실패한 코너 1개: tt0p7v25c_Cnom
-      $PY 2a_cpin.py --dir example/round2/tt0p7v25c_Cnom
+      python3 2a_cpin.py --dir example/round2/tt0p7v25c_Cnom
 ```
 
 문제가 난 코너는 **그 한 줄만 따로 돌리면** 평소와 똑같은 자세한 화면이
@@ -324,6 +320,6 @@ source 하면 됩니다.
 그래도 안 풀리면:
 
 ```bash
-$PY 8_snapshot.py --dir $D          # 상황 100줄 요약
-$PY 9_diagnose.py --dir $D          # Dist/Res 가 빌 때 원인 분류
+python3 8_snapshot.py --dir $D          # 상황 100줄 요약
+python3 9_diagnose.py --dir $D          # Dist/Res 가 빌 때 원인 분류
 ```

@@ -26,8 +26,8 @@
 """
 from __future__ import division, print_function
 import argparse
-import io
 import glob
+import io
 import os
 import re
 import sys
@@ -251,7 +251,7 @@ def main():
     print("")
 
     union = {}
-    best_slack = {}   # 경로 -> 여러 코너 중 가장 나쁜(작은) slack
+    best_slack = {}   # 경로 -> 여러 코너 중 가장 나쁜(작은) slack. 문턱값 미리보기용
     corner_names = []
     total_drop = {"no_chain": 0, "no_slack": 0}
     print("  %-34s %8s %8s %8s" % ("코너", "리포트", "사용", "제외"))

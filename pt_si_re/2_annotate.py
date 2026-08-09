@@ -190,7 +190,7 @@ def main():
         print("         pin_attr.txt 의 핀 이름이 리포트의 핀 이름과 다를 수 있습니다.")
     else:
         print("[ 정상 ] 다음 단계로 넘어가세요:")
-        print("         $PY 3_crosstalk.py --dir %s" % d)
+        print("         %s 5a_contexts.py --dir %s" % (sys.executable, d))
     print("")
 
 

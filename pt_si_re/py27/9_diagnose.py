@@ -24,6 +24,10 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from names import find_annotated
+
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 MAX_SHOW = 8
 
@@ -109,7 +113,10 @@ def main():
     args = ap.parse_args()
 
     d = args.dir
-    ann = args.annotated or os.path.join(d, "annotated.txt")
+    ann = args.annotated
+    if not ann:
+        ann, _e = find_annotated(d)
+        ann = ann or os.path.join(d, "annotated.txt")
     spef = args.spef or os.path.join(d, "design.spef")
     pin_attr = args.pin_attr or os.path.join(d, "pin_attr.txt")
 

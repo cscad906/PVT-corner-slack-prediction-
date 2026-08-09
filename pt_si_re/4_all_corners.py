@@ -83,11 +83,11 @@ NEXT_HINT = {
     "1": ("pt_shell 에서 PT 1차를 돌리세요 (디자인 로드된 상태로):",
           "    source %(wrap)s",
           "그다음 다시 셸에서:",
-          "    $PY 4_all_corners.py --root %(root)s --phase 2"),
+          "    %(py)s 4_all_corners.py --root %(root)s --phase 2"),
     "2": ("pt_shell 에서 PT 2차를 돌리세요:",
           "    source %(wrap)s",
           "그다음 다시 셸에서:",
-          "    $PY 4_all_corners.py --root %(root)s --phase 3"),
+          "    %(py)s 4_all_corners.py --root %(root)s --phase 3"),
     "3": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
           "    <코너>_fixed_annotated.txt",
           "    <코너>.path_context_si_compact.by_path.rpt",
@@ -198,8 +198,8 @@ def main():
             print("      2a_cpin.py     --dir %s" % args.root)
             print("      2b_distres.py  --dir %s --spef <SPEF>" % args.root)
             print("      2c_merge.py    --dir %s" % args.root)
-            print("      3_crosstalk.py --dir %s --corner %s"
-                  % (args.root, os.path.basename(args.root.rstrip("/"))))
+            print("      %s 5a_contexts.py --dir %s"
+                  % (sys.executable, args.root))
             sys.exit(1)
         print("  %s 아래에 .rpt 를 가진 폴더가 없습니다." % args.root)
         print("  2회차(02_round2.tcl)를 먼저 돌리세요.")
@@ -276,7 +276,7 @@ def main():
     if bad:
         print("  실패한 코너 %d개: %s" % (len(bad), ", ".join(bad)))
         print("  그 폴더만 따로 돌려 화면을 보세요:")
-        print("      $PY 2a_cpin.py --dir %s" % os.path.join(args.root, bad[0]))
+        print("      %s 2a_cpin.py --dir %s" % (sys.executable, os.path.join(args.root, bad[0])))
         print("=" * 68)
         sys.exit(1)
 
@@ -284,7 +284,7 @@ def main():
     if warn:
         print("  확인 필요한 코너 %d개: %s" % (len(warn), ", ".join(warn)))
         print("  파일은 만들어졌지만 데이터가 일부 비어 있습니다.")
-        print("      $PY 9_diagnose.py --dir %s" % os.path.join(args.root, warn[0]))
+        print("      %s 9_diagnose.py --dir %s" % (sys.executable, os.path.join(args.root, warn[0])))
         print("=" * 68)
         sys.exit(0)
 
@@ -292,6 +292,7 @@ def main():
     print("")
     wrap = write_pt_wrapper(args.phase, args.root, args.mode)
     fill = {"root": os.path.abspath(args.root), "pkg": HERE,
+            "py": sys.executable,
             "wrap": os.path.abspath(wrap) if wrap else ""}
     for line in NEXT_HINT[args.phase]:
         print("  " + (line % fill if "%(" in line else line))

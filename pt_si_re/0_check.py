@@ -160,16 +160,20 @@ def check_env():
         print("  쓸 수 있는 python 이 없습니다. PrimeTime 환경을 source 한 뒤 다시 실행하세요.")
         return None
 
-    print("  >>> 사용할 python:")
+    print("  >>> 이 파이썬을 쓰세요:")
+    print("")
     print("      %s" % best)
     print("")
-    print("      아래 한 줄을 복사해 두고, 이후 모든 명령에서 python3 대신 $PY 를 씁니다.")
-    print("        bash:  export PY=%s" % best)
-    print("        csh :  setenv PY %s" % best)
-    if best_score == 1:
-        print("")
-        print("  %s networkx 가 없습니다. 2_annotate.py 가 실행되지 않습니다." % WARN)
-        print("        위 표에서 networkx '있음' 인 python 을 대신 쓰세요.")
+    if os.path.basename(best) == best or best == which("python3"):
+        print("      PATH 에 있는 python3 이라 그냥 'python3' 로 쓰시면 됩니다.")
+        print("        예)  python3 1_union.py --dir round1/corners")
+    else:
+        print("      시스템 python3 이 낡았거나 없어서, 위 **전체 경로**를 그대로")
+        print("      명령 앞에 붙여 쓰세요.")
+        print("        예)  %s 1_union.py --dir round1/corners" % best)
+    print("")
+    print("      이 뒤로 각 단계가 끝날 때마다 다음에 칠 명령이 화면에 그대로")
+    print("      찍힙니다. 복사해서 쓰시면 됩니다.")
     return best
 
 
@@ -288,8 +292,8 @@ def main():
     if py and have:
         print("  준비 완료. 다음 명령으로 넘어가세요:")
         print("")
-        print("    $PY 2_annotate.py  --dir %s" % args.dir)
-        print("    $PY 3_crosstalk.py --dir %s" % args.dir)
+        print("    %s 2_annotate.py  --dir %s" % (sys.executable, args.dir))
+        print("    %s 5a_contexts.py --dir %s" % (sys.executable, args.dir))
     else:
         print("  아직 준비가 안 됐습니다. 위에서 [ 없음 ] / [ 주의 ] 로 표시된 것을 먼저 해결하세요.")
     print("=" * 68)

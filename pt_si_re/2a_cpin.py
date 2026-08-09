@@ -234,7 +234,7 @@ def main():
     else:
         code("OK-CPIN",
              "[ 정상 ] Cpin %d/%d." % (hit, n),
-             "         다음 단계:  $PY 2b_distres.py --dir %s" % d)
+             "         다음 단계:  %s 2b_distres.py --dir %s" % (sys.executable, d))
 
 
 if __name__ == "__main__":

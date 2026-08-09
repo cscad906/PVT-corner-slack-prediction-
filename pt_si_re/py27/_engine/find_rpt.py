@@ -51,6 +51,24 @@ def find_rpt(work_dir, explicit=None):
                % (len(names), work_dir, "  ".join(names)))
         return None, msg, "E-RPTMANY"
 
+    # 흔한 착각: 코너 폴더 하나가 아니라 코너들이 든 상위 폴더를 준 경우.
+    # (2a/2b/2c/3 은 --dir 에 코너 폴더 하나, 4_all_corners.py 는 --root 에 상위)
+    subs = []
+    for n in sorted(os.listdir(work_dir)):
+        sub = os.path.join(work_dir, n)
+        if os.path.isdir(sub) and any(x.endswith(".rpt") for x in os.listdir(sub)):
+            subs.append(n)
+    if subs:
+        msg = ("여기는 코너 폴더가 아니라 **코너들이 들어 있는 폴더** 입니다: %s\n"
+               "            안에 코너가 %d개 있습니다: %s\n"
+               "            코너 하나만 하려면 그 폴더까지 지정하세요:\n"
+               "              --dir %s\n"
+               "            전부 한 번에 하려면:\n"
+               "              4_all_corners.py --root %s"
+               % (work_dir, len(subs), "  ".join(subs[:5]),
+                  os.path.join(work_dir, subs[0]), work_dir))
+        return None, msg, "E-ISPARENT"
+
     msg = ("폴더에 .rpt 파일이 없습니다: %s\n"
            "            2회차(fixed_paths.tcl)를 먼저 돌려 리포트를 만드세요."
            % work_dir)

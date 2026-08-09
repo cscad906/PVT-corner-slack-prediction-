@@ -201,11 +201,11 @@ def main():
         code("W-RES",
              "[ 주의 ] Res 가 %d개 비었습니다 (%.0f%%)."
              % (n - hit_r, 100.0 * (n - hit_r) / n),
-             "         원인:  $PY 9_diagnose.py --dir %s" % d)
+             "         원인:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
     else:
         code("OK-DISTRES",
              "[ 정상 ] Dist/Res %d/%d." % (hit_r, n),
-             "         다음 단계:  $PY 2c_merge.py --dir %s" % d)
+             "         다음 단계:  %s 2c_merge.py --dir %s" % (sys.executable, d))
 
 
 if __name__ == "__main__":

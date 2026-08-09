@@ -229,12 +229,12 @@ def main():
     print("-" * 68)
     if n_full == n_net:
         code("OK-MERGE",
-             "[ 정상 ] 3열 %d/%d. 다음:  $PY 3_crosstalk.py --dir %s"
-             % (n_full, n_net, d))
+             "[ 정상 ] 3열 %d/%d. 다음:  %s 5a_contexts.py --dir %s"
+             % (n_full, n_net, sys.executable, d))
     else:
         code("W-NA",
              "[ 주의 ] N/A 가 %d개 있습니다 (전체 %d)." % (n_net - n_full, n_net),
-             "         원인:  $PY 9_diagnose.py --dir %s" % d)
+             "         원인:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
 
 
 if __name__ == "__main__":

@@ -20,16 +20,30 @@ crosstalk 을 붙여 학습 입력 두 개를 만든다.
 python3 0_check.py
 ```
 
-화면에 `setenv PY ...` 한 줄이 나온다. 그대로 복사해서 실행한다. 이후 모든
-파이썬 명령에서 `python3` 대신 `$PY` 를 쓴다.
+화면에 **어떤 파이썬을 쓸지** 나온다.
 
-```csh
-setenv PY /usr/synopsys/pt/V-2023.12-SP4/etc/Python/bin/python3
+```
+  >>> 이 파이썬을 쓰세요:
+
+      /usr/synopsys/pt/V-2023.12-SP4/etc/Python/bin/python3
+
+      시스템 python3 이 낡았거나 없어서, 위 전체 경로를 그대로
+      명령 앞에 붙여 쓰세요.
+        예)  /usr/synopsys/pt/V-2023.12-SP4/etc/Python/bin/python3 1_union.py --dir round1/corners
 ```
 
-- 시스템 `python3` 이 3.6 이상이면 그냥 `python3` 을 써도 된다.
-- 2.7 밖에 없으면 `0_check.py` 가 PT 설치본 안의 3.6 을 찾아 준다.
-- 그것도 없을 때만 `py27/` 을 쓴다 (`py27/README.md` 에 제약 명시).
+- 그냥 `python3` 을 쓰라고 나오면 아래 예시대로 `python3 ...` 로 치면 된다.
+- 전체 경로가 나오면 **그 경로를 명령 앞에 붙여서** 친다. (시스템 python3 이
+  3.6 미만이어서, `0_check.py` 가 PT 설치본 안의 3.6 을 찾아 준 것이다)
+- **이 뒤로는 외울 필요가 없다.** 각 단계가 끝날 때 다음에 칠 명령이 경로까지
+  통째로 화면에 찍히므로 복사해서 쓰면 된다.
+
+  ```
+  [ 정상 ] Cpin 8930/8930.
+           다음 단계:  /usr/synopsys/pt/.../python3 2b_distres.py --dir round2/TT_0p6V_25C
+  ```
+
+- 파이썬 3 이 전혀 없을 때만 `py27/` 을 쓴다 (`py27/README.md` 에 제약 명시).
 
 **터미널을 두 개 띄운다.** 하나는 pt_shell, 하나는 셸. 파이썬 터미널은
 라이선스를 안 먹으므로 PT 는 켜 둔 채로 왔다 갔다 한다.
@@ -82,7 +96,7 @@ redirect -file round1/corners/TT_0p6V_25C.rpt {
 ## union — 측정할 경로 결정 (셸)
 
 ```bash
-$PY 1_union.py --dir round1/corners
+python3 1_union.py --dir round1/corners
 ```
 
 폴더 안의 `.rpt` 를 전부 읽어 합집합한다. 코너가 3개든 20개든 코드는 안 건드린다.
@@ -106,7 +120,7 @@ $PY 1_union.py --dir round1/corners
 **너무 많으면 표를 보고 문턱값을 골라 다시 돌린다.** PT 를 다시 돌릴 필요 없다.
 
 ```bash
-$PY 1_union.py --dir round1/corners --slack-max -0.2815
+python3 1_union.py --dir round1/corners --slack-max -0.2815
 #   합집합 경로 : 3000개
 ```
 
@@ -183,19 +197,19 @@ crosstalk 단계는 **나중에 따로 돈다.** 그때 이 폴더가 어느 db 
 
 ```bash
 # 셸
-$PY 4_all_corners.py --root /data/results/round2 --spef /data/spef/core_25.spef --phase 1
+python3 4_all_corners.py --root /data/results/round2 --spef /data/spef/core_25.spef --phase 1
 ```
 ```
 pt_shell> source /data/results/round2/run_pt1_xtalk_calc.tcl
 ```
 ```bash
-$PY 4_all_corners.py --root /data/results/round2 --phase 2
+python3 4_all_corners.py --root /data/results/round2 --phase 2
 ```
 ```
 pt_shell> source /data/results/round2/run_pt2_xtalk_windows.tcl
 ```
 ```bash
-$PY 4_all_corners.py --root /data/results/round2 --phase 3
+python3 4_all_corners.py --root /data/results/round2 --phase 3
 ```
 
 `run_pt*.tcl` 두 개는 **`4_all_corners.py` 가 절대경로로 만들어 준다.** 고칠
@@ -209,7 +223,7 @@ $PY 4_all_corners.py --root /data/results/round2 --phase 3
   TT_0p7V_25C             E-NOFILE      -             -             -
 
   실패한 코너 1개: TT_0p7V_25C
-      $PY 2a_cpin.py --dir /data/results/round2/TT_0p7V_25C
+      python3 2a_cpin.py --dir /data/results/round2/TT_0p7V_25C
 ```
 
 **어느 코너 어느 단계**인지 한눈에 보이고, 다시 볼 명령까지 찍어 준다.
@@ -229,24 +243,24 @@ $PY 4_all_corners.py --root /data/results/round2 --phase 3
 
 ```bash
 setenv D /data/results/round2/TT_0p6V_25C
-$PY 2a_cpin.py     --dir $D                    # -> cpin.tsv       1초
-$PY 2b_distres.py  --dir $D --spef <SPEF>      # -> distres.tsv    SPEF 크기에 따라
-$PY 2c_merge.py    --dir $D                    # -> <코너>_fixed_annotated.txt ★
-$PY 5a_contexts.py --dir $D                    # -> 물어볼 넷 목록
+python3 2a_cpin.py     --dir $D                    # -> cpin.tsv       1초
+python3 2b_distres.py  --dir $D --spef <SPEF>      # -> distres.tsv    SPEF 크기에 따라
+python3 2c_merge.py    --dir $D                    # -> <코너>_fixed_annotated.txt ★
+python3 5a_contexts.py --dir $D                    # -> 물어볼 넷 목록
 ```
 ```
 pt_shell> cd $D
 pt_shell> source <패키지>/pt/xtalk_calc.tcl
 ```
 ```bash
-$PY 5b_pairs.py --dir $D                       # -> 쌍
+python3 5b_pairs.py --dir $D                       # -> 쌍
 ```
 ```
 pt_shell> cd $D
 pt_shell> source <패키지>/pt/xtalk_windows.tcl
 ```
 ```bash
-$PY 5c_report.py --dir $D                      # -> <코너>.path_...by_path.rpt ★
+python3 5c_report.py --dir $D                      # -> <코너>.path_...by_path.rpt ★
 ```
 
 ---
@@ -311,9 +325,9 @@ aggressor_driver_slew_max  coupling_cap_ff
 `W-` 는 파일은 나왔지만 데이터가 불완전한 경우다. **몇 퍼센트인지**가 중요하다.
 
 ```bash
-$PY 9_diagnose.py --dir <코너폴더>          # Dist/Res 가 빌 때 원인 분류
-$PY 8_snapshot.py --dir <코너폴더>          # 상황 100줄 요약
-$PY 8_snapshot.py --dir <코너폴더> --mask   # 설계 이름을 가리고
+python3 9_diagnose.py --dir <코너폴더>          # Dist/Res 가 빌 때 원인 분류
+python3 8_snapshot.py --dir <코너폴더>          # 상황 100줄 요약
+python3 8_snapshot.py --dir <코너폴더> --mask   # 설계 이름을 가리고
 ```
 
 전체 코드 목록은 `코드표.md` (44개), 화면 읽는 법은 `원격문의.md`.

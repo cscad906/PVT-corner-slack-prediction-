@@ -32,4 +32,4 @@ foreach {name npath} {
 
 puts ""
 puts "1회차 끝. 다음은 셸에서:"
-puts "    \$PY 1_union.py --dir example/round1/corners"
+puts "    python3 1_union.py --dir example/round1/corners"

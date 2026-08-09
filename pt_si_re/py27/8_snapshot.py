@@ -26,6 +26,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 from find_rpt import find_rpt
+from names import find_annotated
 
 W = 72
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
@@ -200,7 +201,8 @@ def check_result(d, mask):
                     empty += 1
         print("  %-14s %s줄, 값 없음 %s줄" % (name, format(total, ","), format(empty, ",")))
 
-    p = os.path.join(d, "annotated.txt")
+    p, _e = find_annotated(d)
+    p = p or os.path.join(d, "annotated.txt")
     if os.path.isfile(p):
         n_net = n_na = 0
         first_na = []

@@ -19,7 +19,9 @@
 같은 넷이 여러 경로에 나와도 PT 에는 한 번만 물어봅니다(중복 제거). 그래서
 경로 수보다 훨씬 적습니다.
 """
+from __future__ import division, print_function
 import argparse
+import io
 import os
 import subprocess
 import sys
@@ -62,18 +64,30 @@ def code(c, *msg):
     sys.exit(1 if c.startswith("E-") else 0)
 
 
+def as_text(raw):
+    """하위 스크립트 출력을 화면에 찍을 수 있는 문자열로 바꾼다.
+
+    python2 에서는 파이프로 읽은 줄이 unicode 라, 그대로 print 하면 터미널
+    인코딩에 따라 한글에서 죽는다. 그래서 2 에서만 utf-8 로 되돌려 찍는다.
+    """
+    s = raw.decode("utf-8", "replace")
+    if sys.version_info[0] < 3:
+        s = s.encode("utf-8")
+    return s
+
+
 def run(script, *a):
     """검증된 기존 파서를 그대로 부른다."""
     cmd = [sys.executable, os.path.join(XTALK, script)] + list(a)
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out = p.communicate()[0].decode("utf-8", "replace")
+    out = as_text(p.communicate()[0])
     return p.returncode == 0, out
 
 
 def count_rows(path):
     if not os.path.isfile(path):
         return 0
-    with open(path, "r", errors="ignore") as f:
+    with io.open(path, "r", errors="ignore") as f:
         return max(0, sum(1 for _ in f) - 1)
 
 

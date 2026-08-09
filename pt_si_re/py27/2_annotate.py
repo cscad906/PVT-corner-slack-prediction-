@@ -30,7 +30,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 from find_rpt import find_rpt
-from names import annotated_path
+from names import annotated_path, find_annotated
 
 ATTR_NAME = "pin_capacitance_max"
 
@@ -192,7 +192,7 @@ def main():
         print("         pin_attr.txt 의 핀 이름이 리포트의 핀 이름과 다를 수 있습니다.")
     else:
         print("[ 정상 ] 다음 단계로 넘어가세요:")
-        print("         $PY 3_crosstalk.py --dir %s" % d)
+        print("         %s 5a_contexts.py --dir %s" % (sys.executable, d))
     print("")
 
 
