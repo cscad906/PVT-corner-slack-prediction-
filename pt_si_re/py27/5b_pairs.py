@@ -22,6 +22,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 XTALK = os.path.join(HERE, "_engine", "xtalk")
 
 CODE_INFO = {
@@ -36,6 +41,17 @@ CODE_INFO = {
     "W-NOACTIVE": ("실제로 영향을 준 aggressor 가 하나도 없습니다",
                    "값이 전부 0 인 리포트가 됩니다. SI 설정을 확인해 보세요."),
 }
+
+
+def as_text(b):
+    """subprocess 출력 -> 글자. 2 에서는 이미 str 이라 그대로 둔다.
+
+    2 에서 굳이 decode 하면 unicode 가 되어, 한글이 섞인 포맷 문자열과
+    합칠 때 UnicodeDecodeError 로 죽는다.
+    """
+    if isinstance(b, str):
+        return b
+    return b.decode("utf-8", "replace")
 
 
 def code(c, *msg):
@@ -57,18 +73,6 @@ def code(c, *msg):
     print("    (해결이 안 되면 이 코드를 알려주세요)")
     print("=" * 66)
     sys.exit(1 if c.startswith("E-") else 0)
-
-
-def as_text(raw):
-    """하위 스크립트 출력을 화면에 찍을 수 있는 문자열로 바꾼다.
-
-    python2 에서는 파이프로 읽은 줄이 unicode 라, 그대로 print 하면 터미널
-    인코딩에 따라 한글에서 죽는다. 그래서 2 에서만 utf-8 로 되돌려 찍는다.
-    """
-    s = raw.decode("utf-8", "replace")
-    if sys.version_info[0] < 3:
-        s = s.encode("utf-8")
-    return s
 
 
 def run(script, *a, **kw):

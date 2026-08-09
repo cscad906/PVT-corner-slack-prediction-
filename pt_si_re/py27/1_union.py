@@ -32,6 +32,11 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
+
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 END_RE = re.compile(r"^\s*Endpoint:\s+(\S+)")
 GROUP_RE = re.compile(r"^\s*Path Group:\s+(.+?)\s*$")
@@ -223,6 +228,9 @@ def main():
     ap.add_argument("--out-tcl", default=None)
     ap.add_argument("--out-txt", default=None,
                     help="vi 로 보기 좋게 정렬한 요약 파일")
+    ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
+                    help="setup(-delay_type max) / hold(min). **1회차 리포트를 "
+                         "뽑을 때 쓴 것과 같아야 한다.** 2회차 tcl 에 그대로 들어간다")
     ap.add_argument("--slack-max", type=float, default=None,
                     help="이 값보다 slack 이 큰 경로는 제외. 생략하면 리포트에 있는 것 전부.")
     ap.add_argument("--no-edge", action="store_true",
@@ -248,13 +256,17 @@ def main():
 
     print("  폴더 : %s" % d)
     print("  코너 : %d개" % len(files))
+    print("  분석 : %s  (2회차는 -delay_type %s 로 측정)"
+          % (args.mode, "min" if args.mode == "hold" else "max"))
     print("")
 
     union = {}
     best_slack = {}   # 경로 -> 여러 코너 중 가장 나쁜(작은) slack. 문턱값 미리보기용
     corner_names = []
     total_drop = {"no_chain": 0, "no_slack": 0}
-    print("  %-34s %8s %8s %8s" % ("코너", "리포트", "사용", "제외"))
+    # 2 에서 한글은 글자 수가 아니라 바이트 수로 세어 폭이 어긋난다.
+    print((u"  %-34s %8s %8s %8s"
+           % (u"코너", u"리포트", u"사용", u"제외")).encode("utf-8"))
     print("  " + "-" * 62)
     for fp in files:
         corner = os.path.splitext(os.path.basename(fp))[0]
@@ -309,7 +321,8 @@ def main():
         vals = sorted(best_slack.values())
         print("")
         print("  [ 몇 개로 줄일까 ]  --slack-max <문턱값> 으로 다시 돌리면 그만큼이 된다")
-        print("  %10s %12s %14s" % ("경로 수", "문턱값", "2회차 시간/코너"))
+        print((u"  %10s %12s %14s"
+               % (u"경로 수", u"문턱값", u"2회차 시간/코너")).encode("utf-8"))
         print("  " + "-" * 40)
         shown = set()
         for want in (200, 500, 1000, 2000, 3000, 5000, 10000, 20000, len(vals)):
@@ -318,9 +331,11 @@ def main():
             shown.add(want)
             th = vals[want - 1]
             sec = want * 0.1
-            est = ("%d초" % int(sec)) if sec < 90 else ("%d분" % int(sec / 60))
-            tag = "  (전체)" if want == len(vals) else ""
-            print("  %10d %12.4f %14s%s" % (want, th, est, tag))
+            est = (u"%d초" % int(sec)) if sec < 90 else (u"%d분" % int(sec / 60))
+            tag = u"  (전체)" if want == len(vals) else u""
+            # 2 에서 한글은 글자 수가 아니라 바이트 수로 세어 폭이 어긋난다.
+            print((u"  %10d %12.4f %14s%s"
+                   % (want, th, est, tag)).encode("utf-8"))
         print("  " + "-" * 40)
         if args.slack_max is not None:
             print("  지금 --slack-max %.4f 로 %d개를 골랐습니다."
@@ -373,7 +388,7 @@ def main():
         r["idx"] = i
 
     # ---- union_paths.tsv -------------------------------------------
-    with open(out_tsv, "w") as fh:
+    with wopen(out_tsv) as fh:
         head = ["path_idx", "startpoint", "endpoint", "n_through",
                 "n_corners_seen", "n_corners_violating", "worst_slack", "worst_corner"]
         head += ["slack__" + c for c in corner_names]
@@ -396,7 +411,7 @@ def main():
         return name[:keep] + ".." + name[-(w - 2 - keep):]
 
     n_viol_any = sum(1 for r in rows if r["n_viol"] > 0)
-    with open(out_txt, "w") as fh:
+    with wopen(out_txt) as fh:
         fh.write("합집합 경로 요약  (위험한 것부터 정렬)\n")
         fh.write("=" * 118 + "\n")
         fh.write("코너 %d개 : %s\n" % (len(corner_names), ", ".join(corner_names)))
@@ -406,7 +421,10 @@ def main():
         fh.write("  위반   = slack 이 음수였던 코너 수\n")
         fh.write("  코너별 slack 에서 '.' 은 그 코너 목록에 없었다는 뜻\n")
         fh.write("=" * 118 + "\n")
-        head = "%6s %6s %6s %5s %11s  " % ("idx", "핀수", "코너수", "위반", "worst")
+        # 2 에서 "핀수" 는 6바이트라 %6s 로는 폭이 안 맞는다. 글자 수로 맞춘 뒤
+        # 다시 utf-8 로 되돌려야 3 과 같은 파일이 나온다.
+        head = (u"%6s %6s %6s %5s %11s  "
+                % (u"idx", u"핀수", u"코너수", u"위반", u"worst")).encode("utf-8")
         head += " ".join("%9s" % c[:9] for c in corner_names)
         head += "   %s" % "경로 (시작 -> 끝)"
         fh.write(head + "\n")
@@ -424,7 +442,7 @@ def main():
     # 경로마다 report_timing 을 -from/-through/-to 로 걸어 같은 경로를 다시 뽑는다.
     # through 는 데이터 구간 핀 전부를 쓴다(일부만 쓰면 비슷한 다른 경로가 잡힌다).
     edge = not args.no_edge
-    with open(out_tcl, "w") as fh:
+    with wopen(out_tcl) as fh:
         fh.write("# 2회차용. pt_shell 에서:  source fixed_paths.tcl\n")
         fh.write("# 코너를 바꿔 로드할 때마다 한 번씩 실행한다.\n")
         fh.write("#   결과는 <코너이름>.rpt 로 저장된다. 코너마다 CORNER 만 바꾼다.\n\n")
@@ -440,7 +458,8 @@ def main():
         fh.write('puts "  이번 코너 : $CORNER   ->  $CORNER.rpt"\n')
         fh.write('puts "  (위 이름이 방금 로드한 db 와 다르면 지금 멈출 것)"\n\n')
         fh.write('set OUT "$CORNER.rpt"\n')
-        fh.write('set DTYPE "max"      ;# setup=max, hold=min\n')
+        fh.write('set DTYPE "%s"      ;# setup=max, hold=min\n'
+                 % ("min" if args.mode == "hold" else "max"))
         fh.write('set SIGDIG 6\n\n')
         fh.write("file delete -force $OUT\n")
         fh.write("set FIXED_PATHS {\n")

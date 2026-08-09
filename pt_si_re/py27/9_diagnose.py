@@ -26,6 +26,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from names import find_annotated
 
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
@@ -125,8 +127,9 @@ def main():
     print("=" * 68)
 
     if not os.path.isfile(ann):
-        print("[ 실패 ] annotated.txt 이 없습니다: %s" % ann)
-        print("         2_annotate.py 를 먼저 돌리세요.")
+        print("[ 실패 ] 이 폴더에 *_fixed_annotated.txt 가 없습니다: %s" % d)
+        print("         2c_merge.py 를 먼저 돌리세요.")
+        print("           %s 2c_merge.py --dir %s" % (sys.executable, d))
         sys.exit(1)
 
     rows = read_annotated(ann)

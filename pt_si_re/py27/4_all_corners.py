@@ -35,6 +35,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from find_rpt import find_rpt
 
 # 단계는 PT 를 사이에 두고 세 묶음으로 나뉜다. PT 는 파이썬에서 못 부르므로
@@ -71,7 +73,7 @@ def write_pt_wrapper(phase, root, mode):
         return None
     name, target = PT_WRAPPER[phase]
     path = os.path.join(root, name)
-    with open(path, "w") as fh:
+    with wopen(path) as fh:
         fh.write("# 4_all_corners.py --phase %s 가 자동으로 만든 파일입니다.\n" % phase)
         fh.write("# pt_shell 에서 그대로 source 하세요. 고칠 것 없습니다.\n")
         fh.write("#     pt_shell> source %s\n\n" % os.path.abspath(path))
@@ -263,7 +265,10 @@ def main():
     print("=" * 68)
     print("코너별 결과")
     print("-" * 68)
-    head = "  %-24s" % "코너" + "".join("%-14s" % s[0] for s in steps)
+    # 2 에서 한글은 글자 수가 아니라 바이트 수로 세어 폭이 어긋난다.
+    # 글자 수로 맞춘 뒤 utf-8 로 되돌린다.
+    head = (u"  %-24s" % u"코너").encode("utf-8") \
+        + "".join("%-14s" % s[0] for s in steps)
     print(head)
     bad = []
     for name, codes in results:

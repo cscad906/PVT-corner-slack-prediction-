@@ -22,6 +22,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from find_rpt import find_rpt
 from names import annotated_path, find_annotated
 
@@ -219,7 +221,7 @@ def main():
         else:
             outlines.append("%s %10s %10s %10s" % (clean.ljust(header_len), sd, sr, sc))
 
-    with open(out, "w") as f:
+    with wopen(out) as f:
         f.write("\n".join(outlines))
 
     print("")

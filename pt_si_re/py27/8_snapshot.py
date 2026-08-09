@@ -22,9 +22,12 @@ import os
 import re
 import subprocess
 import sys
+from collections import OrderedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from find_rpt import find_rpt
 from names import find_annotated
 
@@ -43,14 +46,25 @@ def head(t):
     line("=")
 
 
+def as_str(s):
+    """파일에서 읽은 글자를 화면에 찍을 수 있게 만든다.
+
+    2 에서 io.open 이 돌려주는 것은 unicode 라, 한글이 든 포맷 문자열과
+    합칠 때 UnicodeDecodeError 로 죽는다. 그래서 2 에서만 utf-8 로 되돌린다.
+    """
+    if sys.version_info[0] < 3 and not isinstance(s, str):
+        return s.encode("utf-8")
+    return s
+
+
 def masker(on):
     """인스턴스 이름을 길이만 남기고 가린다(--mask)."""
     if not on:
-        return lambda s: s
+        return as_str
 
     def f(s):
-        return re.sub(r"[A-Za-z_][A-Za-z_0-9/\[\]]{6,}",
-                      lambda m: "<name:%d>" % len(m.group(0)), s)
+        return as_str(re.sub(r"[A-Za-z_][A-Za-z_0-9/\[\]]{6,}",
+                             lambda m: "<name:%d>" % len(m.group(0)), s))
     return f
 
 
@@ -155,7 +169,9 @@ def fingerprint_report(p, mask):
 
 def fingerprint_attr(p, mask):
     """attribute 덤프의 형식과 어떤 속성이 있는지."""
-    attrs = {}
+    # 2 의 dict 는 순서를 보장하지 않는다. 같은 개수인 속성끼리의 순서가
+    # 3 과 달라지지 않게 넣은 순서를 지킨다.
+    attrs = OrderedDict()
     sample = []
     n = 0
     with io.open(p, "r", errors="ignore") as f:
@@ -247,7 +263,7 @@ def main():
     outdir = os.path.dirname(os.path.abspath(args.out))
     if outdir and not os.path.isdir(outdir):
         os.makedirs(outdir)
-    _fh = open(args.out, "w")
+    _fh = wopen(args.out)
     _stdout = sys.stdout
 
     class _Tee(object):

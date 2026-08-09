@@ -1,4 +1,13 @@
+# -*- coding: utf-8 -*-
 from __future__ import division, print_function
+
+# 파이썬 2 에서 io.open 이 준 값은 str 이 아니라 unicode 다. 그래서
+# isinstance(x, str) 로 거르면 SPEF NAME_MAP id 가 전부 걸러져
+# 매칭이 통째로 실패한다(넷 8,930개 중 8,930개가 미해결로 빠졌다).
+try:
+    _TEXT_TYPES = (str, unicode)   # noqa: F821  (파이썬 2)
+except NameError:
+    _TEXT_TYPES = (str,)           # 파이썬 3
 import argparse
 import io
 from difflib import SequenceMatcher
@@ -639,7 +648,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     for q in queries:
         spef_nets = [
             spef_id for spef_id in get_spef_ids(q['net'])
-            if isinstance(spef_id, str) and spef_id.startswith('*')
+            if isinstance(spef_id, _TEXT_TYPES) and spef_id.startswith('*')
         ]
         for spef_net in spef_nets:
             if spef_net not in net_queries:
