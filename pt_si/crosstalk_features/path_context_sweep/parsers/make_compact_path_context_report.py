@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import csv
 import sys
 from collections import OrderedDict
 from pathlib import Path
+from typing import Dict, Tuple
 
 
 FIELDNAMES = [
@@ -25,13 +25,13 @@ FIELDNAMES = [
 ]
 
 
-def read_tsv_by_key(path: Path, key: str) -> dict[str, dict[str, str]]:
+def read_tsv_by_key(path: Path, key: str) -> Dict[str, Dict[str, str]]:
     with path.open(newline="") as fh:
         return {row[key]: row for row in csv.DictReader(fh, delimiter="\t")}
 
 
-def read_segment_map(path: Path) -> dict[tuple[str, str, str, str, str], str]:
-    out: dict[tuple[str, str, str, str, str], str] = {}
+def read_segment_map(path: Path) -> Dict[Tuple[str, str, str, str, str], str]:
+    out: Dict[Tuple[str, str, str, str, str], str] = {}
     with path.open(newline="") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             key = (row["path_id"], row["arc_idx"], row["victim_net"], row["victim_driver_pin"], row["victim_load_pin"])
@@ -55,11 +55,11 @@ def zero_if_blank(value: str) -> str:
 def build_rows(
     feature_file: Path,
     path_arc_file: Path,
-    victim_windows: dict[str, dict[str, str]],
-    aggressor_windows: dict[str, dict[str, str]],
-) -> OrderedDict[str, dict[str, object]]:
+    victim_windows: Dict[str, Dict[str, str]],
+    aggressor_windows: Dict[str, Dict[str, str]],
+) -> Dict[str, Dict[str, object]]:
     segment_by_arc = read_segment_map(path_arc_file)
-    by_path: OrderedDict[str, dict[str, object]] = OrderedDict()
+    by_path: Dict[str, Dict[str, object]] = OrderedDict()
     with feature_file.open(newline="") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             path_id = row["path_id"]
@@ -99,7 +99,7 @@ def build_rows(
     return by_path
 
 
-def write_flat(by_path: OrderedDict[str, dict[str, object]], out: Path) -> int:
+def write_flat(by_path: Dict[str, Dict[str, object]], out: Path) -> int:
     count = 0
     with out.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, delimiter="\t", lineterminator="\n")
@@ -111,7 +111,7 @@ def write_flat(by_path: OrderedDict[str, dict[str, object]], out: Path) -> int:
     return count
 
 
-def write_by_path(by_path: OrderedDict[str, dict[str, object]], out: Path) -> None:
+def write_by_path(by_path: Dict[str, Dict[str, object]], out: Path) -> None:
     with out.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, delimiter="\t", lineterminator="\n")
         for data in by_path.values():

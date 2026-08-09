@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""1 - 코너별 리포트를 합쳐 '측정할 경로 목록' 을 만든다.  (1회차 -> 2회차)
+
+    python3 1_union.py --dir round1/corners
+
+무엇을 왜 하나
+    코너마다 위반하는 경로가 다르다. 0.8V 에서만 위반인 경로와 0.6V 에서만
+    위반인 경로가 따로 있어서, 어느 한 코너 기준으로 고르면 나머지를 놓친다.
+    그래서 전 코너의 위반/위험 경로를 **합집합** 한 뒤, 그 전체를 모든 코너에서
+    똑같이 재측정해야 코너 간 비교가 가능하다.
+
+입력
+    <dir>/*.rpt      코너마다 하나. 파일 이름이 그대로 코너 이름이 된다.
+                     (report_timing -slack_lesser_than ... 로 만든 것)
+
+출력
+    union_paths.tsv  합집합 경로 목록. 어느 코너에서 위반이었는지까지 들어 있다.
+    fixed_paths.tcl  2회차에 pt_shell 에서 source 할 파일.
+                     경로마다 report_timing 을 걸어 같은 경로를 다시 뽑는다.
+
+경로를 같다고 보는 기준
+    (시작 FF, 끝 FF, 그 사이를 지나는 핀 전부).
+    같은 FF 쌍 사이에도 지나는 길이 다른 별개 경로가 있으므로, 핀 목록까지
+    같아야 같은 경로로 친다.
+"""
+import argparse
+import glob
+import os
+import re
+import sys
+
+START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
+END_RE = re.compile(r"^\s*Endpoint:\s+(\S+)")
+GROUP_RE = re.compile(r"^\s*Path Group:\s+(.+?)\s*$")
+SLACK_RE = re.compile(r"^\s*slack\s*\(([^)]+)\)\s+(-?[\d.]+)")
+PIN_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
+EDGE_RE = re.compile(r"\s([rf])\s*$")
+STOP = ("data arrival time", "required time", "clock uncertainty",
+        "library setup time", "library hold time", "slack ")
+
+
+def data_pin_chain(lines, start_inst, end_inst):
+    """경로의 데이터 구간 핀 목록을 [(핀, 방향)] 으로 뽑는다.
+
+    데이터 구간이란 '시작 플립플롭에서 신호가 나온 뒤부터 끝 플립플롭에 들어갈
+    때까지' 이다. 그 앞뒤는 클럭 구간이라 경로를 구분하는 데 쓰지 않는다.
+
+    구간을 찾는 방법 (핀 이름에 의존하지 않는다)
+      시작 : 인스턴스 이름이 start_inst 인 핀 중 **마지막** 것
+             (FF 의 출력 핀. Q, QN, QB, Z 등 라이브러리마다 이름이 다르다)
+      끝   : 인스턴스 이름이 end_inst 인 핀 중 **처음** 것
+             (FF 의 입력 핀. D, DIN 등)
+    예전에는 이름을 "/Q", "/QN", "/D" 로 못 박아서, 다른 라이브러리를 쓰면
+    경로가 100% 버려졌다. 이름 대신 위치로 찾으면 그런 일이 없다.
+    """
+    # 1) 데이터 구간 후보 핀들을 순서대로 모은다
+    items = []          # (핀이름, 방향)
+    for line in lines:
+        low = line.strip().lower()
+        if any(low.startswith(p) for p in STOP):
+            break
+        m = PIN_RE.match(line)
+        if not m:
+            continue
+        name, tag = m.group(1), m.group(2)
+        if tag.lower() == "net":
+            continue
+        e = EDGE_RE.search(line.rstrip())
+        items.append((name, e.group(1) if e else ""))
+
+    if len(items) < 2:
+        return []
+
+    # 2) 시작 인스턴스의 마지막 핀 = FF 출력. 여기서부터 데이터 구간이다.
+    #    (클럭 구간에도 같은 인스턴스의 클럭 핀이 나오므로 '마지막'을 쓴다)
+    start_at = None
+    for i, (name, _) in enumerate(items):
+        if name.rsplit("/", 1)[0] == start_inst:
+            start_at = i
+    # 3) 끝 인스턴스의 첫 핀 = FF 입력. 여기까지가 데이터 구간이다.
+    end_at = None
+    for i, (name, _) in enumerate(items):
+        if name.rsplit("/", 1)[0] == end_inst:
+            if start_at is None or i > start_at:
+                end_at = i
+                break
+
+    if start_at is None or end_at is None or end_at <= start_at:
+        return []
+    return items[start_at:end_at + 1]
+
+
+def parse_report(path):
+    """리포트 하나 -> (경로 목록, 통계).
+
+    통계는 '리포트에 Startpoint 가 몇 개인데 몇 개를 실제로 썼는가' 를 센다.
+    경로가 조용히 빠지면 합집합이 불완전해지므로, 버린 개수와 이유를 화면에 알린다.
+      no_chain  : 시작 FF 의 Q 부터 끝 FF 의 D 까지 이어지는 핀 줄을 못 찾음
+                  (포트에서 시작/끝나는 경로이거나 -input_pins 가 빠진 경우)
+      no_slack  : slack 줄을 못 만남 (파일이 중간에 잘린 경우)
+    """
+    out = []
+    stat = {"startpoint": 0, "no_chain": 0, "no_slack": 0}
+    cur = None
+    buf = []
+    with open(path, "r", errors="ignore") as f:
+        for line in f:
+            m = START_RE.match(line)
+            if m:
+                if cur is not None:
+                    stat["no_slack"] += 1      # 앞 경로가 slack 없이 끝났다
+                stat["startpoint"] += 1
+                cur = {"start": m.group(1), "end": "", "group": "", "slack": None}
+                buf = []
+                continue
+            if cur is None:
+                continue
+            m = END_RE.match(line)
+            if m:
+                cur["end"] = m.group(1)
+                continue
+            m = GROUP_RE.match(line)
+            if m:
+                cur["group"] = m.group(1)
+                continue
+            m = SLACK_RE.match(line)
+            if m:
+                cur["status"] = m.group(1)
+                cur["slack"] = float(m.group(2))
+                pd = data_pin_chain(buf, cur["start"], cur["end"])
+                if pd:
+                    cur["pins"] = [p for p, _ in pd]
+                    cur["dirs"] = [d for _, d in pd]
+                    cur["sig"] = (cur["start"], cur["end"], tuple(cur["pins"]))
+                    out.append(cur)
+                else:
+                    stat["no_chain"] += 1
+                cur = None
+                buf = []
+                continue
+            buf.append(line)
+    if cur is not None:
+        stat["no_slack"] += 1
+    return out, stat
+
+
+
+# ---- 결과 코드 -------------------------------------------------------
+# 마지막에 "무슨 문제인지 + 어떻게 하면 되는지 + 코드" 를 함께 찍는다.
+# 현장에서 화면을 복사하기 어려우므로, 읽고 바로 이해할 수 있어야 하고
+# 코드는 원격으로 물어볼 때 쓴다. 코드 목록은 코드표.md 에 있다.
+CODE_INFO = {
+    # 코드            (한 줄 설명,                          무엇을 하면 되는지)
+    "E-NORPT":    ("리포트 파일(.rpt)을 못 찾았습니다",
+                   "--dir 로 준 폴더에 코너별 report_timing 결과를 넣어 주세요."),
+    "E-NOFILE":   ("필요한 입력 파일이 없습니다",
+                   "0_check.py 를 돌리면 무엇이 없는지 알려줍니다."),
+    "E-NOPATH":   ("리포트에서 경로를 하나도 못 읽었습니다",
+                   "report_timing 에 -input_pins 를 넣어 다시 뽑아 주세요."),
+    "E-NONET":    ("리포트에 '(net)' 줄이 없습니다",
+                   "report_timing 에 -nets 를 넣어 다시 뽑아 주세요."),
+    "E-NOATTR":   ("속성 덤프에서 값을 하나도 못 읽었습니다",
+                   "report_attribute 에 -application 을 넣어 다시 뽑아 주세요."),
+    "E-PINNAME":  ("리포트의 핀 이름이 속성 덤프와 하나도 안 맞습니다",
+                   "지금 쓰는 리포트로 dump_attr.tcl 을 다시 돌려 주세요."),
+    "E-NETNAME":  ("리포트의 넷 이름이 속성 덤프와 하나도 안 맞습니다",
+                   "지금 쓰는 리포트로 dump_attr.tcl 을 다시 돌려 주세요."),
+    "E-RES0":     ("SPEF 에서 저항(Res)을 하나도 못 구했습니다",
+                   "SPEF 가 이 리포트와 같은 디자인/코너인지 확인해 주세요."),
+    "E-NOINPUT":  ("붙일 값(cpin/distres)이 하나도 없습니다",
+                   "2a_cpin.py 와 2b_distres.py 를 먼저 돌려 주세요."),
+    "E-NOROW":    ("결과 표에 줄이 하나도 없습니다",
+                   "timing.rpt 이 report_timing 출력이 맞는지 확인해 주세요."),
+    "W-DROP":     ("합집합에서 버린 경로가 많습니다",
+                   "report_timing 옵션 4개(-nets -input_pins -nosplit "
+                   "-path_type full_clock_expanded)를 확인해 주세요."),
+    "W-CPIN":     ("Cpin 이 비어 있는 줄이 많습니다",
+                   "지금 리포트로 dump_attr.tcl 을 다시 돌려 보세요."),
+    "W-RES":      ("Dist/Res 가 비어 있는 줄이 많습니다",
+                   "9_diagnose.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다."),
+    "W-NA":       ("결과에 N/A 가 남아 있습니다",
+                   "9_diagnose.py 를 돌리면 원인을 알려줍니다."),
+    "W-XT0":      ("crosstalk 값이 전부 0 입니다",
+                   "PT 에서 si_enable_analysis 가 true 인지, SPEF 에 coupling 이 "
+                   "있는지 확인해 주세요."),
+}
+
+
+def code(c, *msg):
+    """무슨 일이 있었는지 설명하고 코드를 찍는다.
+
+    E- 로 시작하면 실패라 여기서 멈춘다. W- 는 결과는 나왔지만 확인이 필요한 경우.
+    """
+    for m in msg:
+        print(m)
+    print("")
+    print("=" * 66)
+    if c.startswith("OK-"):
+        print("  정상 종료           [ %s ]" % c)
+        print("=" * 66)
+        return
+    what, todo = CODE_INFO.get(c, ("", ""))
+    kind = "문제 발생" if c.startswith("E-") else "확인 필요"
+    print("  %s" % kind)
+    if what:
+        print("    무엇이   : %s" % what)
+        print("    하실 일  : %s" % todo)
+    print("")
+    print("    에러 코드: %s" % c)
+    print("    (해결이 안 되면 이 코드를 알려주세요)")
+    print("=" * 66)
+    if c.startswith("E-"):
+        sys.exit(1)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="코너별 리포트를 합쳐 경로 목록을 만든다.")
+    ap.add_argument("--dir", default="round1/corners",
+                    help="코너별 .rpt 가 들어 있는 폴더")
+    ap.add_argument("--out-tsv", default=None)
+    ap.add_argument("--out-tcl", default=None)
+    ap.add_argument("--out-txt", default=None,
+                    help="vi 로 보기 좋게 정렬한 요약 파일")
+    ap.add_argument("--slack-max", type=float, default=None,
+                    help="이 값보다 slack 이 큰 경로는 제외. 생략하면 리포트에 있는 것 전부.")
+    ap.add_argument("--no-edge", action="store_true",
+                    help="rise/fall 고정을 끈다. 기본은 켜짐(코너마다 엣지가 뒤바뀌는 것을 막는다).")
+    args = ap.parse_args()
+
+    d = args.dir
+    out_tsv = args.out_tsv or os.path.join(d, "union_paths.tsv")
+    out_tcl = args.out_tcl or os.path.join(d, "fixed_paths.tcl")
+    out_txt = args.out_txt or os.path.join(d, "union_summary.txt")
+
+    print("=" * 68)
+    print("1 - 코너 합집합")
+    print("=" * 68)
+
+    files = sorted(glob.glob(os.path.join(d, "*.rpt")))
+    if not files:
+        print("")
+        code("E-NORPT",
+             "[ 실패 ] %s 안에 .rpt 파일이 없습니다." % d,
+             "         코너마다 report_timing 결과를 이 폴더에 모아 주세요.",
+             "         파일 이름이 그대로 코너 이름이 됩니다.")
+
+    print("  폴더 : %s" % d)
+    print("  코너 : %d개" % len(files))
+    print("")
+
+    union = {}
+    corner_names = []
+    total_drop = {"no_chain": 0, "no_slack": 0}
+    print("  %-34s %8s %8s %8s" % ("코너", "리포트", "사용", "제외"))
+    print("  " + "-" * 62)
+    for fp in files:
+        corner = os.path.splitext(os.path.basename(fp))[0]
+        corner_names.append(corner)
+        paths, stat = parse_report(fp)
+        total_drop["no_chain"] += stat["no_chain"]
+        total_drop["no_slack"] += stat["no_slack"]
+        kept = 0
+        for p in paths:
+            if args.slack_max is not None and p["slack"] > args.slack_max:
+                continue
+            kept += 1
+            e = union.setdefault(p["sig"], {
+                "start": p["start"], "end": p["end"],
+                "n_through": len(p["pins"]) - 2,
+                "pins": p["pins"], "dirs": p["dirs"],
+                "slacks": {},
+            })
+            prev = e["slacks"].get(corner)
+            if prev is None or p["slack"] < prev:
+                e["slacks"][corner] = p["slack"]
+                # 가장 나쁜 코너의 방향을 쓴다(2회차에 그 엣지로 고정)
+                if p["slack"] == min(e["slacks"].values()):
+                    e["dirs"] = p["dirs"]
+        dropped = stat["no_chain"] + stat["no_slack"]
+        print("  %-34s %8d %8d %8d" % (corner, stat["startpoint"], kept, dropped))
+
+    if total_drop["no_chain"] or total_drop["no_slack"]:
+        print("")
+        print("  [ 제외된 경로 설명 ]")
+        if total_drop["no_chain"]:
+            print("    핀 연결을 못 찾음 : %d개" % total_drop["no_chain"])
+            print("      시작 FF 의 Q 부터 끝 FF 의 D 까지 이어지는 핀 줄이 없는 경로입니다.")
+            print("      - 포트에서 시작하거나 끝나는 경로면 정상입니다(FF 사이가 아님).")
+            print("      - 전부 제외됐다면 report_timing 에 -input_pins 가 빠진 것입니다.")
+        if total_drop["no_slack"]:
+            print("    slack 줄이 없음   : %d개" % total_drop["no_slack"])
+            print("      경로 블록 끝의 'slack (...)' 줄을 못 만난 경우입니다.")
+            print("      - 1~2개면 파일 맨 끝이 잘린 것입니다. 무시해도 됩니다.")
+            print("      - 여러 개면 report_timing 에 -nosplit 이 빠져 줄이 접혔을")
+            print("        가능성이 큽니다. 아래로 다시 뽑으세요:")
+            print("          report_timing ... -nets -input_pins -nosplit ...")
+
+    # 버려진 비율이 크면 형식 문제일 가능성이 높다. 눈에 띄게 알린다.
+    total_seen = sum(1 for _ in [1]) and 0
+    dropped_all = total_drop["no_chain"] + total_drop["no_slack"]
+    if union and dropped_all > 0:
+        used = len(union)
+        if dropped_all > used * 0.1:
+            print("")
+            print("  [ 주의 ] 버린 경로가 %d개로 적지 않습니다 (쓴 것 %d개)."
+                  % (dropped_all, used))
+            print("           리포트 형식 문제일 수 있습니다. 아래 옵션을 모두 넣었는지")
+            print("           확인하세요:")
+            print("             -nets -input_pins -nosplit -path_type full_clock_expanded")
+
+    if not union:
+        print("")
+        code("E-NOPATH",
+             "[ 실패 ] 쓸 수 있는 경로가 하나도 없습니다.",
+             "         report_timing 에 -input_pins 가 빠졌을 가능성이 큽니다.")
+
+    rows = []
+    for sig, e in union.items():
+        s = e["slacks"]
+        worst_c = min(s, key=lambda c: s[c])
+        rows.append({
+            "start": e["start"], "end": e["end"], "n_through": e["n_through"],
+            "pins": e["pins"], "dirs": e["dirs"],
+            "n_viol": sum(1 for v in s.values() if v < 0),
+            "n_corner": len(s),
+            "worst": s[worst_c], "worst_c": worst_c, "slacks": s,
+        })
+    rows.sort(key=lambda r: (r["worst"], r["start"], r["end"]))
+    for i, r in enumerate(rows, 1):
+        r["idx"] = i
+
+    # ---- union_paths.tsv -------------------------------------------
+    with open(out_tsv, "w") as fh:
+        head = ["path_idx", "startpoint", "endpoint", "n_through",
+                "n_corners_seen", "n_corners_violating", "worst_slack", "worst_corner"]
+        head += ["slack__" + c for c in corner_names]
+        fh.write("\t".join(head) + "\n")
+        for r in rows:
+            vals = [str(r["idx"]), r["start"], r["end"], str(r["n_through"]),
+                    str(r["n_corner"]), str(r["n_viol"]),
+                    "%.6f" % r["worst"], r["worst_c"]]
+            vals += ["" if c not in r["slacks"] else "%.6f" % r["slacks"][c]
+                     for c in corner_names]
+            fh.write("\t".join(vals) + "\n")
+
+    # ---- union_summary.txt : vi 로 그냥 열어 보는 용도 --------------
+    # TSV 는 탭이라 vi 에서 열이 어긋난다. 폭을 맞춰 미리 정렬해 둔다.
+    def short(name, w=34):
+        """긴 인스턴스 이름을 앞뒤만 남기고 줄인다."""
+        if len(name) <= w:
+            return name
+        keep = (w - 2) // 2
+        return name[:keep] + ".." + name[-(w - 2 - keep):]
+
+    n_viol_any = sum(1 for r in rows if r["n_viol"] > 0)
+    with open(out_txt, "w") as fh:
+        fh.write("합집합 경로 요약  (위험한 것부터 정렬)\n")
+        fh.write("=" * 118 + "\n")
+        fh.write("코너 %d개 : %s\n" % (len(corner_names), ", ".join(corner_names)))
+        fh.write("경로 %d개 (그중 위반 이력 있는 것 %d개)\n" % (len(rows), n_viol_any))
+        fh.write("\n")
+        fh.write("  코너수 = 몇 개 코너의 목록에 있었나 (1 이면 그 코너에서만 나온 경로)\n")
+        fh.write("  위반   = slack 이 음수였던 코너 수\n")
+        fh.write("  코너별 slack 에서 '.' 은 그 코너 목록에 없었다는 뜻\n")
+        fh.write("=" * 118 + "\n")
+        head = "%6s %6s %6s %5s %11s  " % ("idx", "핀수", "코너수", "위반", "worst")
+        head += " ".join("%9s" % c[:9] for c in corner_names)
+        head += "   %s" % "경로 (시작 -> 끝)"
+        fh.write(head + "\n")
+        fh.write("-" * 118 + "\n")
+        for r in rows:
+            line = "%6d %6d %6d %5d %11.6f  " % (
+                r["idx"], r["n_through"], r["n_corner"], r["n_viol"], r["worst"])
+            line += " ".join(
+                ("%9.4f" % r["slacks"][c]) if c in r["slacks"] else "%9s" % "."
+                for c in corner_names)
+            line += "   %s -> %s" % (short(r["start"]), short(r["end"]))
+            fh.write(line + "\n")
+
+    # ---- fixed_paths.tcl -------------------------------------------
+    # 경로마다 report_timing 을 -from/-through/-to 로 걸어 같은 경로를 다시 뽑는다.
+    # through 는 데이터 구간 핀 전부를 쓴다(일부만 쓰면 비슷한 다른 경로가 잡힌다).
+    edge = not args.no_edge
+    with open(out_tcl, "w") as fh:
+        fh.write("# 2회차용. pt_shell 에서:  source fixed_paths.tcl\n")
+        fh.write("# 코너를 바꿔 로드할 때마다 한 번씩 실행한다.\n")
+        fh.write("#   출력 파일 이름은 아래 OUT 을 코너마다 바꿔 준다.\n\n")
+        fh.write('set OUT "timing.rpt"\n')
+        fh.write('set DTYPE "max"      ;# setup=max, hold=min\n')
+        fh.write('set SIGDIG 6\n\n')
+        fh.write("file delete -force $OUT\n")
+        fh.write("set FIXED_PATHS {\n")
+        for r in rows:
+            frm, to = r["pins"][0], r["pins"][-1]
+            thr = r["pins"][1:-1]
+            key = "%s->%s#%d" % (r["start"], r["end"], r["idx"])
+            thr_s = " ".join("{%s}" % p for p in thr)
+            if edge and all(d in ("r", "f") for d in r["dirs"]) and len(r["dirs"]) == len(r["pins"]):
+                dir_s = " ".join("{%s}" % d for d in r["dirs"])
+                fh.write("  {{%s} {%s} {%s} {%s} {%s}}\n" % (key, frm, to, thr_s, dir_s))
+            else:
+                fh.write("  {{%s} {%s} {%s} {%s}}\n" % (key, frm, to, thr_s))
+        fh.write("}\n\n")
+        fh.write(TCL_LOOP)
+
+    n_edge = sum(1 for r in rows
+                 if all(d in ("r", "f") for d in r["dirs"]) and len(r["dirs"]) == len(r["pins"]))
+    print("")
+    print("-" * 68)
+    print("  합집합 경로 : %d개" % len(rows))
+    print("  결과 목록   : %s   (vi 로 열어 보세요)" % out_txt)
+    print("  같은 내용 TSV: %s" % out_tsv)
+    print("  2회차 tcl   : %s" % out_tcl)
+    if edge:
+        print("  rise/fall 고정 : %d / %d 경로" % (n_edge, len(rows)))
+    print("-" * 68)
+    only1 = sum(1 for r in rows if r["n_corner"] == 1)
+    allc = sum(1 for r in rows if r["n_corner"] == len(corner_names))
+    print("  한 코너에서만 나온 경로 : %d  (합집합이 필요한 이유)" % only1)
+    print("  모든 코너에 나온 경로   : %d" % allc)
+    print("")
+    warn = (total_drop["no_chain"] + total_drop["no_slack"]) > len(rows) * 0.1
+    code("W-DROP" if warn else "OK-UNION",
+         "[ %s ] 합집합 %d경로. 2회차: 코너마다 pt_shell 에서"
+         % ("주의" if warn else "정상", len(rows)))
+    print("           set OUT \"round2/<코너>/timing.rpt\"   (파일 안에서 수정)")
+    print("           source %s" % out_tcl)
+    print("           source pt/dump_attr.tcl")
+    print("")
+    return
+    print("[ 정상 ] 2회차: 코너마다 pt_shell 에서")
+    print("           set OUT \"round2/<코너>/timing.rpt\"   (파일 안에서 수정)")
+    print("           source %s" % out_tcl)
+    print("           source pt/dump_attr.tcl")
+    print("")
+
+
+TCL_LOOP = r"""
+# --- 위 목록의 경로를 하나씩 다시 뽑는다 (내용은 안 봐도 된다) ---------
+proc edge_opt {base dir} {
+    if {$dir eq "r"} { return "-rise_$base" }
+    if {$dir eq "f"} { return "-fall_$base" }
+    return "-$base"
+}
+
+set idx 0
+foreach item $FIXED_PATHS {
+    incr idx
+    set key  [lindex $item 0]
+    set frm  [lindex $item 1]
+    set to   [lindex $item 2]
+    set thr  [lindex $item 3]
+    set dirs [lindex $item 4]
+    set use_edge [expr {[llength $dirs] == [llength $thr] + 2}]
+
+    set fopt "-from"
+    set topt "-to"
+    if {$use_edge} {
+        set fopt [edge_opt "from" [lindex $dirs 0]]
+        set topt [edge_opt "to"   [lindex $dirs end]]
+    }
+
+    set cmd "report_timing -delay_type $DTYPE -path_type full_clock_expanded \
+        $fopt \[get_pins -quiet {$frm}\] $topt \[get_pins -quiet {$to}\] \
+        -max_paths 1 -sort_by slack \
+        -nets -input_pins -capacitance -transition_time \
+        -nosplit -significant_digits $SIGDIG"
+
+    set i 0
+    foreach tp $thr {
+        set topt2 "-through"
+        if {$use_edge} { set topt2 [edge_opt "through" [lindex $dirs [expr {$i+1}]]] }
+        append cmd " $topt2 \[get_pins -quiet {$tp}\]"
+        incr i
+    }
+
+    redirect -append $OUT {
+        puts "### FIXED_PATH idx=$idx key=$key"
+        eval $cmd
+        puts ""
+    }
+}
+puts "$idx 개 경로를 $OUT 에 저장했습니다."
+"""
+
+
+if __name__ == "__main__":
+    main()

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import csv
 import sys
 from collections import OrderedDict
 from pathlib import Path
+from typing import Dict, Tuple
 
 
 def main() -> int:
@@ -15,7 +15,7 @@ def main() -> int:
     in_file = Path(sys.argv[1])
     out_file = Path(sys.argv[2])
 
-    contexts: OrderedDict[tuple[str, str, str], dict[str, str]] = OrderedDict()
+    contexts: Dict[Tuple[str, str, str], Dict[str, str]] = OrderedDict()
     with in_file.open(newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:

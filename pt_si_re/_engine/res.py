@@ -9,6 +9,23 @@ from functools import lru_cache
 import networkx as nx
 
 
+def _fmt_value(v, nd=4):
+    """소수점 표기를 유지하며 값을 문자열로 (지수 표기 없음).
+
+    기존 산출물과 **형식이 같아야 하므로** 소수점 4자리 고정이다.
+    단위: Dist = um, Res = ohm, Cpin = pF.
+    더 정밀한 값이 필요하면 2b_distres.py 가 만드는 distres.tsv 를 쓴다
+    (거기에는 반올림 전 값이 남아 있다).
+    """
+    if v is None:
+        return "N/A"
+    # 기존 산출물과 형식을 맞춘다: 소수점 4자리 고정, 뒤쪽 0 을 떼지 않는다.
+    try:
+        return "%.*f" % (nd, float(v))
+    except (TypeError, ValueError):
+        return str(v)
+
+
 def normalize_name_token(name):
     # SPEF name_map may escape brackets, while PT report usually does not.
     return name.replace(r'\[', '[').replace(r'\]', ']')
@@ -764,11 +781,24 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                 d_nodes = resolve_pin_nodes(net_q['drvr_inst'], net_q['drvr_pin'])
                 r_nodes = resolve_pin_nodes(net_q['recv_inst'], net_q['recv_pin'])
 
+                # 세 값은 출처가 서로 다르므로 **독립적으로** 구한다.
+                #   Res  : SPEF *RES 그래프의 최단경로   (그래프 필요)
+                #   Dist : SPEF 좌표의 맨해튼 거리        (좌표만 필요, 그래프 불필요)
+                #   Cpin : 리시버 핀의 capacitance        (SPEF 와 무관)
+                # 예전에는 최단경로를 못 찾으면 continue 로 빠져나가 Dist/Cpin 까지
+                # 함께 N/A 가 됐다. 구할 수 있는 값은 남기고, 못 구한 것만 N/A 로 둔다.
+                # Res 를 구한 경우의 Dist 는 예전과 같이 '최소 저항 쌍'의 것을 쓴다.
                 best_r = None
-                best_d = None
-                best_c = None
+                best_d = None            # best_r 에 대응하는 dist
+                fallback_d = None        # Res 를 못 구했을 때 쓸 dist
                 for d_pin in d_nodes:
                     for r_pin in r_nodes:
+                        dist = None
+                        if d_pin in coords and r_pin in coords:
+                            dist = abs(coords[d_pin][0] - coords[r_pin][0]) + abs(coords[d_pin][1] - coords[r_pin][1])
+                            if fallback_d is None:
+                                fallback_d = dist
+
                         r_path = None
                         try:
                             r_path = nx.shortest_path_length(G, source=d_pin, target=r_pin, weight='weight')
@@ -776,30 +806,31 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                             pass
                         if r_path is None:
                             continue
-
-                        dist = None
-                        if d_pin in coords and r_pin in coords:
-                            dist = abs(coords[d_pin][0] - coords[r_pin][0]) + abs(coords[d_pin][1] - coords[r_pin][1])
-                        cap_pin = None
-                        recv_cell = net_q.get('recv_cell')
-                        recv_pin = net_q.get('recv_pin')
-                        recv_inst = net_q.get('recv_inst')
-                        # ① PT 가 뽑아준 핀 capacitance (report_attribute 덤프).
-                        #    Liberty 를 못 받는 사이트에서는 이게 유일한 Cpin 출처다.
-                        #    키는 설계 핀 이름(inst/pin)이라 PT 출력과 그대로 맞는다.
-                        if pin_cap_map and recv_inst and recv_pin and recv_pin != "__PORT__":
-                            cap_pin = pin_cap_map.get('{0}/{1}'.format(recv_inst, recv_pin))
-                        # ② Liberty 의 cell/pin capacitance
-                        if cap_pin is None and recv_cell and recv_pin and recv_pin != "__PORT__":
-                            cap_pin = lib_pin_caps.get(recv_cell, {}).get(recv_pin)
-                        # ③ SPEF *CONN 의 *L 부하 (있는 SPEF 에만 존재)
-                        if cap_pin is None:
-                            cap_pin = conn_caps.get(r_pin)
-
                         if best_r is None or r_path < best_r:
                             best_r = r_path
                             best_d = dist
-                            best_c = cap_pin
+                if best_r is None:
+                    best_d = fallback_d
+
+                # Cpin 은 핀 쌍 순회와 무관하다 -- 리시버 핀 하나로 정해진다.
+                best_c = None
+                recv_cell = net_q.get('recv_cell')
+                recv_pin = net_q.get('recv_pin')
+                recv_inst = net_q.get('recv_inst')
+                # ① PT 가 뽑아준 핀 capacitance (report_attribute 덤프).
+                #    Liberty 를 못 받는 사이트에서는 이게 유일한 Cpin 출처다.
+                #    키는 설계 핀 이름(inst/pin)이라 PT 출력과 그대로 맞는다.
+                if pin_cap_map and recv_inst and recv_pin and recv_pin != "__PORT__":
+                    best_c = pin_cap_map.get('{0}/{1}'.format(recv_inst, recv_pin))
+                # ② Liberty 의 cell/pin capacitance
+                if best_c is None and recv_cell and recv_pin and recv_pin != "__PORT__":
+                    best_c = lib_pin_caps.get(recv_cell, {}).get(recv_pin)
+                # ③ SPEF *CONN 의 *L 부하 (있는 SPEF 에만 존재)
+                if best_c is None:
+                    for r_pin in r_nodes:
+                        if r_pin in conn_caps:
+                            best_c = conn_caps[r_pin]
+                            break
                 
                 idx = net_q['orig_idx']
                 prev_r, prev_d, prev_c = results.get(idx, (None, None, None))
@@ -922,6 +953,11 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         print("-> exact CONN 2차 처리 추가 매칭: 0개")
 
     # ---------------------------------------------------------
+    # output_path 가 None 이면 리포트를 쓰지 않고 계산 결과만 돌려준다.
+    # (1b_distres.py 처럼 Dist/Res 표만 필요할 때 쓰는 경로)
+    if output_path is None:
+        return results
+
     print("4. 표 형식에 맞춰 타이밍 리포트 업데이트 중...")
     
     net_row_re = re.compile(
@@ -939,9 +975,9 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         else:
             continue
 
-        str_dist = f"{dist:.4f}" if dist is not None else "N/A"
-        str_rpath = f"{r_path:.4f}" if r_path is not None else "N/A"
-        str_cpin = f"{cpin:.4f}" if cpin is not None else "N/A"
+        str_dist = _fmt_value(dist)
+        str_rpath = _fmt_value(r_path)
+        str_cpin = _fmt_value(cpin)
 
         if is_net_line:
             m_net = net_row_re.match(clean_line)
@@ -962,6 +998,10 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         f.writelines(report_lines)
 
     print(f"완료! 수정된 리포트가 저장되었습니다: {output_path}")
+    # 호출부가 Dist/Res 를 표로 따로 쓸 수 있게 결과를 돌려준다.
+    # 키: timing.rpt 의 줄 번호(0부터), 값: (Res, Dist, Cpin)
+    return results
+
 
 def infer_temp_from_report_name(report_path):
     basename = os.path.basename(report_path)

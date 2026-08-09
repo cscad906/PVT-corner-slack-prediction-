@@ -5,7 +5,6 @@ This intentionally avoids full arc parsing.  It checks fixed-path key stability
 and compares arrival/slack values for the same FIXED_PATH index.
 """
 
-from __future__ import annotations
 
 import argparse
 import csv
@@ -13,6 +12,7 @@ import math
 import re
 import statistics
 from pathlib import Path
+from typing import Dict, List, Optional
 
 MARKER_RE = re.compile(r"^### FIXED_PATH idx=(?P<idx>\d+) key=(?P<key>.*)$")
 VOLT_RE = re.compile(r"tt0p(?P<tag>[0-9]+)v(?:m?\d+)c")
@@ -28,7 +28,7 @@ def voltage_from_name(name: str) -> float:
     return float("0." + match.group("tag"))
 
 
-def percentile(values: list[float], pct: float) -> float:
+def percentile(values: List[float], pct: float) -> float:
     if not values:
         return float("nan")
     vals = sorted(values)
@@ -42,16 +42,16 @@ def percentile(values: list[float], pct: float) -> float:
     return vals[lo] + (vals[hi] - vals[lo]) * (rank - lo)
 
 
-def report_map(report_dir: Path) -> dict[float, Path]:
+def report_map(report_dir: Path) -> Dict[float, Path]:
     reports = sorted(report_dir.glob("*_fixed.rpt"), key=lambda p: voltage_from_name(p.name))
     if not reports:
         raise SystemExit(f"no *_fixed.rpt files under {report_dir}")
     return {voltage_from_name(path.name): path for path in reports}
 
 
-def parse_report_values(path: Path) -> dict[int, dict[str, object]]:
-    rows: dict[int, dict[str, object]] = {}
-    cur: dict[str, object] | None = None
+def parse_report_values(path: Path) -> Dict[int, Dict[str, object]]:
+    rows: Dict[int, Dict[str, object]] = {}
+    cur: Optional[Dict[str, object]] = None
 
     def finish() -> None:
         if cur is not None:
@@ -85,7 +85,7 @@ def parse_report_values(path: Path) -> dict[int, dict[str, object]]:
     return rows
 
 
-def write_csv(path: Path, rows: list[dict[str, object]], fields: list[str]) -> None:
+def write_csv(path: Path, rows: List[Dict[str, object]], fields: List[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -94,7 +94,7 @@ def write_csv(path: Path, rows: list[dict[str, object]], fields: list[str]) -> N
             writer.writerow({field: row.get(field, "") for field in fields})
 
 
-def stat(vals: list[float], fn, default: float = float("nan")) -> float:
+def stat(vals: List[float], fn, default: float = float("nan")) -> float:
     return fn(vals) if vals else default
 
 
@@ -115,8 +115,8 @@ def main() -> None:
     sioff_reports = report_map(args.sioff_reports_dir)
     voltages = sorted(set(si_reports) | set(sioff_reports))
 
-    detail_rows: list[dict[str, object]] = []
-    summary_rows: list[dict[str, object]] = []
+    detail_rows: List[Dict[str, object]] = []
+    summary_rows: List[Dict[str, object]] = []
 
     for voltage in voltages:
         si_path = si_reports.get(voltage)
@@ -124,7 +124,7 @@ def main() -> None:
         si_data = parse_report_values(si_path) if si_path else {}
         sioff_data = parse_report_values(sioff_path) if sioff_path else {}
         path_ids = sorted(set(si_data) | set(sioff_data))
-        voltage_rows: list[dict[str, object]] = []
+        voltage_rows: List[Dict[str, object]] = []
 
         for path_id in path_ids:
             si = si_data.get(path_id)

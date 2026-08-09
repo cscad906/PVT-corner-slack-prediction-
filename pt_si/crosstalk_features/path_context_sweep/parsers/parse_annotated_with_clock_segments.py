@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import csv
 import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 
 PATH_RE = re.compile(r"^### FIXED_PATH idx=(\d+)\s+key=(.+)$")
@@ -25,7 +25,7 @@ def clean_num(value: str) -> str:
         return ""
 
 
-def parse_net_line(line: str) -> dict[str, str] | None:
+def parse_net_line(line: str) -> Optional[Dict[str, str]]:
     marker = " (net)"
     if marker not in line:
         return None
@@ -44,7 +44,7 @@ def parse_net_line(line: str) -> dict[str, str] | None:
     }
 
 
-def parse_pin(line: str) -> tuple[str, str]:
+def parse_pin(line: str) -> Tuple[str, str]:
     match = PIN_RE.match(line)
     if not match:
         return "", ""
@@ -56,8 +56,8 @@ def parse_pin(line: str) -> tuple[str, str]:
 
 
 def add_arc(
-    rows: list[dict[str, str]],
-    pending_net: dict[str, str],
+    rows: List[Dict[str, str]],
+    pending_net: Dict[str, str],
     segment: str,
     arc_idx: int,
     segment_arc_idx: int,
@@ -79,7 +79,7 @@ def add_arc(
     rows.append(row)
 
 
-def flush_path(summary: dict[str, str], rows: list[dict[str, str]], summaries: list[dict[str, str]], all_rows: list[dict[str, str]]) -> None:
+def flush_path(summary: Dict[str, str], rows: List[Dict[str, str]], summaries: List[Dict[str, str]], all_rows: List[Dict[str, str]]) -> None:
     if not summary:
         return
     summaries.append(summary.copy())
@@ -97,15 +97,15 @@ def flush_path(summary: dict[str, str], rows: list[dict[str, str]], summaries: l
         all_rows.append(row)
 
 
-def parse_report(report: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    summaries: list[dict[str, str]] = []
-    all_rows: list[dict[str, str]] = []
-    summary: dict[str, str] = {}
-    rows: list[dict[str, str]] = []
+def parse_report(report: Path) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    summaries: List[Dict[str, str]] = []
+    all_rows: List[Dict[str, str]] = []
+    summary: Dict[str, str] = {}
+    rows: List[Dict[str, str]] = []
     segment = ""
     last_pin = ""
     last_edge = ""
-    pending_net: dict[str, str] | None = None
+    pending_net: Optional[Dict[str, str]] = None
     arc_idx = 0
     segment_counts: defaultdict[str, int] = defaultdict(int)
     seen_data_start = False
@@ -230,7 +230,7 @@ def parse_report(report: Path) -> tuple[list[dict[str, str]], list[dict[str, str
     return summaries, all_rows
 
 
-def write_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+def write_tsv(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
     with path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t", lineterminator="\n", extrasaction="ignore")
         writer.writeheader()

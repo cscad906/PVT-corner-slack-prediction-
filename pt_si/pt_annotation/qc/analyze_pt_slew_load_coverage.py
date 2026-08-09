@@ -7,7 +7,6 @@ input-pin -> output-pin arcs, and compares the observed input transition and
 output net capacitance against the Liberty cell_rise/cell_fall index ranges.
 """
 
-from __future__ import annotations
 
 import argparse
 import csv
@@ -15,6 +14,7 @@ import math
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 
 CELL_RE = re.compile(r"\((SAED[^)]+)\)")
@@ -25,7 +25,7 @@ VOLT_RE = re.compile(r"tt([0-9p]+)v25c")
 FIXED_PATH_RE = re.compile(r"^###\s+FIXED_PATH\s+idx=(\d+)\s+key=(.*)$")
 
 
-def parse_float_list(text: str) -> list[float]:
+def parse_float_list(text: str) -> List[float]:
     values = []
     for item in text.replace("\\", "").split(","):
         item = item.strip()
@@ -78,7 +78,7 @@ def infer_rc(path: Path) -> str:
     return ""
 
 
-def parse_lib_table_ranges(lib: Path) -> dict[tuple[str, str], dict[str, float | int]]:
+def parse_lib_table_ranges(lib: Path) -> Dict[Tuple[str, str], Dict[str, Union[float, int]]]:
     """Return per-cell/table min/max index range.
 
     The generated SAED14 Liberty files repeat explicit index_1/index_2 inside
@@ -87,16 +87,16 @@ def parse_lib_table_ranges(lib: Path) -> dict[tuple[str, str], dict[str, float |
     slew/load grid.
     """
 
-    ranges: dict[tuple[str, str], dict[str, float | int]] = {}
+    ranges: Dict[Tuple[str, str], Dict[str, Union[float, int]]] = {}
     depth = 0
     current_cell = ""
     cell_depth = -1
     current_table = ""
     table_depth = -1
-    index_1: list[float] | None = None
-    index_2: list[float] | None = None
+    index_1: Optional[List[float]] = None
+    index_2: Optional[List[float]] = None
 
-    def update_range(cell: str, table: str, i1: list[float], i2: list[float]) -> None:
+    def update_range(cell: str, table: str, i1: List[float], i2: List[float]) -> None:
         if not cell or not table or not i1 or not i2:
             return
         key = (cell, table)
@@ -162,7 +162,7 @@ def parse_lib_table_ranges(lib: Path) -> dict[tuple[str, str], dict[str, float |
     return ranges
 
 
-def parse_pin_row(line: str) -> dict[str, object] | None:
+def parse_pin_row(line: str) -> Optional[Dict[str, object]]:
     if "(net)" in line:
         return None
     m_cell = CELL_RE.search(line)
@@ -200,7 +200,7 @@ def parse_pin_row(line: str) -> dict[str, object] | None:
     }
 
 
-def parse_net_row(line: str) -> dict[str, object] | None:
+def parse_net_row(line: str) -> Optional[Dict[str, object]]:
     if "(net)" not in line:
         return None
     tokens = line.split()
@@ -217,10 +217,10 @@ def parse_net_row(line: str) -> dict[str, object] | None:
 
 def compare_to_range(
     input_slew: float,
-    output_cap: float | None,
-    grid: dict[str, float | int] | None,
-) -> dict[str, object]:
-    result: dict[str, object] = {
+    output_cap: Optional[float],
+    grid: Optional[Dict[str, Union[float, int]]],
+) -> Dict[str, object]:
+    result: Dict[str, object] = {
         "lib_slew_min": "",
         "lib_slew_max": "",
         "lib_load_min": "",
@@ -275,7 +275,7 @@ def compare_to_range(
     return result
 
 
-def update_summary(summary: dict[str, object], row: dict[str, object]) -> None:
+def update_summary(summary: Dict[str, object], row: Dict[str, object]) -> None:
     summary["arc_count"] = int(summary.get("arc_count", 0)) + 1
     if row["phase"] == "data":
         summary["data_arc_count"] = int(summary.get("data_arc_count", 0)) + 1
@@ -301,15 +301,15 @@ def update_summary(summary: dict[str, object], row: dict[str, object]) -> None:
                 )
 
 
-def iter_report_arcs(report: Path, lib_ranges: dict[tuple[str, str], dict[str, float | int]]):
+def iter_report_arcs(report: Path, lib_ranges: Dict[Tuple[str, str], Dict[str, Union[float, int]]]):
     benchmark = infer_benchmark(report)
     mode = infer_mode(report)
     rc = infer_rc(report)
     voltage = voltage_from_name(report)
     path_idx = ""
     path_key = ""
-    previous_pin: dict[str, object] | None = None
-    pending_arc: dict[str, object] | None = None
+    previous_pin: Optional[Dict[str, object]] = None
+    pending_arc: Optional[Dict[str, object]] = None
     data_seen = False
 
     with report.open("r", encoding="utf-8", errors="ignore") as f:
@@ -397,7 +397,7 @@ def iter_report_arcs(report: Path, lib_ranges: dict[tuple[str, str], dict[str, f
         yield pending_arc
 
 
-def write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
+def write_csv(path: Path, rows: List[Dict[str, object]], fieldnames: List[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -420,7 +420,7 @@ def main() -> None:
     args = parse_args()
     lib = Path(args.lib)
     outdir = Path(args.outdir)
-    reports: list[Path] = []
+    reports: List[Path] = []
     for item in args.reports:
         path = Path(item)
         if path.is_dir():
@@ -479,8 +479,8 @@ def main() -> None:
         all_writer.writeheader()
     extrap_writer.writeheader()
 
-    cell_summary: dict[tuple[str, str, str, str, str, str, str], dict[str, object]] = defaultdict(dict)
-    bench_summary: dict[tuple[str, str, str, str], dict[str, object]] = defaultdict(dict)
+    cell_summary: Dict[Tuple[str, str, str, str, str, str, str], Dict[str, object]] = defaultdict(dict)
+    bench_summary: Dict[Tuple[str, str, str, str], Dict[str, object]] = defaultdict(dict)
     processed_reports = []
     total_arcs = 0
     total_data_arcs = 0

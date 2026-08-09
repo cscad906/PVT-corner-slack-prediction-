@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import csv
 import sys
 from pathlib import Path
+from typing import Set
 
 
-def write_lines(path: Path, values: set[str]) -> None:
+def write_lines(path: Path, values: Set[str]) -> None:
     with path.open("w") as fh:
         for value in sorted(values):
             if value:
@@ -26,8 +26,8 @@ def main() -> int:
     victim_pin_out = Path(sys.argv[2])
     aggressor_net_out = Path(sys.argv[3])
 
-    victim_load_pins: set[str] = set()
-    aggressor_nets: set[str] = set()
+    victim_load_pins: Set[str] = set()
+    aggressor_nets: Set[str] = set()
     rows = 0
 
     with feature_file.open(newline="") as fh:

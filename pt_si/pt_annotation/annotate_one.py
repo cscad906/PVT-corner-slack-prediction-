@@ -46,9 +46,77 @@ def parse_args():
     p.add_argument("--out", required=True,
                    help="출력 파일 경로.")
     p.add_argument("--lib", default=None,
-                   help="Cpin lookup 용 Liberty(.lib). 생략하면 Cpin 컬럼이 빈다 "
-                        "(Cpin 은 SPEF 가 아니라 Liberty 에서 온다).")
+                   help="Cpin lookup 용 Liberty(.lib). Liberty 를 받을 수 없으면 대신 "
+                        "--pin-attr 를 쓴다. 둘 다 없으면 Cpin 컬럼이 빈다 "
+                        "(Cpin 은 SPEF 에 없다).")
+    p.add_argument("--pin-attr", default=None,
+                   help="PT 핀 attribute 덤프. Liberty 대신 여기서 Cpin 을 읽는다. "
+                        "pt_shell 에서 아래로 만든다:\n"
+                        "  redirect -file pin_attr.txt "
+                        "{ report_attribute -application [get_pins *] }\n"
+                        "pin_capacitance_max 를 쓰며, 값의 단위가 리포트의 Cap 과 같다.")
     return p.parse_args()
+
+
+ATTR_NAME = "pin_capacitance_max"
+
+
+def load_pin_caps(path, attr=ATTR_NAME):
+    """report_attribute 덤프에서 {설계핀이름: <attr>} 를 만든다.
+
+    실제 출력은 세 가지 모양으로 나온다. 인스턴스 이름이 길면 컬럼이 넘쳐
+    객체 이름과 값이 다음 줄로 밀리기 때문이다:
+
+      (A) 한 줄:      <design> <object> float <attr> <value>
+      (B) 객체 접힘:  <design> <object>
+                              float <attr> <value>
+      (C) 값 접힘:            float <attr>
+                                          <value>
+
+    (A)만 처리하면 우리 3nm 덤프 기준 207개(약 7%)를 놓친다. 세 형태를 모두 받는다.
+    직전 객체 이름을 기억해 두고, attr 토큰을 만나면 그 줄이나 다음 줄에서 값을 읽는다.
+    """
+    caps = {}
+    last_obj = None
+    awaiting_value_for = None
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for raw in f:
+            s = raw.strip()
+            # 구분선(----, ====)과 배너(***)만 건너뛴다.
+            # 예전에 s[0] 로만 판단했더니 "-0.000274" 같은 **음수 값**이 구분선으로
+            # 오인돼 통째로 사라졌다. 그 줄이 없어지면 대기 상태가 남아 다음 줄까지
+            # 잘못 먹어, attribute 하나가 더 사라진다.
+            if not s or s[0] == "*" or set(s) <= set("-=") :
+                continue
+            parts = s.split()
+
+            # (C) 이전 줄이 attr 만 남기고 끝난 경우 -> 이 줄의 첫 토큰이 값
+            if awaiting_value_for is not None:
+                try:
+                    caps[awaiting_value_for] = float(parts[0])
+                except (ValueError, IndexError):
+                    pass
+                awaiting_value_for = None
+                continue
+
+            # 들여쓰기가 없는 줄은 <design> <object> ... 형태 -> 객체 이름 갱신
+            if not raw[:1].isspace() and len(parts) >= 2:
+                last_obj = parts[1]
+
+            if attr not in parts:
+                continue
+            i = parts.index(attr)
+            if i + 1 < len(parts):
+                # (A)/(B): 같은 줄에 값이 있다
+                try:
+                    caps[last_obj] = float(parts[i + 1])
+                except (ValueError, TypeError):
+                    pass
+            else:
+                # (C): 값이 다음 줄
+                awaiting_value_for = last_obj
+    return caps
 
 
 def main():
@@ -58,8 +126,11 @@ def main():
     spef = Path(args.spef)
     out = Path(args.out)
     lib = Path(args.lib) if args.lib else None
+    pin_attr = Path(args.pin_attr) if args.pin_attr else None
 
-    missing = [str(p) for p in ([report, spef] + ([lib] if lib else [])) if not p.exists()]
+    missing = [str(p) for p in ([report, spef]
+                                + ([lib] if lib else [])
+                                + ([pin_attr] if pin_attr else [])) if not p.exists()]
     if missing:
         raise SystemExit("ERROR: 입력 파일 없음:\n  " + "\n  ".join(missing))
 
@@ -72,9 +143,21 @@ def main():
             "  report_timing 을 -nets -input_pins -capacitance -transition_time "
             "-path_type full_clock_expanded -nosplit 로 다시 뽑아야 한다.")
 
+    pin_caps = {}
+    if pin_attr:
+        pin_caps = load_pin_caps(str(pin_attr))
+        if not pin_caps:
+            raise SystemExit(
+                "ERROR: {0} 에서 pin_capacitance_max 를 하나도 못 읽었다.\n"
+                "  pt_shell 에서 아래로 다시 뽑아야 한다:\n"
+                "    redirect -file pin_attr.txt "
+                "{{ report_attribute -application [get_pins *] }}".format(pin_attr))
+        print("[INFO] PT 핀 capacitance {0}개 로드 ({1})".format(len(pin_caps), pin_attr))
+
     out.parent.mkdir(parents=True, exist_ok=True)
     res.annotate_timing_report(str(report), str(spef), str(out),
-                               lib_path=str(lib) if lib else None)
+                               lib_path=str(lib) if lib else None,
+                               pin_cap_map=pin_caps)
 
     # 자가 점검: 붙은 컬럼 수와 N/A 를 세어 성공 여부를 눈으로 확인할 수 있게 한다.
     n_net = n_ann = n_na = 0
@@ -94,8 +177,11 @@ def main():
     if n_net and n_na / n_net > 0.1:
         print("[WARN] N/A 비율이 10%% 를 넘는다 -- SPEF/netlist 이름 규약 불일치 가능성. "
               "README 의 'N/A 매칭 실패' 항목 참조.")
-    if not lib:
-        print("[NOTE] --lib 를 주지 않아 Cpin 은 비어 있다.")
+    if not lib and not pin_attr:
+        print("[NOTE] --lib 도 --pin-attr 도 주지 않아 Cpin 이 비어 있다.")
+        print("       Liberty 가 없으면 pt_shell 에서 핀 attribute 를 덤프해 --pin-attr 로 준다:")
+        print("         redirect -file pin_attr.txt "
+              "{ report_attribute -application [get_pins *] }")
 
 
 if __name__ == "__main__":

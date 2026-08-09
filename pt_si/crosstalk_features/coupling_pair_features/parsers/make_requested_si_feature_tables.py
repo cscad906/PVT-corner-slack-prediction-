@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import csv
 import math
@@ -8,6 +7,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
 
 csv.field_size_limit(sys.maxsize)
 
@@ -40,12 +40,12 @@ PT_COUPLING_CAP_RE = re.compile(
 )
 
 
-def read_tsv(path: Path) -> list[dict[str, str]]:
+def read_tsv(path: Path) -> List[Dict[str, str]]:
     with path.open(newline="") as f:
         return list(csv.DictReader(f, delimiter="\t"))
 
 
-def write_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, object]]) -> None:
+def write_tsv(path: Path, fieldnames: List[str], rows: List[Dict[str, object]]) -> None:
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t", lineterminator="\n", extrasaction="ignore")
         writer.writeheader()
@@ -53,8 +53,8 @@ def write_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, object]]) 
             writer.writerow({k: "" if row.get(k) is None else row.get(k) for k in fieldnames})
 
 
-def parse_active_items(text: str) -> list[tuple[str, str, str]]:
-    out: list[tuple[str, str, str]] = []
+def parse_active_items(text: str) -> List[Tuple[str, str, str]]:
+    out: List[Tuple[str, str, str]] = []
     for item in text.split(";"):
         item = item.strip()
         if not item:
@@ -65,13 +65,13 @@ def parse_active_items(text: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def load_active_index() -> dict[str, dict[str, str]]:
+def load_active_index() -> Dict[str, Dict[str, str]]:
     rows = read_tsv(ACTIVE_INDEX)
     return {row["vtag"]: row for row in rows}
 
 
-def load_active_pairs(active_index: dict[str, dict[str, str]]) -> list[dict[str, str]]:
-    merged: dict[tuple[str, str, str], dict[str, str]] = {}
+def load_active_pairs(active_index: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
+    merged: Dict[Tuple[str, str, str], Dict[str, str]] = {}
     for vtag, idx_row in active_index.items():
         active_file = Path(idx_row["file"])
         for row in read_tsv(active_file):
@@ -96,21 +96,21 @@ def load_active_pairs(active_index: dict[str, dict[str, str]]) -> list[dict[str,
     return list(merged.values())
 
 
-def load_driver_windows() -> dict[tuple[str, str], dict[str, str]]:
+def load_driver_windows() -> Dict[Tuple[str, str], Dict[str, str]]:
     rows = read_tsv(DRIVER_WINDOW_FILE)
     return {(row["vtag"], row["net"]): row for row in rows}
 
 
-def load_victim_load_windows() -> dict[tuple[str, str], dict[str, str]]:
+def load_victim_load_windows() -> Dict[Tuple[str, str], Dict[str, str]]:
     rows = read_tsv(VICTIM_LOAD_WINDOW_FILE)
     return {(row["vtag"], row["victim_net"]): row for row in rows}
 
 
-def victim_load_pin(vwin: dict[str, str]) -> str:
+def victim_load_pin(vwin: Dict[str, str]) -> str:
     return vwin.get("victim_load_pin", vwin.get("path_to_pin", ""))
 
 
-def load_raw_attrs() -> dict[tuple[str, str], dict[str, str]]:
+def load_raw_attrs() -> Dict[Tuple[str, str], Dict[str, str]]:
     rows = read_tsv(RAW_ATTR_FILE)
     return {(row["vtag"], row["victim_net"]): row for row in rows}
 
@@ -123,26 +123,26 @@ def endpoint_key(token: str) -> str:
     return token
 
 
-def maybe_float(text: str) -> float | None:
+def maybe_float(text: str) -> Optional[float]:
     try:
         return float(text)
     except ValueError:
         return None
 
 
-def build_requested_pair_set(active_pairs: list[dict[str, str]]) -> set[tuple[str, str]]:
-    out: set[tuple[str, str]] = set()
+def build_requested_pair_set(active_pairs: List[Dict[str, str]]) -> Set[Tuple[str, str]]:
+    out: Set[Tuple[str, str]] = set()
     for row in active_pairs:
         pair = tuple(sorted((row["victim_net"], row["aggressor_net"])))
         out.add(pair)
     return out
 
 
-def parse_spef_for_pairs(target_pairs: set[tuple[str, str]], target_nets: set[str]) -> tuple[dict[tuple[str, str], float], dict[str, str]]:
-    name_by_id: dict[str, str] = {}
-    total_cap_by_net: dict[str, str] = {}
-    pair_caps: dict[tuple[str, str], float] = defaultdict(float)
-    seen_segments: set[tuple[str, str, str]] = set()
+def parse_spef_for_pairs(target_pairs: Set[Tuple[str, str]], target_nets: Set[str]) -> Tuple[Dict[Tuple[str, str], float], Dict[str, str]]:
+    name_by_id: Dict[str, str] = {}
+    total_cap_by_net: Dict[str, str] = {}
+    pair_caps: Dict[Tuple[str, str], float] = defaultdict(float)
+    seen_segments: Set[Tuple[str, str, str]] = set()
 
     in_name_map = False
     in_cap = False
@@ -211,7 +211,7 @@ def parse_spef_for_pairs(target_pairs: set[tuple[str, str]], target_nets: set[st
     return dict(pair_caps), total_cap_by_net
 
 
-def finite_float(text: str) -> float | None:
+def finite_float(text: str) -> Optional[float]:
     try:
         value = float(text)
     except (TypeError, ValueError):
@@ -228,7 +228,7 @@ def overlap_width(vmin: str, vmax: str, amin: str, amax: str) -> str:
     return f"{max(0.0, hi - lo):.6f}"
 
 
-def pt_coupling_cap_ff(raw_caps: str, victim_net: str, aggressor_net: str) -> float | None:
+def pt_coupling_cap_ff(raw_caps: str, victim_net: str, aggressor_net: str) -> Optional[float]:
     cap_pf = 0.0
     found = False
     wanted = {victim_net, aggressor_net}
@@ -258,8 +258,8 @@ def main() -> None:
     target_nets = {row["victim_net"] for row in active_pairs} | {row["aggressor_net"] for row in active_pairs}
     pair_caps, total_cap_by_net = parse_spef_for_pairs(target_pairs, target_nets)
 
-    pair_rows: list[dict[str, object]] = []
-    summary: dict[str, dict[str, object]] = {}
+    pair_rows: List[Dict[str, object]] = []
+    summary: Dict[str, Dict[str, object]] = {}
     for row in active_pairs:
         key = (row["vtag"], row["victim_net"])
         attrs = raw_attrs.get(key, {})
@@ -316,7 +316,7 @@ def main() -> None:
         if not attrs.get("annotated_delay_delta_max") and not attrs.get("annotated_delay_delta_min"):
             s["missing_delta_rows"] += 1
 
-    victim_rows: list[dict[str, object]] = []
+    victim_rows: List[Dict[str, object]] = []
     for (vtag, victim), attrs in sorted(raw_attrs.items(), key=lambda item: (item[1].get("voltage", ""), item[0][1])):
         vwin = victim_load_windows.get((vtag, victim), {})
         victim_rows.append(
@@ -339,7 +339,7 @@ def main() -> None:
             }
         )
 
-    summary_rows: list[dict[str, object]] = []
+    summary_rows: List[Dict[str, object]] = []
     for key in sorted(summary, key=lambda k: float(summary[k]["voltage"])):
         row = summary[key]
         summary_rows.append(

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import argparse
 import os
@@ -10,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, List, Optional
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -85,7 +85,7 @@ class Job:
     vtag: str
 
     @property
-    def temp_info(self) -> dict[str, str]:
+    def temp_info(self) -> Dict[str, str]:
         return TEMPS[self.temp]
 
     @property
@@ -144,13 +144,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def selected_jobs(args: argparse.Namespace) -> list[Job]:
+def selected_jobs(args: argparse.Namespace) -> List[Job]:
     analyses = ("setup", "hold") if args.analysis == "all" else (args.analysis,)
     corners = tuple(args.corner) if args.corner else CORNERS
     temps = tuple(args.temp) if args.temp else tuple(TEMPS)
     vtags = set(args.vtag) if args.vtag else None
 
-    jobs: list[Job] = []
+    jobs: List[Job] = []
     for final_analysis in analyses:
         annotation_analysis = ANALYSES[final_analysis]
         for corner in corners:
@@ -165,12 +165,12 @@ def selected_jobs(args: argparse.Namespace) -> list[Job]:
     return jobs
 
 
-def validate_job(job: Job) -> list[Path]:
+def validate_job(job: Job) -> List[Path]:
     required = [VERILOG, SDC, job.annotated_report, job.db, job.spef]
     return [path for path in required if not path.exists()]
 
 
-def run_logged(cmd: list[str], log: Path, env: dict[str, str] | None = None) -> None:
+def run_logged(cmd: List[str], log: Path, env: Optional[Dict[str, str]] = None) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     merged_env = os.environ.copy()
     if env:
@@ -181,7 +181,7 @@ def run_logged(cmd: list[str], log: Path, env: dict[str, str] | None = None) -> 
         raise RuntimeError(f"command failed rc={proc.returncode}: {' '.join(cmd)} log={log}")
 
 
-def run_pt(tcl: Path, log: Path, env: dict[str, str]) -> None:
+def run_pt(tcl: Path, log: Path, env: Dict[str, str]) -> None:
     parts = []
     if PT_SOURCE:
         parts.append(f"source {PT_SOURCE}")
@@ -200,7 +200,7 @@ def remove_if_exists(path: Path) -> None:
         pass
 
 
-def write_summary(path: Path, lines: list[str]) -> None:
+def write_summary(path: Path, lines: List[str]) -> None:
     with path.open("w") as fh:
         for line in lines:
             fh.write(line.rstrip("\n") + "\n")

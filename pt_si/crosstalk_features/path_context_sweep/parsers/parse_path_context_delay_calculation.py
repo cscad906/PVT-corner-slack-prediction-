@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import csv
 import os
@@ -7,6 +6,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 
 ATTR_CHARS = set("ACEILNPSUX")
@@ -24,8 +24,8 @@ def looks_like_attr(text: str) -> bool:
     return bool(text) and all(ch in ATTR_CHARS for ch in text)
 
 
-def parse_report_lines(lines: list[str]) -> dict[str, object]:
-    result: dict[str, object] = {
+def parse_report_lines(lines: List[str]) -> Dict[str, object]:
+    result: Dict[str, object] = {
         "num_aggressors": "",
         "num_effective": "",
         "rise_delta_delay": "",
@@ -137,10 +137,10 @@ def parse_report_lines(lines: list[str]) -> dict[str, object]:
     return result
 
 
-def read_raw_blocks(path: Path) -> dict[str, dict[str, object]]:
-    blocks: dict[str, dict[str, object]] = {}
-    meta: dict[str, str] | None = None
-    lines: list[str] = []
+def read_raw_blocks(path: Path) -> Dict[str, Dict[str, object]]:
+    blocks: Dict[str, Dict[str, object]] = {}
+    meta: Optional[Dict[str, str]] = None
+    lines: List[str] = []
 
     with path.open(errors="replace") as fh:
         for raw in fh:
@@ -169,7 +169,7 @@ def read_raw_blocks(path: Path) -> dict[str, dict[str, object]]:
     return blocks
 
 
-def load_contexts(path: Path) -> dict[tuple[str, str, str], str]:
+def load_contexts(path: Path) -> Dict[Tuple[str, str, str], str]:
     with path.open(newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         return {
@@ -178,7 +178,7 @@ def load_contexts(path: Path) -> dict[tuple[str, str, str], str]:
         }
 
 
-def write_summary(blocks: dict[str, dict[str, object]], out: Path) -> None:
+def write_summary(blocks: Dict[str, Dict[str, object]], out: Path) -> None:
     fieldnames = [
         "context_id",
         "victim_net",
@@ -234,13 +234,13 @@ def expected_delta_mode(analysis_type: str) -> str:
     return ""
 
 
-def validate_delta_modes(blocks: dict[str, dict[str, object]], analysis_type: str) -> None:
+def validate_delta_modes(blocks: Dict[str, Dict[str, object]], analysis_type: str) -> None:
     expected = expected_delta_mode(analysis_type)
     if not expected:
         return
 
-    mismatches: list[str] = []
-    missing: list[str] = []
+    mismatches: List[str] = []
+    missing: List[str] = []
     for context_id, block in blocks.items():
         meta = block.get("meta", {})
         if meta.get("status") != "OK":
