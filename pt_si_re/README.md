@@ -1,223 +1,383 @@
 # PVT 데이터 추출 — 현장 실행 안내
 
-PrimeTime 에서 타이밍 리포트와 속성을 뽑고, 파이썬으로 **Dist / Res / Cpin** 과
-**crosstalk feature** 를 붙이는 절차입니다.
+PrimeTime 으로 **여러 코너에서 같은 경로를 재측정**하고, 거기에 Dist/Res/Cpin 과
+crosstalk 을 붙여 학습 입력 두 개를 만든다.
 
-읽는 순서대로 따라 하면 됩니다. 각 명령은 끝날 때 **`[ 정상 ]` 또는 `[ 실패 ]`** 와
-다음에 칠 명령을 화면에 알려줍니다.
+```
+코너마다
+    <코너>_fixed_annotated.txt                     Dist / Res / Cpin
+    <코너>.path_context_si_compact.by_path.rpt     crosstalk 14열
+```
+
+이 문서 하나로 끝까지 갈 수 있게 써 두었다. 막히면 `코드표.md`, 원격으로 물어볼
+때는 `원격문의.md`.
 
 ---
 
-## 0. 준비 — 파이썬 찾기
-
-시스템 `python` 이 2.7 이어도 상관없습니다. **PrimeTime 설치본 안에 Python 3.6 과
-networkx 가 들어 있어서**, PT 가 도는 곳이면 따로 설치할 필요가 없습니다.
+## 준비 — 파이썬 정하기 (한 번)
 
 ```bash
 python3 0_check.py
 ```
 
-화면에 나온 경로를 그대로 복사해 둡니다.
+화면에 `setenv PY ...` 한 줄이 나온다. 그대로 복사해서 실행한다. 이후 모든
+파이썬 명령에서 `python3` 대신 `$PY` 를 쓴다.
 
-```bash
-export PY=/.../pt/etc/Python/bin/python3      # bash
-setenv PY /.../pt/etc/Python/bin/python3      # csh
+```csh
+setenv PY /usr/synopsys/pt/V-2023.12-SP4/etc/Python/bin/python3
 ```
 
-이후 모든 명령에서 `python3` 대신 `$PY` 를 씁니다.
+- 시스템 `python3` 이 3.6 이상이면 그냥 `python3` 을 써도 된다.
+- 2.7 밖에 없으면 `0_check.py` 가 PT 설치본 안의 3.6 을 찾아 준다.
+- 그것도 없을 때만 `py27/` 을 쓴다 (`py27/README.md` 에 제약 명시).
+
+**터미널을 두 개 띄운다.** 하나는 pt_shell, 하나는 셸. 파이썬 터미널은
+라이선스를 안 먹으므로 PT 는 켜 둔 채로 왔다 갔다 한다.
 
 ---
 
-## 폴더 구조
+## 전체 흐름
 
 ```
-round1/                 1회차 — 어떤 경로를 볼지 고르는 단계
-  corners/  <코너>.rpt    ← 합집합(union) 대상
-  hidden/   <코너>.rpt    ← 합집합에서 제외. 2회차에서 측정만 한다
-
-round2/                 2회차 — 고정된 같은 경로를 코너마다 다시 측정
-  <코너>/  timing.rpt        재측정 결과
-           pin_attr.txt      핀 속성
-           net_attr.txt      넷 속성
-           design.spef       그 코너의 SPEF (또는 --spef 로 경로 지정)
-           annotated.txt     결과 ①
-           crosstalk.tsv     결과 ②
+[PT]  1회차   코너마다 report_timing        -> round1/corners/<코너>.rpt
+[셸]  union   합쳐서 측정할 경로 결정        -> fixed_paths.tcl
+[PT]  2회차   그 경로를 코너마다 재측정      -> round2/<코너>/
+[셸]  묶음 1  Dist/Res/Cpin + crosstalk 준비
+[PT]  PT 1차  crosstalk 계산
+[셸]  묶음 2  쌍 정리
+[PT]  PT 2차  도착시각 / slew
+[셸]  묶음 3  14열 리포트 완성
 ```
 
-**1회차 파일은 2회차에서 건드리지 않습니다.** 서로 다른 폴더에 남겨 두세요.
-
-`hidden/` 은 "경로를 고를 때는 빼고, 나중에 측정만 할" 코너입니다.
-그 코너에서만 위반인 경로가 목록에 끼지 않게 하면서, 측정값은 확보하는 용도입니다.
-필요 없으면 `hidden/` 없이 전부 `corners/` 에 넣으면 됩니다.
+**터미널 왕복은 코너가 몇 개든 8번**이다. 각 단계가 끝날 때 다음에 칠 명령이
+화면에 그대로 찍히니 외울 필요는 없다.
 
 ---
 
 ## 1회차 — 코너마다 경로 뽑기 (PT)
 
-담당자가 세팅해 둔 pt_shell 에서, **코너를 바꿔 로드할 때마다** 아래를 실행합니다.
+코너(db)를 바꿔 로드할 때마다 아래를 한 번씩. **파일 이름이 곧 코너 이름**이
+되므로 db 이름과 맞춰 짓는다.
 
 ```tcl
-report_timing -delay_type max -path_type full_clock_expanded \
-  -nets -input_pins -nosplit \
-  -nworst 3 -max_paths 3000 -slack_lesser_than 0.05 \
-  > round1/corners/tt0p65v25c_Cnom.rpt
+redirect -file round1/corners/TT_0p6V_25C.rpt {
+  report_timing -delay_type max -path_type full_clock_expanded \
+    -nets -input_pins -nosplit -significant_digits 6 \
+    -nworst 3 -max_paths 100000 -slack_lesser_than 0.05
+}
 ```
 
-- **파일 이름이 그대로 코너 이름**이 됩니다. 전압·온도·RC 를 알아볼 수 있게 지으세요.
-- `-slack_lesser_than` 은 **모든 코너에 같은 값**을 주세요. 코너마다 다르면 합집합이 한쪽으로 치우칩니다.
-- `0.05` 는 SDC 시간 단위 기준입니다(보통 ns → 50ps). 위반(slack<0)뿐 아니라 **위반 위험**까지 담는 값입니다.
-- hidden 코너는 같은 명령을 쓰되 `round1/hidden/` 에 저장합니다.
+| 옵션 | 왜 |
+|---|---|
+| `-nets -input_pins -nosplit -path_type full_clock_expanded` | **넷 다 필수.** 하나라도 빠지면 뒤에서 전부 막힌다 |
+| `-slack_lesser_than` | 위험 마진. **넉넉하게** 준다 (좁히는 건 union 에서 공짜) |
+| `-nworst` | 끝점 하나당 몇 개. 경로가 너무 많으면 여기서 줄인다 |
+| `-max_paths` | **줄이는 용도로 쓰지 말 것.** 상한에 닿으면 코너마다 다른 지점에서 잘려 union 이 편향된다. 안 잘릴 만큼 크게 |
 
-> 1회차 리포트는 경로를 고르는 데만 쓰므로 `-nets -input_pins` 만 있으면 됩니다.
+**hidden 코너는 이 폴더에 넣지 않는다.** 경로 선정에서 빠질 뿐, 2회차에서는
+측정한다. 따로 제외 옵션은 필요 없다.
 
 ---
 
-## 1. 합집합 만들기 (파이썬)
+## union — 측정할 경로 결정 (셸)
 
 ```bash
 $PY 1_union.py --dir round1/corners
 ```
 
-만들어지는 것:
+폴더 안의 `.rpt` 를 전부 읽어 합집합한다. 코너가 3개든 20개든 코드는 안 건드린다.
 
-| 파일 | 내용 |
-|---|---|
-| `union_paths.tsv` | 합집합 경로 목록. 코너별 slack 이 열로 들어 있어 엑셀로 볼 수 있습니다 |
-| `fixed_paths.tcl` | 2회차에 pt_shell 에서 `source` 할 파일 |
+```
+  코너                     리포트   사용   제외
+  TT_0p6V_25C                300    300      0
+  TT_0p7V_25C                200    200      0
+  TT_0p8V_25C                120    120      0
 
-**왜 합집합인가**: 코너마다 위반하는 경로가 다릅니다. 실제로 돌려 보면
-`한 코너에서만 나온 경로` 가 상당수입니다. 어느 한 코너 기준으로 고르면 그만큼을
-놓치므로, 전 코너의 목록을 합친 뒤 그 전체를 모든 코너에서 똑같이 재측정합니다.
+  [ 몇 개로 줄일까 ]  --slack-max <문턱값> 으로 다시 돌리면 그만큼이 된다
+        경로 수          문턱값      2회차 시간/코너
+         1000         -0.4210              1분
+         3000         -0.2815              5분
+        80000          0.0498            133분  (전체)
 
-**같은 경로인지 판단하는 기준**은 `(시작 FF, 끝 FF, 지나는 핀 전부)` 입니다.
-같은 FF 쌍 사이에도 지나는 길이 다른 별개 경로가 있어서, 핀 목록까지 같아야
-같은 경로로 칩니다. rise/fall 방향도 함께 고정하므로, 코너가 바뀌어도 같은 번호가
-같은 물리 경로를 가리킵니다.
-
----
-
-## 2. 2회차 — 고정 경로 재측정 (PT)
-
-`fixed_paths.tcl` 상단의 `OUT` 을 그 코너용 경로로 바꾸고, **코너마다** 실행합니다.
-hidden 코너도 여기서는 포함합니다.
-
-```tcl
-set OUT "round2/tt0p65v25c_Cnom/timing.rpt"
-source round1/corners/fixed_paths.tcl
+  합집합 경로 : 80000개
+  한 코너에서만 나온 경로 : 12043   <- 합집합이 필요한 이유
 ```
 
-이어서 속성을 뽑습니다. `pt/dump_attr.tcl` 상단 두 줄을 그 코너에 맞게 바꾼 뒤:
-
-```tcl
-source pt/dump_attr.tcl
-```
-
-```tcl
-set RPT     "round2/tt0p65v25c_Cnom/timing.rpt"
-set OUTDIR  "round2/tt0p65v25c_Cnom"
-```
-
-`pin_attr.txt`, `net_attr.txt` 가 만들어집니다.
-
-> **전체 핀을 덤프하면 파일이 9GB 를 넘습니다.** 그래서 `dump_attr.tcl` 은 리포트에
-> 등장하는 것만 골라 뽑습니다(실제 데이터에서 핀 9,184개 / 210MB).
-
-SPEF 를 그 폴더에 `design.spef` 로 두거나, 파이썬 실행 시 `--spef` 로 경로를 줍니다.
-
----
-
-## 3. 파이썬으로 값 붙이기 (코너마다)
+**너무 많으면 표를 보고 문턱값을 골라 다시 돌린다.** PT 를 다시 돌릴 필요 없다.
 
 ```bash
-$PY 0_check.py    --dir round2/tt0p65v25c_Cnom     # 입력 점검
-$PY 2a_cpin.py    --dir round2/tt0p65v25c_Cnom     # Cpin      (SPEF 안 읽음, 몇 초)
-$PY 2b_distres.py --dir round2/tt0p65v25c_Cnom     # Dist/Res  (SPEF 읽음, 수십 초~수 분)
-$PY 2c_merge.py   --dir round2/tt0p65v25c_Cnom     # 합치기    (즉시)
-$PY 3_crosstalk.py --dir round2/tt0p65v25c_Cnom    # crosstalk 표
+$PY 1_union.py --dir round1/corners --slack-max -0.2815
+#   합집합 경로 : 3000개
 ```
 
-세 단계로 나눈 이유:
+나오는 파일 셋:
 
-- `2a` 는 **SPEF 를 읽지 않아** 몇 초면 끝납니다. 핀 이름이 안 맞는 문제를 기다림 없이 확인할 수 있습니다.
-- SPEF 를 잘못 물려도 `2a` 결과(Cpin)는 살아남습니다.
-- 중간 파일 `cpin.tsv`, `distres.tsv` 는 `line_no / 이름 / 값` 형태라 **엑셀로 열어 빈칸만 걸러 보면** 무엇이 문제인지 바로 보입니다.
+| 파일 | 용도 |
+|---|---|
+| `union_summary.txt` | **vi 로 읽는 용도.** 경로별로 어느 코너에서 몇 ns 였는지 |
+| `union_paths.tsv` | 같은 내용 TSV |
+| `fixed_paths.tcl` | **2회차에서 PT 가 읽을 파일** |
 
-한 번에 하고 싶으면 `2_annotate.py` 를 쓰면 됩니다(결과는 위 세 개와 동일).
+자세한 설명은 `UNION_설명.md`.
+
+---
+
+## 2회차 — 코너마다 재측정 (PT)
+
+`example/02_round2_all.tcl` 위쪽의 **코너 목록만** 자기 것으로 바꾼다.
+`00_setup.tcl` 은 필요 없다 — 이 파일이 코너마다 알아서 로드한다.
+
+```tcl
+### 코너 목록 -- 적는 곳은 여기뿐 ###
+set CORNERS {}
+lappend CORNERS [list TT_0p6V_25C  "$L/TT_0p6V_25C_op_cond_all.db"  "$S/core_25.spef"]
+lappend CORNERS [list TT_0p7V_25C  "$L/TT_0p7V_25C_op_cond_all.db"  "$S/core_25.spef"]
+lappend CORNERS [list TT_0p6V_125C "$L/TT_0p6V_125C_op_cond_all.db" "$S/core_125.spef"]
+
+### 디자인 -- 코너와 무관 ###
+set CI_TOP     "MyCore"
+set CI_VERILOG "$S/core_icc2.v"
+set CI_SDC     "$S/core.sdc"
+
+### 어디서 읽고 어디에 쓸지 ###
+set FIXED  "/data/results/round1/corners/fixed_paths.tcl"
+set OUTTOP "/data/results/round2"
+```
+
+| 칸 | 뜻 |
+|---|---|
+| 코너이름 | 폴더 이름이자 산출물 파일 이름. **db 이름과 맞추는 게 안전** |
+| db | **이것이 코너를 결정한다** (전압/온도/공정) |
+| spef | 배선 RC. **온도만** 맞추면 된다 (전압/공정과 무관) |
+
+```
+pt_shell> source example/02_round2_all.tcl
+```
+
+코너당 30초(로드) + 30초(측정). 코너 폴더마다 네 개가 생긴다.
+
+```
+<코너>.rpt          합집합 경로를 이 코너에서 측정한 것
+pin_attr.txt        Cpin, arrival, slew
+net_attr.txt        crosstalk delta, aggressor, coupling cap
+corner_info.tcl     ★ 무슨 db/spef 로 만들었는지 기록
+```
+
+### `corner_info.tcl` 이 왜 중요한가
+
+crosstalk 단계는 **나중에 따로 돈다.** 그때 이 폴더가 어느 db 로 만들어졌는지
+알아야 같은 db 로 다시 로드할 수 있다. 없으면 처음 로드된 db 하나로 모든 코너를
+계산해 버린다 — **값은 나오고 화면엔 `OK` 로 뜬다.** 그래서 없으면 아예
+건너뛰도록 해 두었다.
+
+### 한 코너만 다시 볼 때
+
+`example/02_round2.tcl` 은 코너 하나짜리다. 위쪽 세 줄(`CORNER` / `CI_DB` /
+`CI_SPEF`)만 바꿔 쓴다.
+
+---
+
+## 값 붙이기 — 묶음 1/2/3 (셸 ↔ PT)
+
+파이썬이 PT 를 부를 수 없어서 세 토막으로 나뉜다. `--phase` 가 그 번호다.
+
+```bash
+# 셸
+$PY 4_all_corners.py --root /data/results/round2 --spef /data/spef/core_25.spef --phase 1
+```
+```
+pt_shell> source /data/results/round2/run_pt1_xtalk_calc.tcl
+```
+```bash
+$PY 4_all_corners.py --root /data/results/round2 --phase 2
+```
+```
+pt_shell> source /data/results/round2/run_pt2_xtalk_windows.tcl
+```
+```bash
+$PY 4_all_corners.py --root /data/results/round2 --phase 3
+```
+
+`run_pt*.tcl` 두 개는 **`4_all_corners.py` 가 절대경로로 만들어 준다.** 고칠
+것이 없고, 화면에 경로가 찍히니 복사만 하면 된다.
+
+### 묶음마다 이 표가 나온다
+
+```
+  코너                      2a cpin       2b distres    2c merge      5a contexts
+  TT_0p6V_25C             OK-CPIN       OK-DISTRES    OK-MERGE      OK-XCTX
+  TT_0p7V_25C             E-NOFILE      -             -             -
+
+  실패한 코너 1개: TT_0p7V_25C
+      $PY 2a_cpin.py --dir /data/results/round2/TT_0p7V_25C
+```
+
+**어느 코너 어느 단계**인지 한눈에 보이고, 다시 볼 명령까지 찍어 준다.
+한 코너가 실패해도 나머지는 계속 돈다.
+
+| 옵션 | 언제 |
+|---|---|
+| `--spef <파일>` | 코너들이 같은 SPEF 를 쓸 때. 폴더에 `design.spef` 가 있으면 그쪽 우선 |
+| `--skip-done` | **중간에 끊겼을 때.** 이미 만든 단계는 건너뛴다 |
+| `--quiet` | 화면을 숨기고 결과 표만 |
+| `--only 2a,2b` | 그 묶음 안에서 일부만 |
+| `--mode hold` | hold 데이터를 만들 때 (5b 에 전달) |
+
+### 손으로 하나씩 하고 싶으면
+
+`4_all_corners.py` 는 아래를 대신 쳐줄 뿐이다. 결과 파일은 바이트 단위로 같다.
+
+```bash
+setenv D /data/results/round2/TT_0p6V_25C
+$PY 2a_cpin.py     --dir $D                    # -> cpin.tsv       1초
+$PY 2b_distres.py  --dir $D --spef <SPEF>      # -> distres.tsv    SPEF 크기에 따라
+$PY 2c_merge.py    --dir $D                    # -> <코너>_fixed_annotated.txt ★
+$PY 5a_contexts.py --dir $D                    # -> 물어볼 넷 목록
+```
+```
+pt_shell> cd $D
+pt_shell> source <패키지>/pt/xtalk_calc.tcl
+```
+```bash
+$PY 5b_pairs.py --dir $D                       # -> 쌍
+```
+```
+pt_shell> cd $D
+pt_shell> source <패키지>/pt/xtalk_windows.tcl
+```
+```bash
+$PY 5c_report.py --dir $D                      # -> <코너>.path_...by_path.rpt ★
+```
 
 ---
 
 ## 결과 파일
 
-| 파일 | 내용 |
+### `<코너>_fixed_annotated.txt`
+
+기존 리포트 오른쪽에 세 열이 붙은 것. **리포트 형식은 그대로**다.
+
+```
+  Point                        Fanout   Cap    Trans   Incr    Path      Dist       Res     Cpin
+  ZCTSNET_6904 (net)               12 0.023539                        5.7240  488.8332   0.0005
+```
+
+| 열 | 무엇 | 단위 | 어디서 |
+|---|---|---|---|
+| `Dist` | 드라이버 핀 → 수신 핀 배선 거리 | µm | SPEF 좌표 |
+| `Res` | 그 구간 저항 | Ω | SPEF `*RES` |
+| `Cpin` | 수신 핀 입력 용량 | pF | PT `pin_capacitance_max` |
+
+### `<코너>.path_context_si_compact.by_path.rpt`
+
+**victim–aggressor 쌍 하나가 한 줄**, 14열. 기존 운영 산출물과 같은 형식이다.
+
+```
+path_segment  victim_net  aggressor_net  crosstalk_delta  aggressor_bump
+number_of_aggressors  victim_load_pin  victim_load_min/max_arrival
+aggressor_driver_pin  aggressor_driver_min/max_arrival
+aggressor_driver_slew_max  coupling_cap_ff
+```
+
+---
+
+## 코너 구성이 바뀔 때
+
+| 바뀌는 것 | 고칠 곳 |
 |---|---|
-| `annotated.txt` | 리포트의 `(net)` 줄 끝에 **Dist / Res / Cpin** 3열이 붙은 것 |
-| `crosstalk.tsv` | 한 줄 = 경로의 한 구간. 28열(경로 정보 + 넷 속성 + 핀 속성) |
+| 경로 선정 코너 | 1회차 `.rpt` 를 `round1/corners/` 에 넣느냐 마느냐 |
+| 측정 코너 (hidden 포함) | `02_round2_all.tcl` 의 `CORNERS` 목록 |
+| 디자인 | 같은 파일의 `CI_TOP` / `CI_VERILOG` / `CI_SDC` |
+| 경로 개수 | `1_union.py --slack-max` |
 
-### 값의 출처와 단위
-
-| 값 | 단위 | 어디서 오나 |
-|---|---|---|
-| **Dist** | µm | SPEF 좌표. 드라이버–리시버 맨해튼 거리 |
-| **Res** | Ω | SPEF `*RES`. 두 핀 사이 배선 저항 |
-| **Cpin** | pF | PT 핀 속성 `pin_capacitance_max` |
-| Trans / Incr / Path / Cap | ns / pF | PT 리포트 |
-
-- PT 자체의 저항 단위는 kΩ 이지만, **Res 는 SPEF 에서 직접 계산하므로 Ω** 입니다.
-  나중에 PT 의 `net_resistance_max` 와 섞으면 1000배 차이가 나니 주의하세요.
-- 숫자는 소수점 6자리로 반올림하고 뒤쪽 0 은 뗍니다. `report_timing` 의
-  `-significant_digits 6` 과 자릿수를 맞춘 것입니다.
+**파이썬 코드는 손댈 일이 없다.**
 
 ---
 
 ## 막혔을 때
 
-### N/A 가 나온다
+화면 마지막 블록의 **`하실 일`** 을 먼저 한다. 안 되면 `에러 코드`만 전달한다.
 
-```bash
-$PY 9_diagnose.py --dir round2/<코너>
+```
+==================================================================
+  문제 발생
+    무엇이   : SPEF 에서 저항(Res)을 하나도 못 구했습니다
+    하실 일  : SPEF 가 이 리포트와 같은 디자인/코너인지 확인해 주세요.
+
+    에러 코드: E-RES0
+==================================================================
 ```
 
-원인을 네 가지로 분류해 줍니다.
+`W-` 는 파일은 나왔지만 데이터가 불완전한 경우다. **몇 퍼센트인지**가 중요하다.
 
-| 원인 | 뜻 | 할 일 |
-|---|---|---|
-| **A** | 넷이 SPEF 에 아예 없음 | SPEF 가 그 코너/디자인 것이 맞는지 확인. 클럭 넷은 원래 빠질 수 있습니다 |
-| **B** | 이름 표기만 다름 | **그 화면을 그대로 가져오세요.** 이름 규칙을 넓히면 해결됩니다 |
-| **C** | 찾았는데 저항 경로가 없음 | SPEF 를 R 포함으로 다시 뽑아야 합니다 |
-| **D** | Cpin 만 빔 | `pin_attr.txt` 를 다시 뽑아야 합니다 |
+```bash
+$PY 9_diagnose.py --dir <코너폴더>          # Dist/Res 가 빌 때 원인 분류
+$PY 8_snapshot.py --dir <코너폴더>          # 상황 100줄 요약
+$PY 8_snapshot.py --dir <코너폴더> --mask   # 설계 이름을 가리고
+```
 
-### 자주 나오는 실패
-
-| 화면 | 원인 | 해결 |
-|---|---|---|
-| `(net) 줄이 없습니다` | `report_timing` 에 `-nets` 가 빠짐 | 옵션 추가 후 다시 |
-| `pin_capacitance_max 를 못 읽었습니다` | `report_attribute` 에 `-application` 이 빠짐 | 옵션 추가 후 다시 |
-| `crosstalk 값이 전부 0` | SI 가 꺼졌거나 SPEF 에 coupling 없음 | `si_enable_analysis true` + coupling 유지 SPEF |
-| `경로가 하나도 없습니다` | `-slack_lesser_than` 이 너무 빡셈 | 값을 키워서 다시 |
-| `Res 를 하나도 못 구했습니다` | SPEF 가 그 리포트와 짝이 아님 | 코너에 맞는 SPEF 인지 확인 |
+전체 코드 목록은 `코드표.md` (44개), 화면 읽는 법은 `원격문의.md`.
 
 ### PT 쪽에서 미리 확인할 것
 
-```tcl
-get_app_var si_enable_analysis                  ;# crosstalk 을 뽑으려면 true
-get_app_var timing_save_pin_arrival_and_slack   ;# 핀 arrival 을 뽑으려면 true
+```
+pt_shell> printvar si_enable_analysis      # false 면 crosstalk 이 전부 0
 ```
 
-둘 중 하나라도 `false` 면 값을 켜고 `update_timing -full` 을 한 뒤 다시 뽑아야 합니다.
+SPEF 에 coupling 이 있어야 한다 (`read_parasitics -keep_capacitive_coupling`,
+StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하다.
 
 ---
 
 ## 파일 목록
 
+### 셸에서 돌리는 것
+
 ```
-0_check.py       환경·입력 점검
-1_union.py       코너별 리포트 -> 합집합 + fixed_paths.tcl
-2a_cpin.py       Cpin        (SPEF 불필요)
-2b_distres.py    Dist / Res  (SPEF 사용)
-2c_merge.py      위 둘을 리포트에 붙이기
-2_annotate.py    2a+2b+2c 를 한 번에 (결과 동일)
-3_crosstalk.py   crosstalk / timing window 표
-9_diagnose.py    N/A 원인 분류
-pt/dump_attr.tcl PT 에서 핀·넷 속성 덤프
-_engine/         내부 계산 코드 (열어볼 필요 없음)
+0_check.py         환경/입력 점검. 처음에 한 번
+1_union.py         코너 합치기 -> fixed_paths.tcl
+2a_cpin.py         Cpin        (SPEF 안 읽음, 1초)
+2b_distres.py      Dist/Res    (SPEF 읽음)
+2c_merge.py        -> <코너>_fixed_annotated.txt   ★
+2_annotate.py      2a+2b+2c 를 한 번에 (나눠 놓은 게 디버깅엔 낫다)
+5a_contexts.py     crosstalk 1단계 - 물어볼 넷 목록
+5b_pairs.py        crosstalk 3단계 - 쌍 정리
+5c_report.py       crosstalk 5단계 -> 14열 리포트   ★
+4_all_corners.py   위를 코너 전부에 (--phase 1/2/3)
+8_snapshot.py      막혔을 때 상황 요약
+9_diagnose.py      Dist/Res N/A 원인 분류
 ```
+
+### pt_shell 에서 source 하는 것
+
+```
+example/00_setup.tcl        예제용 디자인 로드 (현장에선 안 씀)
+example/01_round1.tcl       1회차 예제/템플릿
+example/02_round2_all.tcl   2회차 — 코너 전부   ★ 목록을 여기서 고침
+example/02_round2.tcl       2회차 — 코너 하나
+pt/xtalk_calc.tcl           crosstalk PT 1차 — 코너 하나 (디버깅)
+pt/xtalk_windows.tcl        crosstalk PT 2차 — 코너 하나 (디버깅)
+```
+
+`pt/` 의 나머지(`load_corner.tcl`, `round2_one.tcl`, `dump_attr.tcl`,
+`all_xtalk_*.tcl`)는 **직접 열 일이 없다.** 위 파일들이나 `4_all_corners.py`
+가 알아서 부른다.
+
+### 문서
+
+```
+README.md          이 파일. 현장 실행 안내
+UNION_설명.md      union 이 하는 일과 결과 읽는 법
+코드표.md          에러 코드 44개 전체
+원격문의.md        화면 읽는 법, 원격으로 물어볼 때
+example/README.md  BoomCoreV3 로 전 과정을 돌려 본 기록
+py27/README.md     파이썬 3 이 전혀 없을 때만 (제약 있음)
+```
+
+---
+
+## 한 번 돌려 보고 가려면
+
+`example/README.md` 에 실제 디자인(BoomCoreV3, 3nm)으로 처음부터 끝까지 돌린
+기록이 있다. 숫자까지 그대로 적어 두었으니, 현장에서 나온 숫자와 비교해 보면
+된다.
