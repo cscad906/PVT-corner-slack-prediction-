@@ -57,6 +57,20 @@ if {![get_app_var si_enable_analysis]} {
 }
 
 
+# --- 이 폴더가 어느 db 로 만들어졌는지 확인 --------------------------
+# 루프(all_*.tcl)로 왔으면 이미 그 db 로 로드된 상태다. 사람이 이 파일만
+# 직접 돌릴 때는 지금 올라온 디자인이 이 폴더의 코너가 맞는지 알 수 없으므로,
+# 기록을 읽어 화면에 찍어 준다. 다르면 멈추고 다시 로드할 것.
+if {[file exists "corner_info.tcl"]} {
+    source "corner_info.tcl"
+    puts "  이 폴더의 코너 : $CI_CORNER"
+    puts "  기대하는 db    : $CI_DB"
+    puts "  (지금 PT 에 올라온 db 가 이것이 아니면 멈추고 다시 로드하세요)"
+} else {
+    puts "  주의: corner_info.tcl 이 없어 어느 db 로 만든 폴더인지 알 수 없습니다."
+    puts "        지금 올라온 db 로 계산합니다. 코너가 맞는지 직접 확인하세요."
+}
+
 # --- 탭 등을 없애 한 줄로 만든다 (내용은 안 봐도 된다) -----------------
 proc xt_clean {s} {
     return [string map {"\t" " " "\n" " " "\r" " "} $s]

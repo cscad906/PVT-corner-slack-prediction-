@@ -35,13 +35,8 @@ pt_shell
 pt_shell> source example/00_setup.tcl
 ```
 
-`00_setup.tcl` 이 하는 일 — 넷리스트/라이브러리/SDC/SPEF 를 읽고
-`si_enable_analysis true` 를 켠 뒤 `update_timing` 까지 합니다.
-
-> **현장에서는 이 파일을 안 씁니다.** PT 세팅은 다른 분이 해 두므로,
-> 이미 올라와 있는 pt_shell 에 2번부터 입력하면 됩니다.
-> 다만 `si_enable_analysis` 가 켜져 있는지는 확인하세요 (`printvar si_enable_analysis`).
-> 꺼져 있으면 crosstalk 값이 전부 0 으로 나옵니다.
+`00_setup.tcl` 은 **1회차(2번)에만 필요합니다.** 2회차부터는 `02_round2*.tcl`
+이 코너마다 알아서 db 를 읽으므로 안 씁니다.
 
 ---
 
@@ -52,12 +47,6 @@ pt_shell> source example/01_round1.tcl
 ```
 
 `example/round1/corners/` 아래에 코너별 `.rpt` 가 생깁니다.
-
-```
-tt0p6v25c_Cnom.rpt   300 경로
-tt0p7v25c_Cnom.rpt   200 경로
-tt0p8v25c_Cnom.rpt   120 경로
-```
 
 **현장에서는 코너(db)를 바꿔 로드할 때마다 아래 한 줄만 반복**하면 됩니다.
 파일 이름이 곧 코너 이름이 되므로 알아볼 수 있게 지으세요.
@@ -71,10 +60,8 @@ redirect -file round1/corners/<코너이름>.rpt {
 ```
 
 - `-nets -input_pins -nosplit -path_type full_clock_expanded` 이 **네 개는 빼면 안 됩니다.**
-  하나라도 빠지면 뒤에서 `E-NOPATH` / `E-NONET` / `W-DROP` 이 뜹니다.
 - `-slack_lesser_than` : 위반 + 위반 위험을 어디까지 볼지. 기본 0.05(=50ps).
-- hidden 코너(경로 선정에서 빼고 싶은 코너)는 **이 폴더에 넣지 마세요.**
-  2회차에서는 측정만 하면 됩니다.
+- hidden 코너는 **이 폴더에 넣지 마세요.** 2회차에서는 측정만 하면 됩니다.
 
 ---
 
@@ -109,48 +96,69 @@ $PY 1_union.py --dir example/round1/corners
 
 ## 4. 2회차 — 합집합 경로를 코너마다 다시 측정
 
-```
-pt_shell> source example/02_round2.tcl
-```
-
-`example/round2/tt0p7v25c_Cnom/` 에 세 파일이 생깁니다.
-
-```
-tt0p7v25c_Cnom.rpt   294 경로   (1회차에서 뽑은 그 경로들, 순서·번호 동일)
-pin_attr.txt         Cpin, arrival, slew
-net_attr.txt         crosstalk delta, aggressor, coupling cap
-```
-
-**리포트 이름은 코너 이름이 됩니다.** 폴더만 봐도 어느 코너인지 알 수 있고,
-다른 곳으로 옮겨도 섞이지 않습니다. 뒤 파이썬 스크립트들은 폴더 안의 `.rpt`
-를 알아서 찾으므로 이름을 신경 쓸 필요가 없습니다 (`.rpt` 가 여러 개면
-`E-RPTMANY` 로 멈추고 골라 달라고 합니다).
-
-끝에 이렇게 나오면 정상입니다.
-
-```
-  요청한 경로   : 294
-  측정된 경로   : 294
-```
-
-두 숫자가 다르면 그만큼 실패한 것입니다. **0 이면 대개 디자인을 안 읽은
-것**이고 (`E-NODESIGN` / `E-NOMEASURED`), 1번을 먼저 하셔야 합니다.
-
-**코너를 바꿔 가며 반복할 때는 `02_round2.tcl` 의 `CORNER` 한 줄만** 바꾸면
-됩니다. 스크립트가 그 이름으로 폴더를 만들고 `cd` 한 뒤 두 tcl 을 그대로
-source 합니다 (두 tcl 모두 "지금 폴더" 기준이라 고칠 것이 없습니다).
+**코너 목록을 적어두고 한 번에 돕니다.** `02_round2_all.tcl` 위쪽의 목록만
+자기 것으로 바꾸면 됩니다.
 
 ```tcl
-set CORNER "tt0p6v25c_Cnom"     ;# <- 이 줄만. 폴더 이름이자 리포트 이름이 된다
+set CORNERS {}
+lappend CORNERS [list TT_0p6V_25C "$L/TT_0p6V_25C_op_cond_all.db" "$S/boomcorev3_25.spef"]
+lappend CORNERS [list TT_0p7V_25C "$L/TT_0p7V_25C_op_cond_all.db" "$S/boomcorev3_25.spef"]
+lappend CORNERS [list TT_0p8V_25C "$L/TT_0p8V_25C_op_cond_all.db" "$S/boomcorev3_25.spef"]
 ```
 
-> **이름과 db 를 반드시 맞추세요.** 코드는 둘이 맞는지 알 방법이 없습니다.
-> db 는 0.7V 인데 이름을 `tt0p6v25c_Cnom` 으로 두면, 그 이름으로 0.7V 데이터가
-> 저장되고 **나중에 알아낼 방법이 없습니다.** 실행하면 맨 위에
-> `이번 코너 : <이름>  ->  <이름>.rpt` 가 찍히니 그때 한 번 더 확인하세요.
+| 칸 | 뜻 |
+|---|---|
+| 코너이름 | 폴더 이름이자 산출물 파일 이름. **db 이름과 맞추는 게 안전** |
+| db | **이게 코너를 결정합니다** (전압/온도/공정) |
+| spef | 배선 RC. **온도만** 맞추면 됩니다 (전압/공정과 무관) |
 
-여기서는 **hidden 코너도 포함해 전부** 돌립니다. 경로 선정에서만 뺐을 뿐,
-측정은 해야 하니까요.
+```
+pt_shell> source example/02_round2_all.tcl
+```
+
+코너마다 db 를 새로 읽고(30초) 측정합니다(30초). 결과:
+
+```
+[1/3] TT_0p6V_25C
+        db   : TT_0p6V_25C_op_cond_all.db
+        spef : boomcorev3_25.spef
+  측정된 경로   : 294
+  pin_attr.txt  <- 핀 1347 개
+        기록   : .../TT_0p6V_25C/corner_info.tcl
+
+코너별 결과 (2회차)
+  TT_0p6V_25C                    OK
+  TT_0p7V_25C                    OK
+  TT_0p8V_25C                    OK
+```
+
+코너 폴더마다 네 개가 생깁니다.
+
+```
+<코너>.rpt          294 경로 (1회차에서 뽑은 그 경로들, 번호 동일)
+pin_attr.txt        Cpin, arrival, slew
+net_attr.txt        crosstalk delta, aggressor, coupling cap
+corner_info.tcl     ★ 무슨 db/spef 로 만들었는지 기록
+```
+
+### `corner_info.tcl` 이 왜 중요한가
+
+crosstalk 단계(PT 1차/2차)는 **나중에 따로 돕니다.** 그때 이 폴더가 어느 db 로
+만들어졌는지 알아야 같은 db 로 다시 로드할 수 있습니다.
+
+이게 없으면 처음 로드된 db 하나로 모든 코너를 계산해 버립니다. **값은 나오고
+화면엔 `OK` 로 뜹니다** — 제일 나쁜 실패라, 없으면 아예 건너뛰도록 해 두었습니다.
+
+```
+[2/3] TT_0p7V_25C
+  corner_info.tcl 이 없습니다. 이 코너는 건너뜁니다.
+  (어느 db 로 만든 폴더인지 알 수 없어, 틀린 값을 만들지 않으려고 멈춥니다)
+```
+
+### 코너 하나만 다시 볼 때
+
+`02_round2.tcl` 은 코너 하나짜리입니다. 위쪽 세 줄(`CORNER` / `CI_DB` /
+`CI_SPEF`)만 바꿔서 쓰세요.
 
 ---
 

@@ -50,7 +50,8 @@ if {![file isdirectory $XTALK_ROOT]} {
 # 5b 를 돌린 코너만 대상으로 한다
 set XT_LIST {}
 foreach d [lsort [glob -nocomplain -directory $XTALK_ROOT -type d *]] {
-    if {[file exists "$d/xtalk/victim_load_pins.txt"]} { lappend XT_LIST $d }
+    if {![file exists "$d/xtalk/victim_load_pins.txt"]} continue
+    lappend XT_LIST $d
 }
 
 if {[llength $XT_LIST] == 0} {
@@ -76,6 +77,22 @@ foreach d $XT_LIST {
     puts "--------------------------------------------------------------------"
     puts "\[$XT_I/[llength $XT_LIST]\] [file tail $d]"
     puts "--------------------------------------------------------------------"
+    # 이 코너를 만들 때 쓴 db/spef 로 다시 로드한다.
+    # 이게 없으면 처음 로드된 db 하나로 모든 코너를 계산해 버린다
+    # (값은 나오고 화면엔 OK 로 뜬다 -- 제일 나쁜 실패).
+    if {![file exists "$d/corner_info.tcl"]} {
+        puts "  corner_info.tcl 이 없습니다. 이 코너는 건너뜁니다."
+        puts "  (어느 db 로 만든 폴더인지 알 수 없어, 틀린 값을 만들지 않으려고 멈춥니다)"
+        puts "  02_round2.tcl / 02_round2_all.tcl 로 2회차를 다시 돌리면 생깁니다."
+        lappend XT_DONE [list [file tail $d] "정보없음"]
+        puts ""
+        continue
+    }
+    source "$d/corner_info.tcl"
+    puts "        db   : [file tail $CI_DB]"
+    puts "        spef : [file tail $CI_SPEF]"
+    source "$XT_PKG/load_corner.tcl"
+
     cd $d
     source "$XT_PKG/xtalk_windows.tcl"
     cd $XT_BASE

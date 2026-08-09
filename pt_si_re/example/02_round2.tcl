@@ -1,39 +1,43 @@
 # =====================================================================
-# 02_round2.tcl  --  2회차: 합집합 경로를 다시 측정 + 속성 뽑기
+# 02_round2.tcl  --  2회차, 코너 하나만
 #
 #   pt_shell> source example/02_round2.tcl
 #
-# 코너 db 를 로드한 뒤에 돌린다. 하는 일 두 가지:
-#   1) 1_union.py 가 만든 fixed_paths.tcl 의 경로들을 다시 측정 -> <코너>.rpt
-#   2) 그 리포트에 나오는 핀·넷의 속성      -> pin_attr.txt, net_attr.txt
+# 코너를 여러 개 할 거면 02_round2_all.tcl 을 쓰세요. 이건 한 코너가
+# 실패했을 때 그것만 다시 볼 때 씁니다.
 #
-# 코너를 바꿔 로드할 때마다 이 파일을 다시 source 한다.
+# 00_setup.tcl 은 필요 없습니다 -- 이 파일이 db/spef 를 직접 읽습니다.
 # =====================================================================
 
 
-### 코너마다 바꾸는 줄 -- 이거 하나 ####################################
-set CORNER "tt0p6v25c_Cnom"
+### 이 코너 -- 세 줄 ###################################################
+set L "/home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_benchmarks/deliverables/3nm/lib_db_pdk/db"
+set S "/home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_benchmarks/deliverables/3nm/processors/BoomCoreV3/deliver/spef"
+
+set CORNER  "TT_0p6V_25C"                        ;# 폴더 이름이자 산출물 이름
+set CI_DB   "$L/TT_0p6V_25C_op_cond_all.db"      ;# **이게 코너를 결정한다**
+set CI_SPEF "$S/boomcorev3_25.spef"              ;# 배선 RC. 온도만 맞추면 된다
 #######################################################################
-# 폴더 이름이자 리포트 파일 이름이 된다.
-# **바로 위에서 로드한 db 와 같은 코너인지** 꼭 확인할 것. 이름과 db 가
-# 어긋나도 툴은 모르고 그냥 저장한다(나중에 알아낼 방법이 없다).
 
 
-### 처음 한 번만 정하는 줄 -- 2개 ######################################
+### 디자인 -- 코너와 무관 ##############################################
+set CI_TOP     "BoomCore"
+set CI_VERILOG "$S/boomcorev3_icc2.v"
+set CI_SDC     "$S/boomcorev3.sdc"
+#######################################################################
+
+
+### 어디서 읽고 어디에 쓸지 ############################################
 set FIXED  "example/round1/corners/fixed_paths.tcl"   ;# 1_union.py 가 만든 파일
-set OUTTOP "example/round2"                           ;# 코너별 폴더가 생길 곳
+set OUTTOP "example/round2"                           ;# 코너 폴더가 생길 곳
 #######################################################################
-# 현장에서는 이 두 줄만 자기 경로로 바꾸면 그대로 쓸 수 있다. 예:
-#   set FIXED  "/data/results/mycore_union/fixed_paths.tcl"
-#   set OUTTOP "/data/results/round2"
-# 상대경로면 pt_shell 의 현재 폴더(pwd) 기준이다.
 
 
 # ---------------------------------------------------------------------
 # 아래는 손댈 것이 없다
 # ---------------------------------------------------------------------
 set BASE [pwd]
-set DUMP "$BASE/pt/dump_attr.tcl"
+set PKG  [file dirname [file dirname [file normalize [info script]]]]
 
 if {[file pathtype $FIXED]  eq "relative"} { set FIXED  "$BASE/$FIXED" }
 if {[file pathtype $OUTTOP] eq "relative"} { set OUTTOP "$BASE/$OUTTOP" }
@@ -45,28 +49,31 @@ if {![file exists $FIXED]} {
     puts "               찾아본 곳: $FIXED"
     puts "    하실 일  : 셸에서 1_union.py 를 먼저 돌리세요."
     puts "                 \$PY 1_union.py --dir <1회차 리포트 폴더>"
-    puts "               경로가 다르면 위 FIXED 줄을 고치세요."
     puts ""
     puts "    에러 코드: E-NOFIXEDTCL"
     puts "=================================================================="
     return
 }
+foreach f [list $CI_DB $CI_SPEF $CI_VERILOG $CI_SDC] {
+    if {![file exists $f]} {
+        puts "=================================================================="
+        puts "  문제 발생"
+        puts "    무엇이   : 파일이 없습니다: $f"
+        puts "    하실 일  : 위 경로 줄을 확인하세요."
+        puts ""
+        puts "    에러 코드: E-NOINPUTFILE"
+        puts "=================================================================="
+        return
+    }
+}
 
-file mkdir $OUTTOP/$CORNER
-cd         $OUTTOP/$CORNER
+puts "--------------------------------------------------------------------"
+puts "$CORNER"
+puts "--------------------------------------------------------------------"
 
-# 두 tcl 모두 "지금 폴더" 기준이라 cd 만 해 두면 고칠 것이 없다.
-source $FIXED   ;# -> <코너이름>.rpt
-source $DUMP    ;# -> pin_attr.txt, net_attr.txt
-
-cd $BASE
+source "$PKG/pt/round2_one.tcl"
 
 puts ""
 puts "2회차 끝: $OUTTOP/$CORNER/"
-puts "다음은 파이썬 터미널에서:"
-puts "    setenv D $OUTTOP/$CORNER"
-puts "    ln -s <SPEF 파일> \$D/design.spef"
-puts "    \$PY 2a_cpin.py     --dir \$D"
-puts "    \$PY 2b_distres.py  --dir \$D"
-puts "    \$PY 2c_merge.py    --dir \$D"
-puts "    \$PY 3_crosstalk.py --dir \$D --corner $CORNER"
+puts "다음은 셸에서:"
+puts "    \$PY 4_all_corners.py --root $OUTTOP --spef <SPEF> --phase 1"
