@@ -6,3 +6,9 @@ round1/
 round2/
 *.spef
 *.log
+
+# PrimeTime / Synopsys 가 죽거나 실행될 때 흘리는 부산물. 결과물이 아니다.
+crte_*.txt
+Synopsys_stack_trace_*.txt
+.rce/
+*_command.log
