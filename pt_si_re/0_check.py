@@ -2,16 +2,43 @@
 # -*- coding: utf-8 -*-
 """0단계 - 실행 환경과 입력 파일을 점검한다.
 
-    python3 0_check.py                     환경만 점검
+    python  0_check.py                     환경만 점검
     python3 0_check.py --dir ./work        그 폴더의 입력 파일까지 점검
+
+**이 파일만은 파이썬 2.7 로도 돌아간다.** 현장에 파이썬 3 이 있는지 없는지
+모르는 상태에서 제일 먼저 돌려야 하는 파일이라, 어느 파이썬으로 쳐도 돌아가야
+한다. 그래서 여기서는 3 전용 문법을 쓰지 않는다(다른 파일은 3.6+ 필요).
+    python 0_check.py    <- 2.7 이어도 이건 돈다. 쓸 수 있는 파이썬을 찾아 준다
 
 무엇이 준비됐고 무엇이 없는지, 없으면 무엇을 해야 하는지를 한국어로 출력한다.
 여기서 전부 OK 가 나온 뒤에 2_annotate.py 로 넘어간다.
 """
+from __future__ import print_function
+
 import argparse
+import io
 import os
 import subprocess
 import sys
+
+
+def ropen(path):
+    """깨진 글자가 있어도 읽히게 연다. 파이썬 2/3 둘 다 동작한다.
+
+    파이썬 2 의 내장 open 은 errors= 를 안 받는다.
+    """
+    return io.open(path, "r", encoding="utf-8", errors="ignore")
+
+
+def as_text(b):
+    """subprocess 출력 -> 글자. 2 에서는 이미 str 이라 그대로 둔다.
+
+    2 에서 굳이 decode 하면 unicode 가 되어, 한글이 섞인 포맷 문자열과
+    합칠 때 UnicodeDecodeError 로 죽는다.
+    """
+    if isinstance(b, str):
+        return b
+    return b.decode("utf-8", "replace")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
@@ -123,8 +150,8 @@ def probe(py):
             "\ntry:\n import networkx; n='Y'\nexcept Exception: n='N'\n"
             "print(v+' '+n)")
     try:
-        out = subprocess.check_output([py, "-c", code],
-                                      stderr=subprocess.STDOUT).decode().strip()
+        out = as_text(subprocess.check_output(
+            [py, "-c", code], stderr=subprocess.STDOUT)).strip()
         ver, nx = out.split()
         return ver, (nx == "Y")
     except Exception:
@@ -135,9 +162,14 @@ def check_env():
     hr("1. 파이썬 점검")
     cands = find_pythons()
     if not cands:
-        print("  python3 을 하나도 못 찾았습니다.")
-        print("  -> PrimeTime 환경을 먼저 source 한 뒤 다시 실행해 보세요.")
-        print("     (PrimeTime 설치본 안에 python3 이 들어 있습니다)")
+        print("  파이썬 3 을 하나도 못 찾았습니다.")
+        print("")
+        print("  1) PrimeTime 환경을 먼저 source 한 뒤 다시 돌려 보세요.")
+        print("     (PrimeTime / ICC2 설치본 안에 python3 이 들어 있습니다)")
+        print("  2) 그래도 없으면 파이썬 2.7 판을 씁니다:")
+        print("       python %s --dir <폴더>"
+              % os.path.join(HERE, "py27", "0_check.py"))
+        print("     제약이 있으니 py27/README.md 를 먼저 읽으세요.")
         return None
 
     print("  %-56s %-8s %s" % ("경로", "버전", "networkx"))
@@ -157,7 +189,13 @@ def check_env():
 
     print("")
     if best_score <= 0:
-        print("  쓸 수 있는 python 이 없습니다. PrimeTime 환경을 source 한 뒤 다시 실행하세요.")
+        print("  찾은 파이썬이 전부 3.6 미만이라 쓸 수 없습니다.")
+        print("")
+        print("  1) PrimeTime 환경을 source 한 뒤 다시 돌려 보세요.")
+        print("  2) 그래도 없으면 파이썬 2.7 판을 씁니다:")
+        print("       python %s --dir <폴더>"
+              % os.path.join(HERE, "py27", "0_check.py"))
+        print("     제약이 있으니 py27/README.md 를 먼저 읽으세요.")
         return None
 
     print("  >>> 이 파이썬을 쓰세요:")
@@ -221,7 +259,7 @@ def check_content(work, spef_override):
     rpt = rpt or os.path.join(work, "timing.rpt")
     if os.path.isfile(rpt):
         n_net = n_start = 0
-        with open(rpt, "r", errors="ignore") as f:
+        with ropen(rpt) as f:
             for line in f:
                 if "(net)" in line:
                     n_net += 1
@@ -240,7 +278,7 @@ def check_content(work, spef_override):
         if not os.path.isfile(p):
             continue
         n = 0
-        with open(p, "r", errors="ignore") as f:
+        with ropen(p) as f:
             for line in f:
                 if attr in line:
                     n += 1
@@ -254,7 +292,7 @@ def check_content(work, spef_override):
     if os.path.isfile(spef):
         units, coupled = [], False
         in_cap = False
-        with open(spef, "r", errors="ignore") as f:
+        with ropen(spef) as f:
             for line in f:
                 if line.startswith("*") and "_UNIT" in line:
                     units.append(line.strip())
