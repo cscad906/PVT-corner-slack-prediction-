@@ -23,6 +23,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from find_rpt import find_rpt
 
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
@@ -200,7 +202,7 @@ def main():
 
     n = hit = 0
     miss_examples = []
-    with open(out, "w") as fh:
+    with wopen(out) as fh:
         fh.write("line_no\tnet\trecv_pin\tcpin\n")
         for idx, net, pin in iter_net_receiver(rpt):
             v = caps.get(pin, "")

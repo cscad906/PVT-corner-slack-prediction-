@@ -27,6 +27,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8
+force_utf8()
 from find_rpt import find_rpt
 from names import annotated_path, find_annotated
 

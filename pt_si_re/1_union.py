@@ -30,6 +30,11 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
+
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 END_RE = re.compile(r"^\s*Endpoint:\s+(\S+)")
 GROUP_RE = re.compile(r"^\s*Path Group:\s+(.+?)\s*$")
@@ -376,7 +381,7 @@ def main():
         r["idx"] = i
 
     # ---- union_paths.tsv -------------------------------------------
-    with open(out_tsv, "w") as fh:
+    with wopen(out_tsv) as fh:
         head = ["path_idx", "startpoint", "endpoint", "n_through",
                 "n_corners_seen", "n_corners_violating", "worst_slack", "worst_corner"]
         head += ["slack__" + c for c in corner_names]
@@ -399,7 +404,7 @@ def main():
         return name[:keep] + ".." + name[-(w - 2 - keep):]
 
     n_viol_any = sum(1 for r in rows if r["n_viol"] > 0)
-    with open(out_txt, "w") as fh:
+    with wopen(out_txt) as fh:
         fh.write("합집합 경로 요약  (위험한 것부터 정렬)\n")
         fh.write("=" * 118 + "\n")
         fh.write("코너 %d개 : %s\n" % (len(corner_names), ", ".join(corner_names)))
@@ -427,7 +432,7 @@ def main():
     # 경로마다 report_timing 을 -from/-through/-to 로 걸어 같은 경로를 다시 뽑는다.
     # through 는 데이터 구간 핀 전부를 쓴다(일부만 쓰면 비슷한 다른 경로가 잡힌다).
     edge = not args.no_edge
-    with open(out_tcl, "w") as fh:
+    with wopen(out_tcl) as fh:
         fh.write("# 2회차용. pt_shell 에서:  source fixed_paths.tcl\n")
         fh.write("# 코너를 바꿔 로드할 때마다 한 번씩 실행한다.\n")
         fh.write("#   결과는 <코너이름>.rpt 로 저장된다. 코너마다 CORNER 만 바꾼다.\n\n")

@@ -42,6 +42,8 @@ def as_text(b):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8
+force_utf8()
 from find_rpt import find_rpt
 
 # 이 폴더에 있어야 하는 입력 파일들. (이름, 설명, 만드는 방법)

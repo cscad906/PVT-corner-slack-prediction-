@@ -20,6 +20,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8
+force_utf8()
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 XTALK = os.path.join(HERE, "_engine", "xtalk")
 
 CODE_INFO = {

@@ -26,6 +26,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from find_rpt import find_rpt
 
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
@@ -172,7 +174,7 @@ def main():
     results = res.annotate_timing_report(rpt, spef, None)
 
     n = hit_d = hit_r = 0
-    with open(out, "w") as fh:
+    with wopen(out) as fh:
         fh.write("line_no\tnet\tdist\tres\n")
         for idx in sorted(nets):
             r_path, dist, _cpin = results.get(idx, (None, None, None))

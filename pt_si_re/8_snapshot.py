@@ -23,6 +23,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
 from find_rpt import find_rpt
 from names import find_annotated
 
@@ -245,7 +247,7 @@ def main():
     outdir = os.path.dirname(os.path.abspath(args.out))
     if outdir and not os.path.isdir(outdir):
         os.makedirs(outdir)
-    _fh = open(args.out, "w")
+    _fh = wopen(args.out)
     _stdout = sys.stdout
 
     class _Tee(object):
