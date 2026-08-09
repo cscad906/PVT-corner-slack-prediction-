@@ -165,7 +165,7 @@ ln -s <SPEF 파일> $D/design.spef
 $PY 0_check.py     --dir $D      # 입력이 다 있는지 먼저 확인
 $PY 2a_cpin.py     --dir $D      # -> cpin.tsv      (약 1초)
 $PY 2b_distres.py  --dir $D      # -> distres.tsv   (SPEF 크기에 따라 10초~2분)
-$PY 2c_merge.py    --dir $D      # -> annotated.txt
+$PY 2c_merge.py    --dir $D      # -> <코너>_fixed_annotated.txt
 ```
 
 정상이면 이렇게 나옵니다.
@@ -177,7 +177,7 @@ $PY 2c_merge.py    --dir $D      # -> annotated.txt
   정상 종료           [ OK-MERGE ]
 ```
 
-`annotated.txt` 는 기존 리포트 오른쪽에 `Dist  Res  Cpin` 세 열이 붙은 것입니다.
+`<코너>_fixed_annotated.txt` 는 기존 리포트 오른쪽에 `Dist  Res  Cpin` 세 열이 붙은 것입니다.
 **리포트 형식은 그대로**라, 기존 파일들과 같은 방식으로 읽으면 됩니다.
 
 ```
@@ -282,10 +282,25 @@ source 하면 됩니다.
 
 ### 코너마다 나오는 학습 입력 두 개
 
+**이름은 기존 운영 산출물과 같은 규약**입니다. 코너 폴더 이름이 앞에 붙습니다.
+
 ```
-annotated.txt                                  Dist/Res/Cpin 이 붙은 리포트
+<코너>_fixed_annotated.txt                     Dist/Res/Cpin 이 붙은 리포트
 <코너>.path_context_si_compact.by_path.rpt     crosstalk 14열
 ```
+
+운영 쪽 실제 파일과 비교하면:
+
+```
+운영  saed14rvt_tt0p6v25c_ccs_full387_nldmrx_fixed_annotated.txt
+우리  tt0p6v25c_Cnom_fixed_annotated.txt
+
+운영  TT_0p605V_125C.path_context_si_compact.by_path.rpt
+우리  tt0p6v25c_Cnom.path_context_si_compact.by_path.rpt
+```
+
+앞부분(코너 이름)만 다릅니다. **운영 파일과 글자까지 똑같이 맞춰야 하면 코너
+폴더를 그 이름으로 지으면 됩니다** (`02_round2.tcl` 의 `CORNER` 줄).
 
 `path_idx` 가 코너 사이에 공통이라, 나중에 코너 이름 + `path_idx` 로 한 경로가
 특정됩니다.

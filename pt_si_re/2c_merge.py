@@ -7,7 +7,8 @@
 입력   timing.rpt    원본 리포트
        cpin.tsv      1a 결과
        distres.tsv   1b 결과
-출력   annotated.txt '(net)' 줄 끝에 Dist / Res / Cpin 3열이 붙은 리포트
+출력   <코너>_fixed_annotated.txt   '(net)' 줄 끝에 Dist / Res / Cpin 3열이 붙은 리포트
+       (기존 운영 산출물과 같은 이름 규약. 코너 이름은 폴더 이름을 쓴다)
 
 계산은 하지 않는다. 줄 번호로 값을 찾아 붙이기만 하므로 즉시 끝난다.
 둘 중 하나가 없어도 있는 것만 붙인다(없는 열은 N/A).
@@ -20,6 +21,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 from find_rpt import find_rpt
+from names import annotated_path, find_annotated
 
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 
@@ -146,6 +148,8 @@ def main():
     ap.add_argument("--rpt", default=None)
     ap.add_argument("--cpin", default=None)
     ap.add_argument("--distres", default=None)
+    ap.add_argument("--corner", default=None,
+                    help="결과 파일 이름에 쓸 코너 이름. 안 주면 폴더 이름")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -156,7 +160,7 @@ def main():
         code(_ec, "[ 실패 ] " + _err)
     cpin_f = args.cpin or os.path.join(d, "cpin.tsv")
     dr_f = args.distres or os.path.join(d, "distres.tsv")
-    out = args.out or os.path.join(d, "annotated.txt")
+    out = args.out or annotated_path(d, args.corner)
 
     print("=" * 68)
     print("2c - 합치기")

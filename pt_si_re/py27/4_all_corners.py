@@ -37,7 +37,7 @@ from find_rpt import find_rpt
 STEPS = [
     ("2a cpin",     "2a_cpin.py",     False, "cpin.tsv"),
     ("2b distres",  "2b_distres.py",  True,  "distres.tsv"),
-    ("2c merge",    "2c_merge.py",    False, "annotated.txt"),
+    ("2c merge",    "2c_merge.py",    False, "*_fixed_annotated.txt"),
     ("3 crosstalk", "3_crosstalk.py", False, "crosstalk.tsv"),
 ]
 

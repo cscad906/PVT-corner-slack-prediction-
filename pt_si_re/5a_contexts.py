@@ -4,7 +4,8 @@
 
     python3 5a_contexts.py --dir <코너폴더>
 
-넣는 것   annotated.txt   (2c_merge.py 가 만든 것)
+넣는 것   <코너>_fixed_annotated.txt (2c_merge.py) 또는 원본 <코너>.rpt
+          crosstalk 은 Dist/Res/Cpin 을 안 쓰므로 둘 중 아무거나 된다
 나오는 것 xtalk/path_victim_nets.tsv     경로별 victim 넷 + 구간(launch/data/capture)
           xtalk/unique_contexts.tsv      PT 에 물어볼 (넷, driver핀, load핀) 중복 제거
 
@@ -25,10 +26,12 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 XTALK = os.path.join(HERE, "_engine", "xtalk")
+from names import find_annotated
 
 CODE_INFO = {
-    "E-NOANNOT":  ("annotated.txt 이 없습니다",
-                   "2c_merge.py 를 먼저 돌려 주세요."),
+    "E-NOANNOT":  ("읽을 리포트가 없습니다",
+                   "2회차 리포트(.rpt)나 *_fixed_annotated.txt 가 그 폴더에 "
+                   "있어야 합니다."),
     "E-PARSE":    ("annotated.txt 을 읽다가 실패했습니다",
                    "2c_merge.py 가 정상(OK-MERGE)으로 끝났는지 확인해 주세요."),
     "E-NOCTX":    ("PT 에 물어볼 넷이 하나도 없습니다",
@@ -82,15 +85,22 @@ def main():
     args = ap.parse_args()
 
     d = args.dir
-    ann = args.annotated or os.path.join(d, "annotated.txt")
+    ann = args.annotated
+    if not ann:
+        # crosstalk 은 Dist/Res/Cpin 을 안 쓰므로 원본 .rpt 로도 된다.
+        # 그래도 있으면 annotated 를 쓴다(같은 리포트에 열만 더 붙은 것).
+        ann, _e = find_annotated(d)
+        if not ann:
+            from find_rpt import find_rpt
+            ann, _e2, _c2 = find_rpt(d)
+            if not ann:
+                code("E-NOANNOT", "[ 실패 ] 읽을 리포트가 없습니다: %s" % d)
     work = os.path.join(d, "xtalk")
 
     print("=" * 68)
     print("5a - crosstalk 쌍 리포트 1단계 (PT 에 물어볼 목록 만들기)")
     print("=" * 68)
 
-    if not os.path.isfile(ann):
-        code("E-NOANNOT", "[ 실패 ] annotated.txt 이 없습니다: %s" % ann)
     if not os.path.isdir(work):
         os.makedirs(work)
 

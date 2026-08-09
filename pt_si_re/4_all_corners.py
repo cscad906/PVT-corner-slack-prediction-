@@ -45,7 +45,7 @@ PHASES = {
     "1": [
         ("2a cpin",     "2a_cpin.py",     False, "cpin.tsv"),
         ("2b distres",  "2b_distres.py",  True,  "distres.tsv"),
-        ("2c merge",    "2c_merge.py",    False, "annotated.txt"),
+        ("2c merge",    "2c_merge.py",    False, "*_fixed_annotated.txt"),
         ("5a contexts", "5a_contexts.py", False, "xtalk/unique_contexts.tsv"),
     ],
     "2": [
@@ -89,7 +89,7 @@ NEXT_HINT = {
           "그다음 다시 셸에서:",
           "    $PY 4_all_corners.py --root %(root)s --phase 3"),
     "3": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
-          "    annotated.txt",
+          "    <코너>_fixed_annotated.txt",
           "    <코너>.path_context_si_compact.by_path.rpt",
           ""),
 }
@@ -106,6 +106,14 @@ def corner_dirs(root):
         if rpt:
             out.append((name, d))
     return out
+
+
+def step_done(work_dir, product):
+    """그 단계 결과가 이미 있나. product 가 *로 시작하면 확장자 매칭."""
+    if product.startswith("*"):
+        suffix = product[1:]
+        return any(n.endswith(suffix) for n in os.listdir(work_dir))
+    return os.path.isfile(os.path.join(work_dir, product))
 
 
 def show(line):
@@ -221,7 +229,7 @@ def main():
 
         codes = []
         for label, script, need_spef, product in steps:
-            if args.skip_done and os.path.isfile(os.path.join(d, product)):
+            if args.skip_done and step_done(d, product):
                 print("  %-12s 건너뜀 (%s 이미 있음)" % (label, product))
                 codes.append("SKIP")
                 continue
@@ -234,7 +242,7 @@ def main():
             call = ["--dir", d]
             if need_spef:
                 call += ["--spef", spef]
-            if script in ("5b_pairs.py", "5c_report.py"):
+            if script in ("2c_merge.py", "5b_pairs.py", "5c_report.py"):
                 call += ["--corner", name]
             if script == "5b_pairs.py":
                 call += ["--mode", args.mode]
