@@ -253,6 +253,7 @@ def main():
     print("")
 
     union = {}
+    best_slack = {}   # 경로 -> 여러 코너 중 가장 나쁜(작은) slack
     corner_names = []
     total_drop = {"no_chain": 0, "no_slack": 0}
     print("  %-34s %8s %8s %8s" % ("코너", "리포트", "사용", "제외"))
@@ -265,6 +266,9 @@ def main():
         total_drop["no_slack"] += stat["no_slack"]
         kept = 0
         for p in paths:
+            b = best_slack.get(p["sig"])
+            if b is None or p["slack"] < b:
+                best_slack[p["sig"]] = p["slack"]
             if args.slack_max is not None and p["slack"] > args.slack_max:
                 continue
             kept += 1
@@ -298,6 +302,35 @@ def main():
             print("      - 여러 개면 report_timing 에 -nosplit 이 빠져 줄이 접혔을")
             print("        가능성이 큽니다. 아래로 다시 뽑으세요:")
             print("          report_timing ... -nets -input_pins -nosplit ...")
+
+    # ---- 몇 개로 줄이려면 문턱값을 얼마로 줘야 하는지 -------------
+    # 현장에서 코너당 수만 경로가 나오면 2회차가 감당이 안 된다. 어디서
+    # 자를지 정하는 데 쓰라고, PT 를 다시 돌리지 않고 이 표만 보고 고르면 된다.
+    # 2회차는 경로마다 report_timing 한 번 -- 실측 약 0.1초/경로/코너.
+    if best_slack:
+        vals = sorted(best_slack.values())
+        print("")
+        print("  [ 몇 개로 줄일까 ]  --slack-max <문턱값> 으로 다시 돌리면 그만큼이 된다")
+        print("  %10s %12s %14s" % ("경로 수", "문턱값", "2회차 시간/코너"))
+        print("  " + "-" * 40)
+        shown = set()
+        for want in (200, 500, 1000, 2000, 3000, 5000, 10000, 20000, len(vals)):
+            if want > len(vals) or want in shown:
+                continue
+            shown.add(want)
+            th = vals[want - 1]
+            sec = want * 0.1
+            est = ("%d초" % int(sec)) if sec < 90 else ("%d분" % int(sec / 60))
+            tag = "  (전체)" if want == len(vals) else ""
+            print("  %10d %12.4f %14s%s" % (want, th, est, tag))
+        print("  " + "-" * 40)
+        if args.slack_max is not None:
+            print("  지금 --slack-max %.4f 로 %d개를 골랐습니다."
+                  % (args.slack_max, len(union)))
+        else:
+            print("  지금은 문턱값 없이 전부(%d개) 씁니다." % len(vals))
+        print("  ** 문턱값을 좁혀도 1회차를 다시 돌릴 필요는 없습니다. **")
+        print("     리포트는 그대로 두고 이 명령만 다시 돌리면 됩니다.")
 
     # 버려진 비율이 크면 형식 문제일 가능성이 높다. 눈에 띄게 알린다.
     total_seen = sum(1 for _ in [1]) and 0
