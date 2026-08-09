@@ -20,9 +20,12 @@ if {![file exists $FIXED]} {
     return
 }
 
-# 코너 이름. 폴더 이름이자 리포트 파일 이름이 된다. 코너마다 이 한 줄만 바꾼다.
-# 밖에서 미리 set CORNER 해 두었으면 그 값이 쓰인다(아래는 기본값).
-if {![info exists CORNER]} { set CORNER "tt0p7v25c_Cnom" }
+### 코너마다 이 한 줄만 바꾼다 #########################################
+set CORNER "tt0p6v25c_Cnom"
+#######################################################################
+# 폴더 이름이자 리포트 파일 이름이 된다.
+# **바로 위에서 로드한 db 와 같은 코너인지** 꼭 확인할 것. 이름과 db 가
+# 어긋나도 툴은 모르고 그냥 저장한다(나중에 알아낼 방법이 없다).
 
 file mkdir $BASE/example/round2/$CORNER
 cd        $BASE/example/round2/$CORNER

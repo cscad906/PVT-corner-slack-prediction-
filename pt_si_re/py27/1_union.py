@@ -391,6 +391,9 @@ def main():
         fh.write("#   결과는 <코너이름>.rpt 로 저장된다. 코너마다 CORNER 만 바꾼다.\n\n")
         fh.write("### 코너마다 이 한 줄만 바꾼다 #################################\n")
         fh.write('if {![info exists CORNER]} { set CORNER "corner1" }\n')
+        fh.write('puts "  이번 코너 : $CORNER   ->  $CORNER.rpt"\n')
+        fh.write('puts "  (위 이름이 방금 로드한 db 와 다르면 지금 멈추고'
+                 ' unset CORNER 후 다시)"\n')
         fh.write("###############################################################\n")
         fh.write("# 밖에서 미리 set CORNER 해 두었으면 그 값이 쓰인다(위 줄은 기본값).\n\n")
         fh.write('set OUT "$CORNER.rpt"\n')

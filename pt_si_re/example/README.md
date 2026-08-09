@@ -136,13 +136,18 @@ net_attr.txt         crosstalk delta, aggressor, coupling cap
 두 숫자가 다르면 그만큼 실패한 것입니다. **0 이면 대개 디자인을 안 읽은
 것**이고 (`E-NODESIGN` / `E-NOMEASURED`), 1번을 먼저 하셔야 합니다.
 
-**현장에서 코너를 바꿔 가며 반복할 때는 `02_round2.tcl` 의 `CORNER` 한 줄만**
-바꾸면 됩니다. 스크립트가 그 이름으로 폴더를 만들고 `cd` 한 뒤 두 tcl 을
-그대로 source 합니다 (두 tcl 모두 기본 출력이 "지금 폴더"라 고칠 것이 없습니다).
+**코너를 바꿔 가며 반복할 때는 `02_round2.tcl` 의 `CORNER` 한 줄만** 바꾸면
+됩니다. 스크립트가 그 이름으로 폴더를 만들고 `cd` 한 뒤 두 tcl 을 그대로
+source 합니다 (두 tcl 모두 "지금 폴더" 기준이라 고칠 것이 없습니다).
 
 ```tcl
 set CORNER "tt0p6v25c_Cnom"     ;# <- 이 줄만. 폴더 이름이자 리포트 이름이 된다
 ```
+
+> **이름과 db 를 반드시 맞추세요.** 코드는 둘이 맞는지 알 방법이 없습니다.
+> db 는 0.7V 인데 이름을 `tt0p6v25c_Cnom` 으로 두면, 그 이름으로 0.7V 데이터가
+> 저장되고 **나중에 알아낼 방법이 없습니다.** 실행하면 맨 위에
+> `이번 코너 : <이름>  ->  <이름>.rpt` 가 찍히니 그때 한 번 더 확인하세요.
 
 여기서는 **hidden 코너도 포함해 전부** 돌립니다. 경로 선정에서만 뺐을 뿐,
 측정은 해야 하니까요.
@@ -212,8 +217,9 @@ $PY 3_crosstalk.py --dir $D --corner tt0p7v25c_Cnom
 정리하면 코너 하나당 이것뿐입니다.
 
 ```
-pt_shell> (코너 db 로드)
-pt_shell> set CORNER "<코너이름>" ; source example/02_round2.tcl
+pt_shell> (코너 db 로드: read_db / link_design / update_timing)
+pt_shell> (02_round2.tcl 의 CORNER 한 줄을 그 코너 이름으로 고침)
+pt_shell> source example/02_round2.tcl
 
 셸> setenv D example/round2/<코너이름>
 셸> ln -s <SPEF> $D/design.spef
