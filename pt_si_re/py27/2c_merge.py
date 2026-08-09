@@ -12,7 +12,9 @@
 계산은 하지 않는다. 줄 번호로 값을 찾아 붙이기만 하므로 즉시 끝난다.
 둘 중 하나가 없어도 있는 것만 붙인다(없는 열은 N/A).
 """
+from __future__ import division, print_function
 import argparse
+import io
 import os
 import re
 import sys
@@ -43,7 +45,7 @@ def load_tsv(path, cols):
     out = {}
     if not path or not os.path.isfile(path):
         return out
-    with open(path, "r", errors="ignore") as f:
+    with io.open(path, "r", errors="ignore") as f:
         head = f.readline().rstrip("\n").split("\t")
         try:
             idx_i = head.index("line_no")
@@ -166,7 +168,7 @@ def main():
              "[ 실패 ] 붙일 값이 하나도 없습니다.",
              "         2a_cpin.py / 2b_distres.py 를 먼저 돌리세요.")
 
-    with open(rpt, "r", errors="ignore") as f:
+    with io.open(rpt, "r", errors="ignore") as f:
         lines = f.read().split("\n")
 
     header_len = 80

@@ -24,7 +24,9 @@
     같은 FF 쌍 사이에도 지나는 길이 다른 별개 경로가 있으므로, 핀 목록까지
     같아야 같은 경로로 친다.
 """
+from __future__ import division, print_function
 import argparse
+import io
 import glob
 import os
 import re
@@ -104,7 +106,7 @@ def parse_report(path):
     stat = {"startpoint": 0, "no_chain": 0, "no_slack": 0}
     cur = None
     buf = []
-    with open(path, "r", errors="ignore") as f:
+    with io.open(path, "r", errors="ignore") as f:
         for line in f:
             m = START_RE.match(line)
             if m:

@@ -1,10 +1,26 @@
+from __future__ import division, print_function
 import argparse
+import io
 from difflib import SequenceMatcher
 import fnmatch
 import glob
 import os
 import re
-from functools import lru_cache
+
+
+def lru_cache(maxsize=None):
+    """functools.lru_cache 는 python3.2+ 에만 있다. 여기서 쓰는 용도는
+    'Liberty 파일을 두 번 파싱하지 않는다' 뿐이라 단순 캐시로 대신한다."""
+    def deco(fn):
+        cache = {}
+
+        def wrapper(*args):
+            if args not in cache:
+                cache[args] = fn(*args)
+            return cache[args]
+        return wrapper
+    return deco
+
 
 import heapq
 
@@ -107,7 +123,7 @@ def load_lib_pin_caps(lib_path):
     cap_re = re.compile(r'^\s*capacitance\s*:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*;')
     dir_re = re.compile(r'^\s*direction\s*:\s*(input|output|inout)\s*;')
 
-    with open(lib_path, 'r', encoding='utf-8', errors='ignore') as f:
+    with io.open(lib_path, 'r', encoding='utf-8', errors='ignore') as f:
         for raw in f:
             line = raw.rstrip('\n')
             opens = line.count('{')
@@ -180,7 +196,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     """
     print("1. 타이밍 리포트에서 타겟 Net 및 Driver/Receiver 정보 추출 중...")
 
-    with open(report_path, 'r') as f:
+    with io.open(report_path, 'r') as f:
         report_lines = f.readlines()
 
     queries = []
@@ -266,7 +282,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
             last_seen_pin = "__PORT__"
             last_seen_cell = None
 
-    print(f"-> 총 {len(queries)}개의 넷 연결(Edge) 경로를 찾았습니다.")
+    print("-> 총 {0}개의 넷 연결(Edge) 경로를 찾았습니다.".format(len(queries)))
 
     # ---------------------------------------------------------
     print("2. SPEF *NAME_MAP 파싱 중...")
@@ -276,7 +292,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     norm_leaf_to_ids = {}
     id_to_name = {}
     name_entries = []
-    with open(spef_path, 'r') as f:
+    with io.open(spef_path, 'r') as f:
         in_name_map = False
         for line in f:
             line = line.strip()
@@ -308,7 +324,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
 
     print("2-1. SPEF port-to-D_NET alias 파싱 중...")
     port_id_to_dnet_ids = {}
-    with open(spef_path, 'r') as f:
+    with io.open(spef_path, 'r') as f:
         current_dnet = None
         for raw in f:
             line = raw.strip()
@@ -346,7 +362,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
             parts = prefix.split('/') if prefix else []
 
             if prefix:
-                variants.append(f"{prefix}_{leaf_base}_{bit_idx}_")
+                variants.append("{0}_{1}_{2}_".format(prefix, leaf_base, bit_idx))
             if parts:
                 variants.append(parts[0] + '/_' + '_'.join(parts[1:] + [leaf_base, bit_idx, '']))
             for split_idx in range(1, len(parts) + 1):
@@ -537,7 +553,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                     'recv_node_token': recv[0]['node_token'],
                 }
 
-        with open(spef_path, 'r') as f:
+        with io.open(spef_path, 'r') as f:
             current_dnet = None
             in_conn = False
             conn_entries = []
@@ -640,7 +656,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
             unresolved_queries.append(q)
 
     if unresolved_queries:
-        print(f"2-2. NAME_MAP으로 못 찾은 net {len(unresolved_queries)}개에 대해 CONN fallback 매칭 중...")
+        print("2-2. NAME_MAP으로 못 찾은 net {0}개에 대해 CONN fallback 매칭 중...".format(len(unresolved_queries)))
 
         unresolved_by_driver_pin = {}
         unresolved_by_recv_pin = {}
@@ -705,7 +721,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                     continue
                 driver_only_hits[q_idx] = dnet_id
 
-        with open(spef_path, 'r') as f:
+        with io.open(spef_path, 'r') as f:
             current_dnet = None
             in_conn = False
             conn_entries = []
@@ -766,8 +782,9 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
             })
 
         print(
-            f"-> CONN fallback으로 추가 매칭된 net: {len(fallback_hits)}개 "
-            f"(driver-only unique fallback {len(driver_only_hits)}개 포함)"
+            "-> CONN fallback으로 추가 매칭된 net: {0}개 "
+            "(driver-only unique fallback {1}개 포함)".format(
+                len(fallback_hits), len(driver_only_hits))
         )
 
     line_idx_to_query = {q['net_idx']: q for q in queries}
@@ -816,15 +833,15 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                             candidates.append(node)
                     return _dedup_keep_order(candidates)
 
-                direct_node = f"{inst_name}:{pin_name}"
+                direct_node = "{0}:{1}".format(inst_name, pin_name)
                 if direct_node in available_nodes:
                     candidates.append(direct_node)
-                direct_node_norm = f"{inst_name_norm}:{pin_name}"
+                direct_node_norm = "{0}:{1}".format(inst_name_norm, pin_name)
                 if direct_node_norm in available_nodes:
                     candidates.append(direct_node_norm)
 
                 for spef_id in get_spef_ids(inst_name):
-                    node = f"{spef_id}:{pin_name}"
+                    node = "{0}:{1}".format(spef_id, pin_name)
                     if node in available_nodes:
                         candidates.append(node)
 
@@ -906,7 +923,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                     if best_r < prev_r:
                         results[idx] = (best_r, best_d, best_c)
 
-    with open(spef_path, 'r') as f:
+    with io.open(spef_path, 'r') as f:
         for line in f:
             line = line.strip()
             if not line: continue
@@ -970,7 +987,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         coords = {}
         res_lines = []
         conn_caps = {}
-        with open(spef_path, 'r') as f:
+        with io.open(spef_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -1009,7 +1026,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
             if in_target_net:
                 process_collected_net_data()
         net_queries = orig_net_queries
-        print(f"-> exact CONN 2차 처리 추가 매칭: {len(second_pass_hits)}개")
+        print("-> exact CONN 2차 처리 추가 매칭: {0}개".format(len(second_pass_hits)))
     else:
         print("-> exact CONN 2차 처리 추가 매칭: 0개")
 
@@ -1045,20 +1062,21 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
             if m_net:
                 prefix = m_net.group("prefix")
                 report_lines[idx] = (
-                    f"{prefix}"
-                    f" {'':>10} {'':>10} {'':>10}"
-                    f" {str_dist:>10} {str_rpath:>10} {str_cpin:>10}\n"
+                    "{0}"
+                    " {1:>10} {2:>10} {3:>10}"
+                    " {4:>10} {5:>10} {6:>10}\n".format(
+                        prefix, "", "", "", str_dist, str_rpath, str_cpin)
                 )
                 continue
 
         padded_line = clean_line.ljust(header_len)
-        append_str = f" {str_dist:>10} {str_rpath:>10} {str_cpin:>10}\n"
+        append_str = " {0:>10} {1:>10} {2:>10}\n".format(str_dist, str_rpath, str_cpin)
         report_lines[idx] = padded_line + append_str
 
     with open(output_path, 'w') as f:
         f.writelines(report_lines)
 
-    print(f"완료! 수정된 리포트가 저장되었습니다: {output_path}")
+    print("완료! 수정된 리포트가 저장되었습니다: {0}".format(output_path))
     # 호출부가 Dist/Res 를 표로 따로 쓸 수 있게 결과를 돌려준다.
     # 키: timing.rpt 의 줄 번호(0부터), 값: (Res, Dist, Cpin)
     return results
@@ -1091,8 +1109,8 @@ def find_spef_for_report(report_path, spef_root, force_temp=None):
     }
     if re.match(r"^TT_.*_(125C|25C|m25C|m40C)(?:_[^/]+)?_fixed\.rpt$", base, flags=re.IGNORECASE):
         for boomcore_name in (
-            f"boomcore_temp_{boomcore_temp_map[temp]}.spef",
-            f"boomcore_3nm_{boomcore_temp_map[temp]}.spef",
+            "boomcore_temp_{0}.spef".format(boomcore_temp_map[temp]),
+            "boomcore_3nm_{0}.spef".format(boomcore_temp_map[temp]),
         ):
             boomcore_spef = os.path.join(spef_root, boomcore_name)
             if os.path.exists(boomcore_spef):
@@ -1105,12 +1123,12 @@ def find_spef_for_report(report_path, spef_root, force_temp=None):
         'm40c': '-40',
     }[temp]
     def candidate_spef_names(dname, ttoken):
-        names = [f"{dname}_{ttoken}.spef.Cnom_model_{model_temp}.spef"]
+        names = ["{0}_{1}.spef.Cnom_model_{2}.spef".format(dname, ttoken, model_temp)]
         # Support both m40c and -40c filename conventions
         if ttoken == "m40c":
-            names.append(f"{dname}_-40c.spef.Cnom_model_{model_temp}.spef")
+            names.append("{0}_-40c.spef.Cnom_model_{1}.spef".format(dname, model_temp))
         elif ttoken == "-40c":
-            names.append(f"{dname}_m40c.spef.Cnom_model_{model_temp}.spef")
+            names.append("{0}_m40c.spef.Cnom_model_{1}.spef".format(dname, model_temp))
         return names
 
     for spef_name in candidate_spef_names(design, temp):
@@ -1137,7 +1155,7 @@ def build_output_path(report_path, report_root, output_suffix, output_root=None)
     else:
         report_dir = os.path.dirname(report_path)
     stem = os.path.splitext(os.path.basename(report_path))[0]
-    return os.path.join(report_dir, f"{stem}{output_suffix}")
+    return os.path.join(report_dir, "{0}{1}".format(stem, output_suffix))
 
 
 def collect_reports(report_root, include_glob):
@@ -1153,7 +1171,7 @@ def collect_reports(report_root, include_glob):
 def run_batch(report_root, spef_root, include_glob, output_suffix, output_root=None, dry_run=False, force_temp=None):
     reports = collect_reports(report_root, include_glob)
     if not reports:
-        print(f"[INFO] 대상 리포트가 없습니다: root={report_root}, pattern={include_glob}")
+        print("[INFO] 대상 리포트가 없습니다: root={0}, pattern={1}".format(report_root, include_glob))
         return 0
 
     success = 0
@@ -1163,7 +1181,7 @@ def run_batch(report_root, spef_root, include_glob, output_suffix, output_root=N
     for rpt in reports:
         spef = find_spef_for_report(rpt, spef_root, force_temp=force_temp)
         if spef is None:
-            print(f"[SKIP] SPEF 매칭 실패: {rpt}")
+            print("[SKIP] SPEF 매칭 실패: {0}".format(rpt))
             skip += 1
             continue
 
@@ -1179,33 +1197,33 @@ def run_batch(report_root, spef_root, include_glob, output_suffix, output_root=N
                     lib_path = cand
                 else:
                     corner_prefix = stem[:-len("_fixed.rpt")]
-                    lib_glob = os.path.join(lib_root, f"{corner_prefix}*.lib")
+                    lib_glob = os.path.join(lib_root, "{0}*.lib".format(corner_prefix))
                     lib_matches = sorted(glob.glob(lib_glob))
                     if lib_matches:
                         lib_path = lib_matches[0]
 
         if dry_run:
-            print(f"[DRY-RUN] rpt={rpt}")
-            print(f"          spef={spef}")
-            print(f"          lib={lib_path}")
-            print(f"          out={out}")
+            print("[DRY-RUN] rpt={0}".format(rpt))
+            print("          spef={0}".format(spef))
+            print("          lib={0}".format(lib_path))
+            print("          out={0}".format(out))
             success += 1
             continue
 
         try:
             print("=" * 100)
-            print(f"[RUN] rpt={rpt}")
-            print(f"      spef={spef}")
-            print(f"      lib={lib_path}")
-            print(f"      out={out}")
+            print("[RUN] rpt={0}".format(rpt))
+            print("      spef={0}".format(spef))
+            print("      lib={0}".format(lib_path))
+            print("      out={0}".format(out))
             annotate_timing_report(rpt, spef, out, lib_path=lib_path)
             success += 1
         except Exception as exc:
-            print(f"[FAIL] {rpt}: {exc}")
+            print("[FAIL] {0}: {1}".format(rpt, exc))
             fail += 1
 
     print("=" * 100)
-    print(f"[SUMMARY] total={len(reports)} success={success} skip={skip} fail={fail}")
+    print("[SUMMARY] total={0} success={1} skip={2} fail={3}".format(len(reports), success, skip, fail))
     return 1 if fail else 0
 
 

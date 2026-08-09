@@ -17,7 +17,9 @@
     반대로 timing.rpt 에는 crosstalk 값이 없다.
     이 단계가 리포트에서 경로->핀->넷 순서를 뽑아 attribute 를 이름으로 붙인다.
 """
+from __future__ import division, print_function
 import argparse
+import io
 import csv
 import os
 import re
@@ -60,7 +62,7 @@ def load_attr_dump(path, wanted):
     last_obj = None
     awaiting = None
     want = set(wanted)
-    with open(path, "r", errors="ignore") as f:
+    with io.open(path, "r", errors="ignore") as f:
         for raw in f:
             s = raw.strip()
             # 구분선(----, ====)과 배너(***)만 건너뛴다.
@@ -107,7 +109,7 @@ def iter_arcs(rpt):
     meta = None
     pending = None
     arc_idx = 0
-    with open(rpt, "r", errors="ignore") as f:
+    with io.open(rpt, "r", errors="ignore") as f:
         for raw in f:
             line = raw.rstrip("\n")
             m = START_RE.match(line)

@@ -16,7 +16,9 @@ Cpin 이 뭔가:
     capacitance 가 Cpin 이다. PT 는 리포트에 이 값을 찍어주지 않으므로
     report_attribute 로 따로 뽑아 이름으로 붙인다.
 """
+from __future__ import division, print_function
 import argparse
+import io
 import os
 import re
 import sys
@@ -36,7 +38,7 @@ def load_pin_caps(path, attr=ATTR):
     caps = {}
     last_obj = None
     awaiting = None
-    with open(path, "r", errors="ignore") as f:
+    with io.open(path, "r", errors="ignore") as f:
         for raw in f:
             s = raw.strip()
             # 구분선(----, ====)과 배너(***)만 건너뛴다.
@@ -71,7 +73,7 @@ def iter_net_receiver(rpt):
     '(net)' 줄 다음에 처음 나오는 핀 줄이 그 넷의 리시버다.
     """
     pending = None
-    with open(rpt, "r", errors="ignore") as f:
+    with io.open(rpt, "r", errors="ignore") as f:
         for idx, line in enumerate(f):
             m = OBJ_RE.match(line)
             if not m:

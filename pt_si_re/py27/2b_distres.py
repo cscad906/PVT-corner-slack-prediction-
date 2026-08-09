@@ -19,7 +19,9 @@ Dist / Res 가 뭔가:
 기반 매칭까지 시도한다. 그래도 못 찾으면 그 줄은 N/A 로 남고,
 9_diagnose.py 가 원인을 분류해 준다.
 """
+from __future__ import division, print_function
 import argparse
+import io
 import os
 import re
 import sys
@@ -50,7 +52,7 @@ def fmt(v, nd=12):
 def net_lines(rpt):
     """{줄번호: 넷이름} -- 리포트의 '(net)' 줄 위치."""
     out = {}
-    with open(rpt, "r", errors="ignore") as f:
+    with io.open(rpt, "r", errors="ignore") as f:
         for idx, line in enumerate(f):
             m = OBJ_RE.match(line)
             if m and m.group(2).lower() == "net":
