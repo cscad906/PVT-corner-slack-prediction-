@@ -192,29 +192,40 @@ $PY 2c_merge.py    --dir $D      # -> annotated.txt
 
 ---
 
-## 6. crosstalk 표
+## 6. crosstalk 14열 리포트
+
+모델이 읽는 crosstalk 파일은 **victim-aggressor 쌍 하나가 한 줄**인 14열
+리포트입니다. 이건 `report_attribute` 로는 안 나오고
+`report_delay_calculation -crosstalk` 을 넷마다 돌려야 나옵니다.
+그래서 PT 를 두 번 더 지나갑니다.
 
 ```bash
-$PY 3_crosstalk.py --dir $D --corner tt0p7v25c_Cnom
+$PY 5a_contexts.py --dir $D      # -> PT 에 물어볼 넷 목록 (중복 제거)
+```
+```
+pt_shell> cd $D
+pt_shell> source <패키지>/pt/xtalk_calc.tcl      # PT 1차, 약 30초
+```
+```bash
+$PY 5b_pairs.py --dir $D         # -> 쌍 13,947줄
+```
+```
+pt_shell> cd $D
+pt_shell> source <패키지>/pt/xtalk_windows.tcl   # PT 2차, 약 30초
+```
+```bash
+$PY 5c_report.py --dir $D        # -> <코너>.path_context_si_compact.by_path.rpt
 ```
 
-```
-  경로        : 294
-  줄(구간)    : 17860
-  넷 속성 매칭: 8930  (못 찾음 0)
-  crosstalk 값이 0 이 아닌 줄: 4069
-  정상 종료           [ OK-XTALK ]
-```
-
-`crosstalk.tsv` 29열. `--corner` 를 주면 맨 앞에 `corner` 열이 붙어,
-나중에 코너별 파일을 그냥 이어 붙여도 구분됩니다. 열 설명은
-`CROSSTALK_설명.md`.
+PT 2차가 따로 필요한 이유: aggressor 는 **우리 경로 밖의 남의 넷**이라
+`pin_attr.txt` 에 없습니다. crosstalk 은 victim 과 aggressor 가 같은 시점에
+움직여야 실제 영향이 있으므로 그 도착시각이 필요합니다.
 
 ---
 
-## 7. 코너마다 4~6 반복
+## 7. 코너마다 반복 — 손으로 vs 묶어서
 
-PT 쪽은 코너마다 반복입니다.
+PT 쪽 2회차는 코너마다 해야 합니다.
 
 ```
 pt_shell> (코너 db 로드: read_db / link_design / update_timing)
@@ -222,32 +233,62 @@ pt_shell> (02_round2.tcl 의 CORNER 한 줄을 그 코너 이름으로 고침)
 pt_shell> source example/02_round2.tcl
 ```
 
-**파이썬 쪽은 폴더마다 칠 필요 없습니다.** 코너를 다 뽑아 놓고 한 번만 돌리면
-`round2` 아래 폴더를 전부 찾아서 2a → 2b → 2c → 3 을 돌려 줍니다.
+그다음은 **코너를 다 뽑아 놓고 묶어서** 돌리는 게 편합니다. 터미널 왕복이
+코너 수와 상관없이 5번으로 끝납니다.
 
 ```bash
-$PY 4_all_corners.py --root example/round2 --spef <SPEF 파일>
+# 셸
+$PY 4_all_corners.py --root example/round2 --spef <SPEF> --phase 1
+```
+```
+# pt_shell — 화면에 찍힌 파일을 그대로 source (고칠 것 없음)
+pt_shell> source example/round2/run_pt1_xtalk_calc.tcl
+```
+```bash
+$PY 4_all_corners.py --root example/round2 --phase 2
+```
+```
+pt_shell> source example/round2/run_pt2_xtalk_windows.tcl
+```
+```bash
+$PY 4_all_corners.py --root example/round2 --phase 3
 ```
 
+`run_pt*.tcl` 두 개는 `4_all_corners.py` 가 **자동으로 만들어 줍니다.**
+절대경로가 이미 박혀 있어 고칠 것이 없습니다.
+
+### 묶어도 디버깅은 그대로
+
+`4_all_corners.py` 는 **하위 스크립트를 대신 쳐줄 뿐**입니다. 새로 계산하는 게
+없고 결과 파일도 바이트 단위로 같습니다(md5 확인). 그래서
+
+- `--quiet` 을 안 주면 각 스크립트 화면이 **그대로** 흘러갑니다
+- 끝에 **코너 x 단계 표**가 붙어 어디서 틀어졌는지 한눈에 보입니다
+- 한 코너가 실패해도 **나머지는 계속 돕니다**
+- `--skip-done` 으로 끊긴 데서 이어서 할 수 있습니다
+
 ```
-  코너                      2a cpin       2b distres    2c merge      3 crosstalk
-  tt0p6v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XTALK
-  tt0p7v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XTALK
-  tt0p8v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XTALK
+  코너                      2a cpin       2b distres    2c merge      5a contexts
+  tt0p6v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XCTX
+  tt0p7v25c_Cnom          E-NOFILE      -             -             -
+
+  실패한 코너 1개: tt0p7v25c_Cnom
+      $PY 2a_cpin.py --dir example/round2/tt0p7v25c_Cnom
 ```
 
-한 코너가 실패해도 멈추지 않고 끝까지 돈 뒤 이 표를 보여 줍니다. 실패한 칸에
-에러 코드가 그대로 찍히니, 그 코너만 따로 돌려 보시면 됩니다.
+문제가 난 코너는 **그 한 줄만 따로 돌리면** 평소와 똑같은 자세한 화면이
+나옵니다. PT 쪽도 마찬가지로 그 코너 폴더에서 `xtalk_calc.tcl` 을 직접
+source 하면 됩니다.
 
-| 옵션 | 언제 |
-|---|---|
-| `--spef <파일>` | 모든 코너가 같은 SPEF 를 쓸 때. 폴더에 `design.spef` 가 있으면 그쪽이 우선 |
-| `--skip-done` | 중간에 끊겼을 때. 이미 만들어진 단계는 건너뛴다 |
-| `--quiet` | 각 단계 화면을 숨기고 결과 표만 |
-| `--only 2a,2b` | 일부 단계만 |
+### 코너마다 나오는 학습 입력 두 개
 
-`path_idx` 가 코너 사이에 공통이라, 나중에 `corner` + `path_idx` + `arc_idx`
-세 개로 한 줄이 특정됩니다.
+```
+annotated.txt                                  Dist/Res/Cpin 이 붙은 리포트
+<코너>.path_context_si_compact.by_path.rpt     crosstalk 14열
+```
+
+`path_idx` 가 코너 사이에 공통이라, 나중에 코너 이름 + `path_idx` 로 한 경로가
+특정됩니다.
 
 ---
 

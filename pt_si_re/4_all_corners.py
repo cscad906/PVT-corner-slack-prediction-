@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""4 - round2 아래 코너 폴더 전부에 대해 2a -> 2b -> 2c -> 3 을 돌린다.
+"""4 - round2 아래 코너 폴더 전부에 같은 단계를 돌린다.
 
     python3 4_all_corners.py --root round2 --spef /경로/design.spef
 
@@ -10,7 +10,11 @@
     2a_cpin.py     --dir <코너폴더>
     2b_distres.py  --dir <코너폴더> [--spef ...]
     2c_merge.py    --dir <코너폴더>
-    3_crosstalk.py --dir <코너폴더> --corner <폴더이름>
+    5a_contexts.py --dir <코너폴더>
+  [PT] all_xtalk_calc.tcl
+    5b_pairs.py    --dir <코너폴더>
+  [PT] all_xtalk_windows.tcl
+    5c_report.py   --dir <코너폴더>
 
 코너 이름은 폴더 이름을 그대로 쓴다(2회차에서 리포트 이름과 같게 지어진다).
 
@@ -31,13 +35,64 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 from find_rpt import find_rpt
 
+# 단계는 PT 를 사이에 두고 세 묶음으로 나뉜다. PT 는 파이썬에서 못 부르므로
+# 묶음이 끝날 때마다 pt_shell 로 갔다 와야 한다.
+#
+#   묶음 1 -> [PT] all_xtalk_calc.tcl -> 묶음 2 -> [PT] all_xtalk_windows.tcl -> 묶음 3
+#
 # (표시이름, 스크립트, SPEF 가 필요한가, 결과 파일)
-STEPS = [
-    ("2a cpin",     "2a_cpin.py",     False, "cpin.tsv"),
-    ("2b distres",  "2b_distres.py",  True,  "distres.tsv"),
-    ("2c merge",    "2c_merge.py",    False, "annotated.txt"),
-    ("3 crosstalk", "3_crosstalk.py", False, "crosstalk.tsv"),
-]
+PHASES = {
+    "1": [
+        ("2a cpin",     "2a_cpin.py",     False, "cpin.tsv"),
+        ("2b distres",  "2b_distres.py",  True,  "distres.tsv"),
+        ("2c merge",    "2c_merge.py",    False, "annotated.txt"),
+        ("5a contexts", "5a_contexts.py", False, "xtalk/unique_contexts.tsv"),
+    ],
+    "2": [
+        ("5b pairs",    "5b_pairs.py",    False, "xtalk/active_features.tsv"),
+    ],
+    "3": [
+        ("5c report",   "5c_report.py",   False, "xtalk/compact_flat.tsv"),
+    ],
+}
+
+# 묶음이 끝나면 pt_shell 에서 그대로 source 할 tcl 을 만들어 준다.
+# 경로를 손으로 고칠 일이 없고, 세션에 값이 남아 엉뚱한 폴더를 도는 일도 없다.
+PT_WRAPPER = {
+    "1": ("run_pt1_xtalk_calc.tcl", "all_xtalk_calc.tcl"),
+    "2": ("run_pt2_xtalk_windows.tcl", "all_xtalk_windows.tcl"),
+}
+
+
+def write_pt_wrapper(phase, root, mode):
+    if phase not in PT_WRAPPER:
+        return None
+    name, target = PT_WRAPPER[phase]
+    path = os.path.join(root, name)
+    with open(path, "w") as fh:
+        fh.write("# 4_all_corners.py --phase %s 가 자동으로 만든 파일입니다.\n" % phase)
+        fh.write("# pt_shell 에서 그대로 source 하세요. 고칠 것 없습니다.\n")
+        fh.write("#     pt_shell> source %s\n\n" % os.path.abspath(path))
+        fh.write('set XTALK_ROOT "%s"\n' % os.path.abspath(root))
+        fh.write('set DELAY_TYPE "%s"\n' % ("min" if mode == "hold" else "max"))
+        fh.write('source "%s"\n' % os.path.join(HERE, "pt", target))
+    return path
+
+
+NEXT_HINT = {
+    "1": ("pt_shell 에서 PT 1차를 돌리세요 (디자인 로드된 상태로):",
+          "    source %(wrap)s",
+          "그다음 다시 셸에서:",
+          "    $PY 4_all_corners.py --root %(root)s --phase 2"),
+    "2": ("pt_shell 에서 PT 2차를 돌리세요:",
+          "    source %(wrap)s",
+          "그다음 다시 셸에서:",
+          "    $PY 4_all_corners.py --root %(root)s --phase 3"),
+    "3": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
+          "    annotated.txt",
+          "    <코너>.path_context_si_compact.by_path.rpt",
+          ""),
+}
 
 
 def corner_dirs(root):
@@ -99,8 +154,12 @@ def main():
     ap.add_argument("--spef", default=None,
                     help="모든 코너가 함께 쓸 SPEF. 코너 폴더에 design.spef 가 "
                          "있으면 그쪽이 우선한다")
+    ap.add_argument("--phase", default="1", choices=["1", "2", "3"],
+                    help="1=2a~5a(기본), 2=5b, 3=5c. 사이사이 pt_shell 로 갔다 온다")
     ap.add_argument("--only", default=None,
-                    help="일부만 돌릴 때. 쉼표로 (예: 2a,2b)")
+                    help="그 묶음 안에서 일부만. 쉼표로 (예: 2a,2b)")
+    ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
+                    help="setup / hold. 5b 에 넘긴다")
     ap.add_argument("--skip-done", action="store_true",
                     help="결과 파일이 이미 있으면 그 단계는 건너뛴다")
     ap.add_argument("--quiet", action="store_true",
@@ -108,7 +167,7 @@ def main():
     args = ap.parse_args()
 
     print("=" * 68)
-    print("4 - 코너 폴더 전부 돌리기")
+    print("4 - 코너 폴더 전부 돌리기  (묶음 %s)" % args.phase)
     print("=" * 68)
 
     if not os.path.isdir(args.root):
@@ -139,7 +198,8 @@ def main():
         sys.exit(1)
 
     only = set(s.strip() for s in args.only.split(",")) if args.only else None
-    steps = [s for s in STEPS if only is None or s[1].split("_")[0] in only]
+    steps = [s for s in PHASES[args.phase]
+             if only is None or s[1].split("_")[0] in only]
 
     print("  대상 폴더 : %s" % args.root)
     print("  코너      : %d개" % len(corners))
@@ -174,8 +234,10 @@ def main():
             call = ["--dir", d]
             if need_spef:
                 call += ["--spef", spef]
-            if script == "3_crosstalk.py":
+            if script in ("5b_pairs.py", "5c_report.py"):
                 call += ["--corner", name]
+            if script == "5b_pairs.py":
+                call += ["--mode", args.mode]
 
             print("  %-12s 실행" % label)
             ok, c = run_step(script, call, args.quiet)
@@ -218,9 +280,13 @@ def main():
         print("=" * 68)
         sys.exit(0)
 
-    print("  전부 정상입니다. 코너마다 아래 두 파일이 학습 입력입니다.")
-    print("      annotated.txt   (Dist/Res/Cpin 이 붙은 리포트)")
-    print("      crosstalk.tsv   (crosstalk / timing window)")
+    print("  묶음 %s 전부 정상입니다. 다음:" % args.phase)
+    print("")
+    wrap = write_pt_wrapper(args.phase, args.root, args.mode)
+    fill = {"root": os.path.abspath(args.root), "pkg": HERE,
+            "wrap": os.path.abspath(wrap) if wrap else ""}
+    for line in NEXT_HINT[args.phase]:
+        print("  " + (line % fill if "%(" in line else line))
     print("=" * 68)
 
 

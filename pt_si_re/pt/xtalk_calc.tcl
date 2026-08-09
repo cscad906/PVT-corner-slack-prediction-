@@ -18,6 +18,7 @@
 ### 여기 두 줄만 고치면 된다 ###########################################
 set XTALK_DIR  "xtalk"    ;# 지금 폴더 아래의 xtalk/ (코너 폴더로 cd 해 두면 그대로)
 set DELAY_TYPE "max"      ;# setup=max, hold=min
+if {[info exists XT_DELAY]} { set DELAY_TYPE $XT_DELAY }  ;# 루프가 준 값이 있으면 그것
 #######################################################################
 # 조건 없이 set 한다(일부러). if {![info exists ...]} 로 두면 코너를 바꿔
 # 두 번째로 source 할 때 앞 코너의 값이 남아 엉뚱한 폴더에 쓴다.
