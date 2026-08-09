@@ -214,18 +214,37 @@ $PY 3_crosstalk.py --dir $D --corner tt0p7v25c_Cnom
 
 ## 7. 코너마다 4~6 반복
 
-정리하면 코너 하나당 이것뿐입니다.
+PT 쪽은 코너마다 반복입니다.
 
 ```
 pt_shell> (코너 db 로드: read_db / link_design / update_timing)
 pt_shell> (02_round2.tcl 의 CORNER 한 줄을 그 코너 이름으로 고침)
 pt_shell> source example/02_round2.tcl
-
-셸> setenv D example/round2/<코너이름>
-셸> ln -s <SPEF> $D/design.spef
-셸> $PY 2a_cpin.py --dir $D && $PY 2b_distres.py --dir $D && $PY 2c_merge.py --dir $D
-셸> $PY 3_crosstalk.py --dir $D --corner <코너이름>
 ```
+
+**파이썬 쪽은 폴더마다 칠 필요 없습니다.** 코너를 다 뽑아 놓고 한 번만 돌리면
+`round2` 아래 폴더를 전부 찾아서 2a → 2b → 2c → 3 을 돌려 줍니다.
+
+```bash
+$PY 4_all_corners.py --root example/round2 --spef <SPEF 파일>
+```
+
+```
+  코너                      2a cpin       2b distres    2c merge      3 crosstalk
+  tt0p6v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XTALK
+  tt0p7v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XTALK
+  tt0p8v25c_Cnom          OK-CPIN       OK-DISTRES    OK-MERGE      OK-XTALK
+```
+
+한 코너가 실패해도 멈추지 않고 끝까지 돈 뒤 이 표를 보여 줍니다. 실패한 칸에
+에러 코드가 그대로 찍히니, 그 코너만 따로 돌려 보시면 됩니다.
+
+| 옵션 | 언제 |
+|---|---|
+| `--spef <파일>` | 모든 코너가 같은 SPEF 를 쓸 때. 폴더에 `design.spef` 가 있으면 그쪽이 우선 |
+| `--skip-done` | 중간에 끊겼을 때. 이미 만들어진 단계는 건너뛴다 |
+| `--quiet` | 각 단계 화면을 숨기고 결과 표만 |
+| `--only 2a,2b` | 일부 단계만 |
 
 `path_idx` 가 코너 사이에 공통이라, 나중에 `corner` + `path_idx` + `arc_idx`
 세 개로 한 줄이 특정됩니다.
