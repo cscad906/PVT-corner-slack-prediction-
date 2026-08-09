@@ -5,8 +5,6 @@ interpolation kernel over corner space) -- permutation/count-invariant, so the
 same module serves LOO training folds (19 tokens) and hidden-corner inference
 (20 tokens). The target corner's own token is always masked out (anti-leakage).
 """
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 

@@ -26,13 +26,11 @@ Three fit modes, selected by ``base.weighting`` in the config:
 Anchor = fitted intercept (Method B). Method A (measured ref anchor) is a
 one-line ablation: subtract y_ref before fitting and drop the "1" term.
 """
-from __future__ import annotations
-
 import numpy as np
 
 
 # --------------------------------------------------------------- design matrix
-def design_matrix(coords: np.ndarray, exps: list[tuple[int, ...]]) -> np.ndarray:
+def design_matrix(coords: np.ndarray, exps: "list[tuple[int, ...]]") -> np.ndarray:
     """[C, K+1] polynomial design matrix (column 0 = constant).
 
     ``coords`` is [C, A] and is ALREADY scaled to fit units (each axis = the
@@ -56,7 +54,7 @@ def fit_base(
     y: np.ndarray,           # [N, C] targets (slack, or any per-corner scalar)
     phi: np.ndarray,         # [C, K] design matrix
     seen: np.ndarray,        # [C] bool mask of seen corners
-) -> tuple[np.ndarray, np.ndarray]:
+) -> "tuple[np.ndarray, np.ndarray]":
     """Vectorized over paths. Returns (pred, loo_pred), both [N, C]:
 
     pred[n, c]     = all-seen fit evaluated at every corner c
@@ -101,7 +99,7 @@ def fit_base_local(
     phi: np.ndarray,         # [C, K] design matrix
     seen: np.ndarray,        # [C] bool
     coords: np.ndarray,      # [C, A] scaled axis coords
-    bw: tuple[float, ...],   # per-axis Gaussian kernel bandwidths
+    bw: "tuple[float, ...]",   # per-axis Gaussian kernel bandwidths
 ) -> np.ndarray:
     """Locally-weighted variant of fit_base (the "가중 OLS"): each query corner
     fits its own weighted OLS with Gaussian weights over the seen corners, so

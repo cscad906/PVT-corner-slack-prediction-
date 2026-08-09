@@ -1,6 +1,6 @@
 """Slew training CLI -- adaptive-bandwidth OLS base + neural residual (no SI).
 
-    python -m si_model.tasks.slew.train_slew --config configs/beol14/slew_m40.yaml
+    bash scripts/run.sh train            # config.yaml 에 task: slew 일 때
 
 Target = launch slew (ns). Base = per-corner weighted OLS (base.weighting); the
 neural CornerSetHead learns the base residual (all-seen leave-one-out). CAP is
@@ -10,8 +10,6 @@ matching the P4 slewcap model.
 
 This mirrors the slack trainer minus the SI branch and the cell/net stage head.
 """
-from __future__ import annotations
-
 import argparse
 import json
 import math
@@ -22,6 +20,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from si_model.compat import load_checkpoint
 from si_model.config import gap_caps, load_config, token_scales
 from si_model.model.path_encoder import PathEncoder
 from si_model.tasks.slew.slew_model import SlewModel
@@ -75,6 +74,12 @@ class Trainer:
         self.ax_gapcap = gap_caps(cfg)
         self._prep_base()
         self._prep_tensors()
+        # Seed BEFORE building the model: weight init draws from the torch RNG,
+        # so seeding only inside run() left every run with different initial
+        # weights -- two identical-input runs then reported different losses,
+        # which makes any A/B comparison (leakage checks, ablations, ensembles
+        # sharing a path split) meaningless.
+        torch.manual_seed(int(cfg["train"].get("seed", 42)))
         self._prep_model()
         self._prep_splits()
 
@@ -233,7 +238,7 @@ class Trainer:
                       f"| valSeen slewMAPE={val['mape'].mean():5.2f}% "
                       f"| valHidden slewMAPE={hid['mape'].mean():5.2f}%{tag}",
                       flush=True)
-        ck = torch.load(f"{out_dir}/best.pt", map_location=self.dev, weights_only=False)
+        ck = load_checkpoint(f"{out_dir}/best.pt", map_location=self.dev)
         self.model.load_state_dict(ck["model"]); self.enc.load_state_dict(ck["enc"])
         return self.report(out_dir, ck["epoch"])
 
@@ -269,7 +274,7 @@ class Trainer:
     def export_predictions(self, out_dir, corner_idx=None, bs=512, tag="hidden"):
         """Dump per-(path, corner) MODEL slew predictions (ns) + truth comparison
         when a measurement exists. The OLS base is never reported -- use
-        ``python -m si_model.training.base_check`` for base-only inspection."""
+        ``bash scripts/run.sh base`` for base-only inspection."""
         self.model.eval(); self.enc.eval()
         idx = self.split.hidden_idx if corner_idx is None else np.asarray(corner_idx)
         paths = np.arange(self.N)

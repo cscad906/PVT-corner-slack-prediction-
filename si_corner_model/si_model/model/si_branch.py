@@ -40,8 +40,6 @@ cover (softness w), the electrical filter is a sigmoid (softness w_elec), and
 max_t is a soft-argmax at temperature tau; all anneal toward hard and inference
 uses the exact hard max / hard threshold.
 """
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 
@@ -67,7 +65,7 @@ class SIBranch(nn.Module):
         self.hard = False
 
     def set_anneal(self, w: float, tau: float, hard: bool,
-                   w_elec: float | None = None) -> None:
+                   w_elec: "float | None" = None) -> None:
         self.w, self.tau, self.hard = float(w), float(tau), bool(hard)
         if w_elec is not None:
             self.w_elec = float(w_elec)

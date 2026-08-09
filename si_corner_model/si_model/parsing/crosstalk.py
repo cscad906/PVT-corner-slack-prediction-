@@ -23,8 +23,6 @@ Facts verified on the 14nm iter51 SmallBoomV2 dataset (2026-07):
     ``-min`` (verified: newhold deltas are negative) -- so hold is NOT blocked
     here and ``si_total`` carries the correct sign for both checks.
 """
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 SEGMENTS = ("launch_clock", "data", "capture_clock")
@@ -50,7 +48,7 @@ class VictimArc:
     load_pin: str
     min_arrival: float
     max_arrival: float
-    aggressors: list[Aggressor] = field(default_factory=list)
+    aggressors: "list[Aggressor]" = field(default_factory=list)
 
 
 @dataclass
@@ -58,13 +56,13 @@ class CrosstalkPath:
     idx: int
     key: str
     slack: float
-    arcs: list[VictimArc] = field(default_factory=list)
+    arcs: "list[VictimArc]" = field(default_factory=list)
 
-    def arc_map(self) -> dict[tuple[str, str], VictimArc]:
+    def arc_map(self) -> "dict[tuple[str, str], VictimArc]":
         """{(segment, victim_net): arc}; duplicates verified consistent."""
         return {(a.segment, a.net): a for a in self.arcs}
 
-    def si_total(self, segments: tuple[str, ...] = ("launch_clock", "data")) -> float:
+    def si_total(self, segments: "tuple[str, ...]" = ("launch_clock", "data")) -> float:
         """Path-level SI delta: sum of unique (segment, net) deltas.
 
         Default sums launch_clock+data only: those are max-direction deltas,
@@ -72,18 +70,18 @@ class CrosstalkPath:
         would need MIN-direction deltas (not in this dump; measured <=1.7 ps,
         excluded until the per-net attribute dump lands).
         """
-        seen: dict[tuple[str, str], float] = {}
+        seen: "dict[tuple[str, str], float]" = {}
         for a in self.arcs:
             if a.segment in segments:
                 seen[(a.segment, a.net)] = a.delta
         return sum(seen.values())
 
 
-def parse_crosstalk(fp: str) -> dict[int, CrosstalkPath]:
+def parse_crosstalk(fp: str) -> "dict[int, CrosstalkPath]":
     """Parse one compact crosstalk report. Returns {idx: CrosstalkPath}."""
-    out: dict[int, CrosstalkPath] = {}
-    path: CrosstalkPath | None = None
-    arcs_by_key: dict[tuple[str, str], VictimArc] = {}
+    out: "dict[int, CrosstalkPath]" = {}
+    path: "CrosstalkPath | None" = None
+    arcs_by_key: "dict[tuple[str, str], VictimArc]" = {}
 
     def finish() -> None:
         if path is None:

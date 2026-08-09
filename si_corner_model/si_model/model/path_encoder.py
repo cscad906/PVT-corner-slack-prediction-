@@ -7,8 +7,6 @@ step (left/right neighbor messages with edge features) followed by a BiGRU
 sweep, with residual + LayerNorm. Readout = mean pool + attention pool, where
 PT's '<-' critical markers bias the attention logits.
 """
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 

@@ -1,11 +1,9 @@
 """Losses. Everything in ps."""
-from __future__ import annotations
-
 import torch
 import torch.nn.functional as F
 
 
-def total_loss(out: dict, batch: dict, lambda_si: float) -> tuple[torch.Tensor, dict]:
+def total_loss(out: dict, batch: dict, lambda_si: float) -> "tuple[torch.Tensor, dict]":
     """MSE on the base residual + lambda * MSE aligning the SI branch to the
     smooth-fit SI residual (the SI deviation = label - per-path smooth fit).
 
