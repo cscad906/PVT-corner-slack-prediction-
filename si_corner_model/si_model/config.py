@@ -11,14 +11,17 @@ declares an ``order`` and the basis is generated here, so nobody hand-maintains 
 ``terms:`` list. The generator reproduces the two hand-tuned reference bases
 exactly (see ``expand_terms``) and drops rank-deficient monomials automatically.
 """
-from __future__ import annotations
-
 import copy
 import os
+import re
 
 import yaml
 
 _DEFAULTS_NAME = "_defaults.yaml"
+_VAR_RE = re.compile(r"\$\{(\w+)\}")
+
+#: repo root = the directory containing the ``si_model`` package.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # --------------------------------------------------------------------- loading
@@ -32,9 +35,77 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def _builtin_vars() -> dict:
+    """``${repo}`` = this checkout; ``${root}`` = its PARENT directory.
+
+    The deployment layout this targets is a data root that holds the checkout
+    next to the design folders::
+
+        <root>/si_corner_model/     <- ${repo}
+        <root>/<design>/            <- reports live here
+
+    so ``${root}`` is correct with NO edit at all when the checkout sits where
+    the data is. Override it when it does not (see ``resolve_vars``).
+    """
+    return {"repo": REPO_ROOT, "root": os.path.dirname(REPO_ROOT)}
+
+
+def resolve_vars(cfg: dict) -> dict:
+    """Substitute ``${name}`` placeholders throughout the config.
+
+    Names resolve in this order (first wins), so a whole deliverable can be
+    re-pointed from ONE place:
+
+      1. environment ``SI_<NAME>``  -- e.g. ``SI_ROOT=/user/xxx/academy bash scripts/run.sh list``
+      2. the config's own ``vars:`` block
+      3. built-ins ``${repo}`` / ``${root}`` (see ``_builtin_vars``)
+
+    Vars may reference other vars. The resolved map is stored back under
+    ``cfg['vars']`` so runs are self-documenting.
+    """
+    vs = _builtin_vars()
+    for k, v in (cfg.get("vars") or {}).items():
+        vs[str(k)] = str(v)
+    for k in list(vs):
+        env = os.environ.get("SI_" + k.upper())
+        if env:
+            vs[k] = env
+
+    def sub(s: str) -> str:
+        return _VAR_RE.sub(lambda m: vs.get(m.group(1), m.group(0)), s)
+
+    for _ in range(8):                       # vars referring to vars
+        nxt = {k: sub(v) for k, v in vs.items()}
+        if nxt == vs:
+            break
+        vs = nxt
+    left = {m.group(1) for v in vs.values() for m in _VAR_RE.finditer(v)}
+    assert not left, f"unresolved config vars: {sorted(left)} (declare them under `vars:` or set SI_<NAME>)"
+
+    def walk(x):
+        if isinstance(x, str):
+            return sub(x)
+        if isinstance(x, dict):
+            return {k: walk(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [walk(v) for v in x]
+        return x
+
+    out = walk(cfg)
+    out["vars"] = vs
+    return out
+
+
 def load_config(path: str) -> dict:
-    """Load a model config, deep-merged onto ``configs/_defaults.yaml`` if one
-    sits next to it or one directory up (so per-model YAMLs stay tiny)."""
+    """Load a hand-written ENGINE-schema config (data / split / base / model /
+    train) from a YAML file, then expand ``${var}`` placeholders.
+
+    Normal use never calls this: ``config.yaml`` is the project config and
+    ``si_model.run`` expands it into engine configs in memory. This is the
+    escape hatch for driving one model instance from a YAML you wrote yourself
+    (``python -m si_model.parsing.build_dataset --config mine.yaml``). A
+    ``_defaults.yaml`` sitting next to the file, or one directory up, is
+    deep-merged underneath it if present."""
     with open(path) as f:
         cfg = yaml.safe_load(f)
     here = os.path.dirname(os.path.abspath(path))
@@ -43,12 +114,13 @@ def load_config(path: str) -> dict:
         if os.path.exists(cand) and os.path.abspath(cand) != os.path.abspath(path):
             with open(cand) as f:
                 defaults = yaml.safe_load(f) or {}
-            return _deep_merge(defaults, cfg)
-    return cfg
+            cfg = _deep_merge(defaults, cfg)
+            break
+    return resolve_vars(cfg)
 
 
 # --------------------------------------------------------------- axis metadata
-def axes(cfg: dict) -> list[dict]:
+def axes(cfg: dict) -> "list[dict]":
     """The continuous OLS axes, in grid order (axis 0 = voltage by convention).
 
     Each axis dict: ``name`` (str), ``ref`` (float, the reference-corner value),
@@ -62,11 +134,11 @@ def axes(cfg: dict) -> list[dict]:
     return ax
 
 
-def fit_scales(cfg: dict) -> list[float]:
+def fit_scales(cfg: dict) -> "list[float]":
     return [float(a.get("fit_scale", 1.0)) for a in axes(cfg)]
 
 
-def axis_levels(cfg: dict) -> dict | None:
+def axis_levels(cfg: dict) -> "dict | None":
     """Name->value map for a CATEGORICAL second axis (BEOL/RC, process, ...),
     declared as ``levels:`` on axis 1 in the config -- e.g.
     ``{Cbest: -1, Ctyp: 0, Cworst: 1}``. Returns None for a purely numeric second
@@ -78,7 +150,7 @@ def axis_levels(cfg: dict) -> dict | None:
     return {str(k): float(v) for k, v in lv.items()} if lv else None
 
 
-def token_scales(cfg: dict) -> list[float]:
+def token_scales(cfg: dict) -> "list[float]":
     """Coordinate unit for the neural token/query features (defaults: 0.1 for a
     voltage axis, 1.0 otherwise -- matches the original beol14/gt3 models)."""
     out = []
@@ -88,7 +160,7 @@ def token_scales(cfg: dict) -> list[float]:
     return out
 
 
-def gap_caps(cfg: dict) -> list[float]:
+def gap_caps(cfg: dict) -> "list[float]":
     out = []
     for i, a in enumerate(axes(cfg)):
         default = 2.5 if i == 0 else 2.0
@@ -97,7 +169,7 @@ def gap_caps(cfg: dict) -> list[float]:
 
 
 # ------------------------------------------------------------ basis generation
-def _term_name(exps: tuple[int, ...], names: list[str]) -> str:
+def _term_name(exps: "tuple[int, ...]", names: "list[str]") -> str:
     parts = []
     for e, nm in zip(exps, names):
         if e == 1:
@@ -107,7 +179,7 @@ def _term_name(exps: tuple[int, ...], names: list[str]) -> str:
     return "".join(parts) or "1"
 
 
-def expand_terms(cfg: dict, seen_levels: list[int] | None = None):
+def expand_terms(cfg: dict, seen_levels: "list[int] | None" = None):
     """Generate the polynomial basis (excluding the constant) from the axis
     orders. Returns ``(exps, names, dropped)`` where ``exps`` is a list of
     per-axis exponent tuples.
@@ -135,7 +207,7 @@ def expand_terms(cfg: dict, seen_levels: list[int] | None = None):
     cross = bool(cfg["base"].get("cross_terms", True))
     cross_max = int(cfg["base"].get("cross_max_degree", 3))
 
-    exps: list[tuple[int, ...]] = []
+    exps: "list[tuple[int, ...]]" = []
     # pure-axis terms, exponent 1..order on each axis independently
     for a in range(A):
         for e in range(1, orders[a] + 1):

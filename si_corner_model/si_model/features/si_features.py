@@ -18,8 +18,6 @@ Poly order backs off with anchor count: >=8 quadratic, >=4 linear, else mean.
 Rows sharing an anchor mask are solved as one batched OLS (the 69% of
 aggressor pairs active at all corners collapse into a handful of groups).
 """
-from __future__ import annotations
-
 from collections import defaultdict
 
 import numpy as np
@@ -37,7 +35,7 @@ def _interp_rows(flat: np.ndarray, seen: np.ndarray, phi: np.ndarray) -> np.ndar
                     np.arange(min(6, phi.shape[1]))]
 
     out = np.full((M, C), np.nan, np.float64)
-    groups: dict[tuple[bytes, int], list[int]] = defaultdict(list)
+    groups: "dict[tuple[bytes, int], list[int]]" = defaultdict(list)
     for i in range(M):
         if n_anchor[i] == 0:
             continue

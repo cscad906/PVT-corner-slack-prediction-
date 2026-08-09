@@ -12,8 +12,6 @@ Path keys look like ``<startpoint>-><endpoint>_#<idx>`` (some reports use an
 before any cross-corner join (the classic 14nm gotcha: aligning on the raw key
 collapses common paths from ~2758 to ~8).
 """
-from __future__ import annotations
-
 import re
 
 # RC (BEOL parasitic) corner -> signed scalar axis coordinate.
@@ -26,12 +24,11 @@ RC_NAMES = ("Cmin", "Cnom", "Cmax")
 TEMP_MAP = {"m40": -40.0, "25": 25.0, "125": 125.0}
 
 _IDX_RE = re.compile(r"_?#\d+$")
+# Default filename patterns for the `levels` layout only; the `flat` layout
+# identifies the corner from the filename tokens instead (parsing/discovery).
+# Both are overridable from config, so nothing here is dataset-specific.
 _VOLT_RE = re.compile(r"_tt(0p\d+)v", re.IGNORECASE)          # annotated filename
-# canonical corner labels: voltage + (RC name) OR voltage + (temperature)
-_CORNER_RC_RE = re.compile(r"TT_(\d+)p(\d+)V_(Cmin|Cnom|Cmax)")
-_CORNER_T_RE = re.compile(r"TT_(\d+)p(\d+)V_(m?)(\d+)C")
-# crosstalk filename: TT_0p605V_m40C.path_context_si_compact.by_path.rpt
-_XT_RE = re.compile(r"TT_(0p\d+)V_(m?\d+)C")
+_XT_RE = re.compile(r"TT_(0p\d+)V_(m?\d+)C")                  # crosstalk filename
 
 
 def norm_path_key(key: str) -> str:
@@ -50,7 +47,7 @@ def volt_to_tok(v: float) -> str:
     return s.replace("0.", "0p")
 
 
-def parse_voltage_from_annotated(fname: str, regex=None) -> float | None:
+def parse_voltage_from_annotated(fname: str, regex=None) -> "float | None":
     """Voltage from an annotated-report filename. ``regex`` (a compiled pattern
     with the voltage token as group 1) overrides the SAED default so a different
     vendor filename (e.g. ``..._v0p75_...``) can be handled from config."""
@@ -58,7 +55,7 @@ def parse_voltage_from_annotated(fname: str, regex=None) -> float | None:
     return volt_to_float(m.group(1)) if m else None
 
 
-def parse_xt_name(fname: str, prefix: str = "TT") -> tuple[float, str] | None:
+def parse_xt_name(fname: str, prefix: str = "TT") -> "tuple[float, str] | None":
     """crosstalk basename -> (voltage, temp_token) e.g. (0.605, 'm40').
     ``prefix`` = the process-corner token in the filename (``data.corner_prefix``)."""
     if prefix == "TT":
@@ -87,8 +84,8 @@ def corner_label(v: float, axis1, prefix: str = "TT") -> str:
     return f"{prefix}_{volt_to_tok(v)}V_{tok}C"
 
 
-def parse_corner(label: str, levels: dict | None = None,
-                 prefix: str = "TT") -> tuple[float, float]:
+def parse_corner(label: str, levels: "dict | None" = None,
+                 prefix: str = "TT") -> "tuple[float, float]":
     """``TT_0p605V_Cmin`` -> (0.605, -1.0) = (voltage, level_value); or
     ``TT_0p65V_m40C`` -> (0.65, -40.0) = (voltage, temperature).
 

@@ -1,72 +1,46 @@
-"""Build the slew/cap training cache for one 14nm temperature.
+"""Build ``slew.npz`` for ONE model instance (``task: slew`` in config.yaml).
 
-Targets, per (path, corner) -- mirrors the P4 slewcap model but self-contained:
+Targets, per (path, corner):
   - launch_slew    : Trans on the launch flop's first data pin (<startpoint>/QN|/Q)
   - endpoint_cap   : Cap of the (net) line just before the endpoint /D
 
-Slew is analysis-independent (same launch transition in setup/hold reports), so
-one model per TEMPERATURE (m40 | 125); the corner grid is 17 V x 3 RC = 51.
-Slew is PREDICTED (V-dependent); cap is later fetched from a same-RC neighbour
-(V-independent) -- see the trainer.
+Slew is analysis-independent (the same launch transition appears in setup and
+hold reports), so it needs no separate setup/hold split -- one model per
+(design, temperature), same as slack. Slew is PREDICTED (V-dependent); cap is
+not trained but fetched from a same-level neighbour (V-independent) -- see the
+trainer. No crosstalk is used.
 
-    python -m si_model.tasks.slew.build_slew --config configs/beol14/slew_m40.yaml
+    bash scripts/run.sh build            # config.yaml 에 task: slew 일 때
 """
-from __future__ import annotations
-
 import argparse
 import os
-import re
 import sys
 
 import numpy as np
-import yaml
 
-from si_model.parsing.annotated import parse_annotated
+from si_model.parsing.annotated import configure_pins, parse_annotated
 from si_model.parsing.build_dataset import (EDGE_FEAT_NAMES, NODE_FEAT_NAMES,
-                                            SIG_NAMES, path_signature,
-                                            stage_sequence)
-from si_model.parsing.keys import (RC_NAMES, corner_label, norm_path_key,
-                                   parse_corner, parse_voltage_from_annotated)
+                                            SIG_NAMES, _assert_parsed,
+                                            choose_key_mode,
+                                            configure_cell_taxonomy,
+                                            path_signature, stage_sequence)
+from si_model.parsing.discovery import corner_levels, discover as _discover
+from si_model.parsing.keys import corner_label, norm_path_key, parse_corner
 
 
 def load_config(fp: str) -> dict:
     from si_model.config import load_config as _lc
-    return _lc(fp)                       # merge configs/_defaults.yaml
-
-
-def corner_levels(cfg: dict) -> dict:
-    from si_model.config import axis_levels
-    from si_model.parsing.keys import RC_VAL
-    return axis_levels(cfg) or dict(RC_VAL)
+    return _lc(fp)                       # engine-schema YAML (escape hatch)
 
 
 def discover(cfg: dict):
-    """Return (corners, ann_by_corner) walking the level sub-folders of one temp
-    (level names + values + filename patterns are config-driven; see build_dataset)."""
-    ann_root = cfg["data"]["annotated_dir"]
-    levels = corner_levels(cfg)
-    prefix = cfg["data"].get("corner_prefix", "TT")   # process token, e.g. FFPG
-    rc_list = cfg["data"].get("rc_corners", list(levels) or list(RC_NAMES))
-    pat = cfg["data"].get("patterns", {})
-    ann_suffix = pat.get("annotated_suffix", "_fixed_annotated.txt")
-    volt_re = re.compile(pat["voltage_regex"]) if pat.get("voltage_regex") else None
-    ann_by: dict[str, str] = {}
-    for rc in rc_list:
-        adir = os.path.join(ann_root, rc)
-        assert os.path.isdir(adir), f"missing annotated level dir: {adir}"
-        for fn in sorted(os.listdir(adir)):
-            if not fn.endswith(ann_suffix):
-                continue
-            v = parse_voltage_from_annotated(fn, volt_re)
-            if v is None:
-                continue
-            ann_by[corner_label(v, rc, prefix)] = os.path.join(adir, fn)
-    assert ann_by, f"no corners under {ann_root}"
-    corners = sorted(ann_by, key=lambda c: parse_corner(c, levels, prefix))
+    """Return (corners, ann_by_corner). Slew needs NO crosstalk, so discovery
+    runs annotated-only under either directory layout (see parsing/discovery)."""
+    corners, ann_by, _ = _discover(cfg, need_crosstalk=False)
     return corners, ann_by
 
 
-def slew_cap_of(path) -> tuple[float, float]:
+def slew_cap_of(path) -> "tuple[float, float]":
     """(launch_slew, endpoint_cap) from a parsed path's stages."""
     data_cells = [s for s in path.stages if s.segment == "data" and s.kind == "cell"]
     data_nets = [s for s in path.stages if s.segment == "data" and s.kind == "net"]
@@ -78,6 +52,8 @@ def slew_cap_of(path) -> tuple[float, float]:
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
+    configure_cell_taxonomy(cfg)   # slack 빌더와 동일한 설정을 쓴다
+    configure_pins(cfg)
     corners, ann_by = discover(cfg)
     assert ref_corner in corners, f"ref {ref_corner} not in {corners[:3]}..."
     C = len(corners)
@@ -86,6 +62,7 @@ def build(cfg: dict) -> str:
     vt = np.asarray([parse_corner(c, levels, prefix) for c in corners], dtype=np.float32)
 
     ref_keys = None
+    strip_idx = None                 # decided once, from the first corner
     slew = cap = None
     idx_order = []
     stage_seqs = {}
@@ -94,7 +71,11 @@ def build(cfg: dict) -> str:
     for ci, corner in enumerate(corners):
         # every corner needs full stages (launch slew + endpoint cap are per-corner)
         ann = parse_annotated(ann_by[corner], with_stages=True)
-        keys = {i: norm_path_key(p.key) for i, p in ann.items()}
+        _assert_parsed(ann, ann_by[corner])
+        if strip_idx is None:
+            strip_idx = choose_key_mode(ann, cfg)
+        keyf = norm_path_key if strip_idx else (lambda k: k.strip())
+        keys = {i: keyf(p.key) for i, p in ann.items()}
         if ref_keys is None:
             ref_keys = keys
             idx_order = sorted(ref_keys)
@@ -106,6 +87,8 @@ def build(cfg: dict) -> str:
             assert keys == ref_keys, f"key mismatch at {corner}"
         for r, idx in enumerate(idx_order):
             p = ann[idx]
+            if p.slack != p.slack:       # unresolved at this corner -> leave NaN
+                continue
             s, c = slew_cap_of(p)
             slew[r, ci] = s
             cap[r, ci] = c
@@ -113,6 +96,17 @@ def build(cfg: dict) -> str:
                 path_sig[r] = path_signature(p.stages)
                 stage_seqs[r] = stage_sequence(p.stages)
         print(f"[{ci+1:2d}/{C}] {corner}: paths={len(ann)}", flush=True)
+
+    # keep only paths measured at EVERY corner (see build_dataset's intersection pass)
+    ok = ~np.isnan(slew).any(axis=1)
+    if not ok.all():
+        keep = np.where(ok)[0]
+        assert len(keep) > 0, "모든 코너에서 측정된 경로가 하나도 없다"
+        print(f"[PATHS] 전 코너에서 측정된 경로만 남긴다: "
+              f"{len(idx_order)} -> {len(keep)}", flush=True)
+        slew, cap, path_sig = slew[keep], cap[keep], path_sig[keep]
+        idx_order = [idx_order[r] for r in keep]
+        stage_seqs = {new: stage_seqs[int(old)] for new, old in enumerate(keep)}
 
     N = len(idx_order)
     vocab = ["<pad>"] + sorted({f for fams, _, _ in stage_seqs.values() for f in fams})

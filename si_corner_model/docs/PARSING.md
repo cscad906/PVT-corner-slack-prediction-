@@ -1,220 +1,441 @@
-# 파싱 & 데이터 적응 가이드
+# PARSING — 리포트를 읽히는 법
+
+**핵심 사실 하나: 엔진은 raw 텍스트를 절대 다시 읽지 않는다. 항상 npz 만 읽는다.**
+
+```
+리포트 ──build──► cache/<design>/<temp>/dataset.npz ──► base / 학습 / 예측
+```
+
+그래서 "형식이 뭐든" 문제는 **npz 를 만드는 단계 하나**로 좁혀지고, 아래 4단계로
+흡수된다. 위로 갈수록 쉽다.
+
+```
+새 데이터
+ ├─ 파일명만 다르다            → config 한 줄 (§1)           ← 대부분 여기
+ ├─ 디렉토리 배치가 다르다      → config layout (§2)
+ ├─ 리포트 본문 줄이 다르다     → 정규식 몇 줄 (§4)
+ └─ 완전히 다른 도구다          → npz 직접 생성 (§6)
+```
+
 ---
 
-## 1. 파이프라인
+## 1. 파일 찾기 — `layout: flat` (이번 데이터)
 
-```
-raw 리포트 ──► dataset.npz ──►(자동)──► si_features.npz ──► 학습기
-   (텍스트)     [N 경로 ×            (보간된,                (base + 신경망)
-                C 코너]              누수 안전 SI)
-```
+코너가 전부 **파일명**에 들어있는 경우. 하위폴더가 몇 겹이든 재귀로 찾는다.
 
-`N` = 경로 수, `C` = 코너 수, `A` = 연속축 개수(2개: 전압 + BEOL/RC 또는
-전압 + 온도). **들어오는 방법은 두 가지:**
-
-- **(A) 번들 파서 재사용** (`si_model/parsing/build_dataset.py`,
-  `si_model/tasks/slew/build_slew.py`) — 리포트가 PrimeTime `report_timing` +
-  compact crosstalk면 **config만으로**(§3), 많아야 정규식 몇 개로 적응.
-- **(B) `dataset.npz`를 직접 생성** — 어떤 도구로든 §4의 **배열 계약**만 맞추면 됨.
-  엔진은 raw 텍스트를 다시 읽지 않고 npz만 읽어. 형식이 완전히 다를 때의 탈출구.
-
-### 1.1 형식을 전혀 모를 때 — 판단 트리
-
-핵심 사실 하나: **엔진은 raw 파일을 절대 직접 읽지 않는다. 항상 npz만 읽는다.**
-그래서 "파일 형식이 뭐든" 문제는 npz를 만드는 단계 하나로 좁혀지고, 그 단계는
-아래처럼 흡수된다:
-
-```
-새 데이터 도착 (형식/내용 미지)
- ├─ 열어보니 PrimeTime류 리포트다
- │     → config만: rc_corners + axes.levels + ref + data.patterns   (§3, 코드 0줄)
- ├─ 개념은 같은데 줄 모양/열이 다르다
- │     → annotated.py / crosstalk.py 정규식·열 인덱스 몇 줄          (§5, §8)
- └─ 완전히 다르다 / 알 수 없는 도구다
-       → 아무 스크립트로 §4의 npz 배열 계약만 충족                   (옵션 B)
-         → 그 뒤 build/train/평가는 전부 동일
+```yaml
+files:
+  layout: flat
+  subdir: ""              # 회로폴더 밑 하위경로. 비우면 회로폴더 전체 재귀 탐색
+  annotated_regex: auto   # 기본값. 아래 설명 참고
 ```
 
-### 1.2 형식과 무관한 최소 요구 "정보" (이건 우회 불가)
+### `auto` (기본) — 순서·대소문자에 안 휘둘린다
 
-파일이 어떻게 생겼든, 데이터가 **내용적으로** 담고 있어야 하는 것:
+파일명에서 **전압 / 레벨 / 온도 / 공정**을 각각 찾아낸다. 순서, 대소문자,
+구분자(`.` `_` `-`), 온도 뒤 `c` 유무에 전혀 영향받지 않는다. 아래가 전부 같은
+코너로 읽힌다:
 
-| 정보 | 필수? | 없으면 |
+```
+report.sspg_0p5000_125c_rcmax.rpt      기준
+report.sspg_0p5000_125_rcmax.rpt       온도에 c 없음
+report.sspg_0p5000_rcmax_125c.rpt      레벨/온도 순서 바뀜
+report.SSPG_0P5000_125C_RCMAX.rpt      전부 대문자
+report.sspg_0.5400_125c_rcmax.rpt      전압이 0.5400 형식
+sspg-0p5000-125c-rcmax.rpt             하이픈 구분자
+RCMAX.125.SSPG.0p5000.rpt              순서 완전히 뒤죽박죽
+report.sspg_0p5000_-25c_cmin.rpt       온도가 -25 (= m25)
+```
+
+구분 규칙은 두 가지뿐이다:
+
+- **전압은 소수점 표시(`p` 또는 `.`)가 반드시 있어야 한다** — 그래야 `125`(온도)와
+  안 헷갈린다. `0p5400` / `0.5400` / `v0p54` 전부 OK, 그냥 `550` 은 안 됨.
+- **레벨은 `temps[].levels` 에 적은 이름과 정확히 일치**해야 한다(대소문자 무시).
+  모르는 레벨이 든 파일은 조용히 건너뛴다.
+
+온도는 `data.temp` 와 일치하는 파일만 고른다 — 한 폴더에 온도가 섞여 있어도
+모델별로 알아서 갈린다. `m25` / `M25` / `-25` / `m25c` 는 전부 같은 값으로 본다.
+
+### 정규식을 직접 주는 경우
+
+파일명에 숫자가 잔뜩 섞여 `auto` 가 헷갈리거나, 코너를 더 엄격히 지정하고 싶으면:
+
+```yaml
+files:
+  annotated_regex: 'report\.(?P<proc>\w+)_(?P<v>0p\d+)_(?P<temp>m?\d+)c_(?P<level>\w+)\.'
+```
+
+이름있는 그룹의 역할 (대소문자는 무시된다):
+
+| 그룹 | 필수 | 역할 |
 |---|---|---|
-| 같은 경로 집합이 **여러 코너**(V × 2번째 축 그리드)에서 측정된 타이밍 값 | **필수** | 모델의 전제 자체가 성립 안 함 |
-| 각 측정의 코너 식별 (어떤 V, 어떤 레벨/온도인지) | **필수** | 그리드/축을 세울 수 없음 |
-| 경로 내부 stage 정보 (cell/net 체인) | 권장 | 인코더 입력이 빈약해짐 — 최소한의 배열로 대체 필요 |
-| 크로스토크/aggressor 정보 (delta, bump, 윈도우) | 선택 | SI branch 사용 불가 → SI 배열 0/빈 값 + `lambda_si: 0`로 base+attention만 (이 경로는 아직 실데이터 검증 전) |
+| `v` | **필수** | 전압 토큰. `0p5000` → 0.5 |
+| `level` | **필수** | BEOL 레벨. `temps[].levels` 와 대소문자 무시하고 매칭 |
+| `temp` | 선택 | 있으면 `temps[].token` 과 비교해 **필터**. 한 폴더에 온도가 섞여 있어도 모델별로 갈린다 |
+| `proc` | 선택 | 있으면 `corners.process` 와 비교해 **필터** |
 
----
+정규식은 `search` 라 파일명 전체를 맞출 필요가 없다. 뒤쪽이 불확실하면 `\.` 로
+끊어두는 게 안전하다 (확장자가 `.rpt` 든 `.rpt.gz` 든 걸린다).
 
-## 2. 레퍼런스 형식 (번들 파서가 기대하는 것)
+**생성되는 코너 라벨**은 `SSPG_0p5V_cmax` 형태로 **정규화**된다 — `0p5000` 이
+`0p5` 가 되는 이유. `ref_corner` 도 이 형태로 만들어지므로
+`ref_voltage: 0.6850` 은 `SSPG_0p685V_...` 가 된다.
 
-### 2.1 디렉토리 배치 (탐색)
+### 자주 나는 에러
 
-```
-<annotated_dir>/<LEVEL>/  saed..._tt<v>v<t>c_..._fixed_annotated.txt   # 전압당 1파일
-<crosstalk_dir>/<LEVEL>/  TT_<v>V_<temp>C.path_context_si_compact.by_path.rpt
-```
-
-`<LEVEL>` = 2번째 축 레벨 하위폴더 (기본 `Cmin/Cnom/Cmax`, 이름 자유 — §3 참고).
-한 `(sta, temp)` 모델은 한 온도의 파일을 모든 레벨에 걸쳐 읽어. 탐색은
-`discover()`에 있고, annotated와 crosstalk의 **코너 집합이 일치**하는지 검증(무결성
-체크 **I1**).
-
-### 2.2 annotated 리포트 (`annotated.py`)
-
-`### FIXED_PATH idx=<i> key=<start>-><end>` 블록마다 전체
-`report_timing -path_type full_clock_expanded -nets` 표. 파서가 뽑는 것:
-
-| 필드 | 매칭되는 줄 |
+| 메시지 | 뜻 |
 |---|---|
-| `slack` (라벨) | `slack (VIOLATED\|MET...) <num>` |
-| `arrival`, `required` | `data arrival time` / `data required time` |
-| `launch_clk`, `capture_clk` | `<start>/CK` / `<end>/CK` 의 클럭 arrival |
-| `lib_check_time` | `library (setup\|hold) time <incr> <path>` |
-| stage cell 행 | `<inst/pin> (<libcell>) [<-] <trans> <incr> <path> <r\|f>` |
-| stage net 행 | `<net> (net) <fanout> <cap> [<dist> <res> <cpin>]` |
+| `regex matched NO filenames` | 정규식이 아무것도 못 잡음 → `annotated_regex` 수정 |
+| `regex matched some filenames` | 정규식은 맞음. `process` / `temps[].token` / `temps[].levels` 중 하나가 실제 토큰과 불일치 |
+| `corner ... matched by more than one file` | 정규식이 헐렁하거나 탐색 범위가 넓음 → `subdir` 을 더 깊게 |
 
-14nm 특성 이미 처리됨: FF 클럭핀 `/CK`, launch→data 핸드오프는 `<start>/Q|/QN`
-정확 매칭(계층명 안전), net 행의 BEOL `Dist/Res/Cpin` 열,
-`slack (VIOLATED: increase significant digits)` 변형.
-
-### 2.3 crosstalk 리포트 (`crosstalk.py`)
-
-탭 구분, 경로당 14열, `### FIXED_PATH` + `# Slack:` 헤더. 열:
-
-```
-segment  victim_net  aggressor_net  crosstalk_delta  aggressor_bump
-n_aggressors  victim_load_pin  victim_min_arrival  victim_max_arrival
-aggr_driver_pin  aggr_min_arrival  aggr_max_arrival  aggr_slew_max  coupling_cap_ff
-```
-
-- `aggressor_net == "0"` → 이 코너에 ACTIVE aggressor 없음.
-- ACTIVE(`A`) aggressor당 1행; victim `crosstalk_delta`는 반복(net당 값이라
-  일치 검증 — 안 맞으면 파서가 에러).
-- setup dump = MAX 델타(+), hold dump = MIN 델타(−). 14nm hold는 `-min`으로
-  뽑혀서 두 체크 다 부호가 맞음.
+`bash scripts/run.sh recon` 이 실제 파일명과 코너 토큰 분포를 찍어주므로,
+거기 값을 그대로 옮겨 적으면 된다.
 
 ---
 
-## 3. CONFIG로 바꾸는 것 (코드 X) — 적응 3단계
+## 2. 파일 찾기 — `layout: levels`
 
-### 1단계 — 코너 **이름/값**이 다를 때 (가장 흔함)
+레벨이 **하위폴더**이고 파일명엔 전압만 있는 배치:
 
-BEOL/공정 코너가 `Cmin/Cnom/Cmax`가 아니면, 그냥 선언:
-
-```yaml
-data:
-  rc_corners: [Cbest, Ctyp, Cworst]        # 데이터의 레벨 하위폴더 이름
-base:
-  axes:
-    - {name: v,  ref: 0.75, order: 3}
-    - {name: rc, ref: 0, order: 2, levels: {Cbest: -1, Ctyp: 0, Cworst: 1}}
+```
+<annotated_dir>/cmax/   xxx_tt0p5000v_125c_...rpt
+                        xxx_tt0p5400v_125c_...rpt
+                rcmax/  ...
 ```
 
-`levels`가 각 이름을 축 좌표로 매핑. 전압은 파일명에서 나오고, `ref`가 축마다
-기준 코너 값을 지정. `levels`를 생략하면 내장 기본 `Cmin/Cnom/Cmax → -1/0/1` 사용.
-
-### 2단계 — **파일명 / 라벨 문자열**이 다를 때
-
-패턴을 덮어씀(기본값 표시):
-
 ```yaml
-data:
-  corner_prefix: TT                          # 코너 라벨/파일명의 공정 토큰
-                                             #   (다른 데이터에선 FFPG/SSPG 등)
-  patterns:
-    annotated_suffix: _fixed_annotated.txt   # 고를 파일 확장자
-    crosstalk_suffix: .by_path.rpt
-    voltage_regex: '_tt(0p\d+)v'             # 그룹1 = 전압 토큰, 예: 0p605
+files:
+  layout: levels
+  annotated_suffix: _fixed_annotated.txt   # 고를 파일 확장자
+  voltage_regex: '_tt(0p\d+)v'             # 그룹1 = 전압 토큰
+  crosstalk_suffix: .by_path.rpt
 ```
 
-코너 *라벨*(`<prefix>_<v>V_<level>`)은 `parse_corner`가 파싱 — `corner_prefix`
-(공정 토큰), 임의 `levels` 맵, 온도 형식 `<prefix>_<v>V_<m?NN>C` 전부 지원.
-**공정은 분리 차원**이므로 접두사가 여러 개(FFPG/SSPG/TT...)면 접두사마다 config
-하나(= 모델 하나).
-
-### 2.5단계 — 예시: "전부 다른" 딜리버러블 하나를 통째로
-
-접두사 FFPG, BEOL 이름 Cbest/Ctyp/Cworst, V 범위 0.5~0.65, 온도 125 하나,
-파일명도 다른 가상의 데이터라면 — config는 이게 전부:
-
-```yaml
-data:
-  annotated_dir: /data/vendorX/ffpg/125c/annotated     # 안에 Cbest/ Ctyp/ Cworst/
-  crosstalk_dir: /data/vendorX/ffpg/xtalk
-  temp: 125
-  corner_prefix: FFPG                                  # 라벨 = FFPG_0p55V_Ctyp ...
-  rc_corners: [Cbest, Ctyp, Cworst]
-  ref_corner: FFPG_0p65V_Ctyp
-  cache: cache/vendorX/ffpg_125/dataset.npz
-  patterns:
-    annotated_suffix: .timing.rpt                      # 그쪽 파일 확장자
-    voltage_regex: '_v(0p\d+)_'                        # 그쪽 전압 토큰 위치
-split:
-  seen_voltages: [0.5, 0.55, 0.6, 0.65]
-base:
-  axes:
-    - {name: v,  ref: 0.65, order: 3}                  # ref/범위 전부 그 데이터 기준
-    - {name: rc, ref: 0, order: 2, levels: {Cbest: -1, Ctyp: 0, Cworst: 1}}
-train:
-  out_dir: runs/vendorX/ffpg_125/v1
-```
-
-여기까지 **코드 0줄**. 리포트 **본문**의 줄 배치까지 다르면 §5(정규식 몇 줄) 또는
-§4(옵션 B: npz 직접 생성)로.
-
-### 3단계 — 온도를 분리모델이 아니라 **축**으로
-
-온도가 촘촘히 변해서 (분리모델이 아니라) 보간하고 싶으면(3nm 예시처럼):
-
-```yaml
-base:
-  axes:
-    - {name: v, ref: 0.7, order: 3}
-    - {name: t, ref: 25, order: 4, fit_scale: 100, token_scale: 100}   # dt = (T-25)/100
-```
-
-`fit_scale`은 피팅 전에 좌표를 나눔(`dt`를 O(1)로), `token_scale`은 신경망
-feature의 단위.
+폴더 이름은 `temps[].levels` 로 지정한 그대로여야 한다.
 
 ---
 
-## 4. 배열 계약 (옵션 B — `dataset.npz`를 직접 생성)
+## 3. 셀 이름 규칙 (SAED 가 아닌 라이브러리)
 
-리포트가 너무 달라서 번들 코드로 못 파싱하면, 아래 배열을 담은 `.npz`를
-생성하는 어떤 스크립트든 짜면 돼. 학습기는 이 배열들만 읽어. `N`=경로,
-`C`=코너, `L`=최대 stage 체인 길이, `S`=SI 스테이지, `A`=스테이지당 최대 aggressor.
+**에러는 안 난다.** 규칙에 안 걸리는 셀은 전부 `<unk>` 패밀리 + drive 1.0 으로
+학습된다 — 품질만 손해다. 확인부터:
 
-### 4.1 slack 모델 (`dataset.npz`)
+```bash
+python - <<'EOF'
+from collections import Counter
+from si_model.parsing.annotated import parse_annotated
+ann = parse_annotated("<리포트 하나>", with_stages=True)
+c = Counter(s.cell for p in ann.values() for s in p.stages if s.kind == "cell")
+for name, n in c.most_common(30): print("%6d  %s" % (n, name))
+EOF
+```
+
+예를 들어 이렇게 나온다면:
+
+```
+  1626  gt3_6t_inv_x1_rvt
+  1434  gt3_6t_buf_x1_rvt
+  1230  gt3_6t_buf_x12_rvt
+  1176  gt3_6t_dffasync_x1_rvt
+   734  gt3_6t_nand2_x1_rvt
+   670  gt3_6t_oai211_x1_rvt
+```
+
+`config.yaml` 에 이렇게 적는다:
+
+```yaml
+parsing:
+  cell_taxonomy:
+    strip_prefixes: [gt3_6t_, gt3_]      # 이름 앞에서 떼어낼 접두사
+    family_rules:                        # 첫 매치 승. 정규식, 대소문자 무시.
+      - ['^dff|^sdff|ff', DFF]
+      - ['^inv|^iv',      INV]
+      - ['^buf|^bf|^dly', BUF]
+      - ['^nand|^nd',     NAND]
+      - ['^nor|^nr',      NOR]
+      - ['^aoi',          AOI]
+      - ['^oai',          OAI]
+      - ['^ao',           AO]
+      - ['^oa',           OA]
+      - ['^xnor',         XNOR]
+      - ['^xor',          XOR]
+      - ['^mux',          MUX]
+    drive_regex: '_x(\d+)_'              # 그룹1 = 드라이브 강도. 대소문자 무시.
+```
+
+결과: `inv→INV`, `buf_x12→BUF drive 12`, `dffasync→DFF`, `oai211→OAI`, `nand2→NAND`.
+
+**순서가 중요하다** (첫 매치가 이긴다):
+`^aoi` 를 `^ao` 보다, `^xnor` 를 `^xor` 보다, `^nand` 를 `^nand|^nd` 안에서
+구체적인 것부터 위에 둔다.
+
+패밀리 이름은 **데이터 내부 라벨**일 뿐이라(어휘를 데이터에서 만든다) 규칙이
+*완전할* 필요는 없고 *일관되기만* 하면 된다. 처음엔 대충 분류해도 학습된다.
+
+### FF 핀 이름도 라이브러리마다 다르다
+
+```yaml
+parsing:
+  clock_pins: [CK, CLK, CP, C]      # FF 클럭핀.  SAED14=CK, gt3=CLK
+  ff_output_pins: [Q, QN, QB, Z]    # FF 출력핀. launch_clock -> data 전환 지점
+```
+
+안 적으면 위 후보를 순서대로 시도한다. **못 찾아도 에러가 아니라
+`launch_clk`/`capture_clk` 가 조용히 NaN 이 된다** — 실제로 gt3 데이터가 `/CLK`
+라서 294경로 전부 NaN 이었던 적이 있다. `run.sh check` 가 이 필드의 NaN 여부를
+찍어주므로 build 전에 확인할 것.
+
+### 경로 키의 `#번호`
+
+```yaml
+parsing:
+  strip_path_idx: auto     # auto | true | false
+```
+
+경로 키 `<start>-><end>#12` 의 `#12` 를 뗄지 여부다. 두 관행이 공존한다:
+
+- 코너마다 `report_timing` 을 따로 돌린 리포트 → 번호가 코너마다 제각각이라
+  **반드시 떼야** 한다(안 떼면 코너 간 join 이 붕괴).
+- `1_union.py` 처럼 고정경로 목록을 만들어 전 코너에서 재측정한 리포트 →
+  번호가 한 번 정해져 모든 코너에서 같고, **같은 FF 쌍의 서로 다른 경로를
+  구분하는 식별자**다. 떼면 병합된다(실측: 294 → 210).
+
+`auto` 는 떼봤을 때 중복이 생기면 식별자로 보고 유지한다. 판단 결과를
+`[KEYS] ...` 로 찍어주므로 build 로그에서 확인할 수 있다.
+
+## 4. 리포트 **본문**이 다를 때 — 코드를 고치는 유일한 지점
+
+`파싱된 경로가 0개` 에러가 나면 여기다. 고치는 파일은 3개뿐이고 각각 작다:
+
+| 파일 | 파싱하는 것 | 언제 |
+|---|---|---|
+| `si_model/parsing/annotated.py` | 타이밍 리포트 한 개의 줄 배치 | **1순위** |
+| `si_model/parsing/crosstalk.py` | 탭 14열 크로스토크 행 | 크로스토크 스키마가 다를 때 |
+| `si_model/parsing/build_dataset.py` 의 `cell_family`/`cell_drive` | 셀명 분류 | §3 로 안 될 때 |
+
+`annotated.py` 는 **상단 정규식들**이 줄 문법을 정의한다:
+
+| 정규식 | 잡는 줄 |
+|---|---|
+| `FIXED_PATH_RE` | `### FIXED_PATH idx=<i> key=<start>-><end>` — 경로 블록 구분자 |
+| `SLACK_RE` | `slack (VIOLATED\|MET) <num>` — **라벨** |
+| `ARRIVAL_RE` / `REQUIRED_RE` | `data arrival time` / `data required time` |
+| `CHECK_RE` | `library (setup\|hold) time <incr> <path>` |
+| `CELL_RE` | `<inst/pin> (<libcell>) [<-] <trans> <incr> <path> <r\|f>` |
+| `NET_RE` | `<net> (net) <fanout> <cap> [<dist> <res> <cpin>]` |
+
+예:
+
+```python
+# "Slack (MET): 0.123" 형식이면
+SLACK_RE = re.compile(r"^\s*Slack \((?:VIOLATED|MET)[^)]*\):\s+(-?\d+\.\d+)\s*$")
+# FF 클럭핀이 /CLK 이면 parse_annotated 안의 "/CK" 두 곳을 "/CLK" 로
+```
+
+고친 뒤 즉석 검증:
+
+```bash
+python - <<'EOF'
+from si_model.parsing.annotated import parse_annotated
+ann = parse_annotated("<리포트 하나>", with_stages=True)
+print(len(ann), "paths")
+p = next(iter(ann.values()))
+print("slack", p.slack, "| arrival", p.arrival, "| stages", len(p.stages))
+print("segments", {s.segment for s in p.stages})
+EOF
+```
+
+---
+
+## 5. ★ `### FIXED_PATH` 가 없을 때 — 진짜 질문은 "SSTA냐"가 아니다
+
+`### FIXED_PATH` 헤더는 *고정 경로 리스트를 모든 코너에서 다시 annotate 했다*는
+표시다. **중요한 건 헤더가 아니라 코너마다 경로 집합이 같은가** 이다.
+
+이 모델의 대전제가 "**같은 경로**를 여러 코너에서 관측했다" 이기 때문이다. 그냥
+`report_timing` 을 코너별로 돌린 거면 코너마다 worst path 가 달라서 경로가 안
+겹치고, 그러면 전제 자체가 깨진다 — 파서로 우회할 수 있는 문제가 아니다.
+
+**확인:**
+
+```bash
+cd <회로폴더>
+# ① 코너마다 경로 수가 같은가
+for f in report.sspg_*_125c_rcmax.rpt; do echo -n "$f : "; grep -c 'Startpoint' "$f"; done
+
+# ② 실제로 같은 경로들인가
+grep -E 'Startpoint|Endpoint' report.sspg_0p5000_125c_rcmax.rpt | head -20 > /tmp/a
+grep -E 'Startpoint|Endpoint' report.sspg_0p6850_125c_rcmax.rpt | head -20 > /tmp/b
+diff /tmp/a /tmp/b && echo "SAME (좋음)" || echo "DIFFERENT (재-annotate 필요)"
+```
+
+`run.sh recon` 도 ①을 찍어준다.
+
+| 결과 | 조치 |
+|---|---|
+| **같다** | 헤더만 없는 것. `Startpoint→Endpoint` 로 키를 만들고 등장 순서로 idx 를 매기는 모드를 `annotated.py` 에 추가하면 된다. 작은 수정 |
+| **다르다** | 고정 경로 리스트로 재-annotate 한 리포트가 필요하다. 옆 `pt_si_re/` 에 그 파이프라인이 있다 |
+| **SSTA 라 열이 더 붙음** | 우선 **nominal/mean 값만** 뽑아 기존 구조에 태울 것. sigma 예측은 그 다음 (새 task) |
+
+### 경로 키의 함정 (직접 파서를 짜도 반드시 지킬 것)
+
+경로 키는 `<start>-><end>_#<idx>` 모양인데, `#idx` 는 **리포트별 일련번호**이지
+경로 식별자가 아니다. `norm_path_key` 가 이걸 뗀다. 안 떼고 코너 간 join 하면
+공통 경로가 수천 개에서 몇 개로 붕괴한다.
+
+### 무결성 검사 (build 가 자동으로 함)
+
+| | 검사 |
+|---|---|
+| **I1** | annotated 와 crosstalk 의 코너 집합이 일치 |
+| **I2** | 모든 코너·두 소스에서 idx → 정규화 키 매핑이 동일 |
+| **I3** | 코너·경로마다 annotated slack == crosstalk 헤더 slack (5e-5 이내) |
+| **I4** | 중복 (segment, net) 행의 델타가 일치 (크로스토크 파서 내부) |
+
+---
+
+## 6. 크로스토크(SI) — 폴더·파일 구성
+
+### 어디에 두나
+
+```
+<root>/
+├── si_corner_model/
+├── boomcore/
+│   ├── report.sspg_0p5000_125c_rcmax.rpt          ← annotated (타이밍)
+│   ├── report.sspg_0p5000_125c_cmax.rpt
+│   └── xtalk/                                      ← 크로스토크는 여기
+│       ├── xt.sspg_0p5000_125c_rcmax.rpt
+│       └── xt.sspg_0p5000_125c_cmax.rpt
+├── fft/  ...
+└── aes/  ...
+```
+
+```yaml
+files:
+  crosstalk_subdir: xtalk     # <root>/<회로>/xtalk (그 아래 몇 겹이든 재귀)
+  crosstalk_regex: auto       # 파일명 규칙은 annotated 와 완전히 동일
+```
+
+### 같은 폴더에 둘 다 있는 배치 (`pt_si_re` 산출물)
+
+`pt_si_re` 는 코너마다 폴더 하나를 만들고 그 **안에 둘 다** 넣는다:
+
+```
+<root>/boomcore/round2/
+├── SSPG_0p5V_125C_rcmax/
+│   ├── SSPG_0p5V_125C_rcmax_fixed_annotated.txt          ← annotated
+│   ├── SSPG_0p5V_125C_rcmax.path_context_si_compact.by_path.rpt  ← crosstalk
+│   ├── corner_info.tcl  cpin.tsv  distres.tsv  ...       ← 중간 파일(무시됨)
+│   └── xtalk/
+└── SSPG_0p5V_125C_cmax/ ...
+```
+
+두 파일 다 코너 토큰을 갖고 있어 그대로는 "같은 코너가 두 파일에 매칭" 이 된다.
+**파일명으로 구분**해준다:
+
+```yaml
+files:
+  crosstalk_subdir: ""                     # 크로스토크도 같은 폴더
+  annotated_contains: _fixed_annotated     # 이 문자열이 있어야 annotated
+  crosstalk_contains: by_path              # 이 문자열이 있어야 crosstalk
+```
+
+**코너 이름(`corner_info.tcl` 의 `CI_CORNER`)에 전압·온도·BEOL 레벨이 모두 들어
+있어야 한다** — 파일명이 곧 코너 이름이므로 거기서 좌표를 읽는다. PT 플로우에서
+코너를 만들 때 `SSPG_0p5000V_125C_rcmax` 처럼 레벨까지 넣어 두면 그대로 파싱된다.
+
+검증됨: 실제 `pt_si_re/example/round2` 산출물로 build 성공
+(`N=294 C=6 S=3362 A=10`).
+
+- **회로 폴더 안 어디든** 된다. 이름만 알려주면 된다.
+- 이 폴더는 **annotated 탐색에서 자동 제외**되므로, 회로폴더 안에 두어도
+  "같은 코너가 두 파일에 매칭" 에러가 나지 않는다.
+- 파일명 접두사(`report.` / `xt.` / 아무거나)는 상관없다. **전압·온도·레벨
+  토큰만** 있으면 되고 순서·대소문자도 무관하다(§1 `auto`).
+- **annotated 와 코너 집합이 정확히 일치**해야 한다. 하나라도 어긋나면
+  `I1: corner sets differ` 로 멈춘다.
+- 위치를 모르면 `crosstalk_subdir: null` — SI 없이 학습된다. 나중에 두 줄만
+  채우고 `run.sh build` 다시 하면 켜진다.
+
+### 파일 내용 — 탭 14열
+
+```
+### FIXED_PATH idx=1 key=<start>-><end>#1
+# Slack: VIOLATED -0.054488
+data⇥n_0_0⇥agg_0_0⇥0.0078⇥0.023⇥2⇥u_c/g0/A⇥1.0000⇥1.2000⇥u_d/h0/Y⇥0.95⇥1.15⇥0.03⇥0.8
+```
+
+| # | 열 | # | 열 |
+|---|---|---|---|
+| 0 | segment (`launch_clock`/`data`/`capture_clock`) | 7 | victim min arrival |
+| 1 | victim net | 8 | victim max arrival |
+| 2 | aggressor net (`0` = 활성 aggressor 없음) | 9 | aggressor driver pin |
+| 3 | crosstalk delta | 10 | aggressor min arrival |
+| 4 | aggressor bump (**이미 /VDD 된 비율**) | 11 | aggressor max arrival |
+| 5 | aggressor 수 | 12 | aggressor slew |
+| 6 | victim load pin | 13 | coupling cap (fF) |
+
+- **ACTIVE aggressor 당 한 줄.** victim 의 `crosstalk_delta` 는 그 줄들에 반복되며
+  (net 당 값이라) 파서가 일치 검증한다.
+- `### FIXED_PATH` 의 idx·key 와 `# Slack:` 값이 annotated 와 **같아야** 한다
+  (I2/I3). `# Slack: VIOLATED -0.054` 처럼 앞에 상태가 붙어도 된다(마지막 토큰을 읽음).
+- 지수 표기(`2.2e-05`) 가능.
+- **setup dump = MAX(+) 델타, hold = MIN(−) 델타.** hold 인데 `-min` 없이 뽑으면
+  **에러 없이 조용히 틀린다.** `report_delay_calculation -crosstalk -min` 확인.
+- 열 구성이 다르면 `crosstalk.py` 의 `!= 14` 검사와 `t[i]` 인덱스를 고친다.
+
+### 무엇이 SI feature 가 되나
+
+단위는 경로가 아니라 **스테이지 = (경로, 세그먼트, victim net)** 이다. 학습에는
+`launch_clock` + `data` 만 쓴다(`capture_clock` 은 MIN 방향 델타가 필요한데 이
+dump 엔 없다). aggressor 가 하나도 없는 arc 는 스테이지로 만들지 않는다.
+
+aggressor 는 코너마다 활성/비활성이 바뀌어 값이 비는데, `features/si_features.py`
+가 (a) 전 코너 활성 aggressor 의 **합집합**을 후보로 잡고 (b) 값이 있는 seen 코너로
+저차 다항식을 피팅해 (anchor ≥8이면 2차, ≥4면 1차, 그 미만은 평균) 아무 코너에서나
+평가하며 (c) **overlap 은 직접 보간하지 않고** 윈도우 끝점을 보간한 뒤 다시 계산하고
+(d) seen 코너에서는 자기 자신을 뺀 LOO 값으로 대체한다(누수 방지).
+
+## 7. 탈출구 — `dataset.npz` 를 직접 만든다
+
+텍스트 파서로 감당이 안 되면, 아무 스크립트로든 아래 배열을 담은 `.npz` 를
+`cache/<design>/<temp>/dataset.npz` 에 만들면 된다. 그 뒤 단계
+(`base`/`train`/`predict`/`merge`)는 전부 동일하다.
+
+`N`=경로, `C`=코너, `L`=최대 stage 체인 길이, `S`=SI 스테이지, `A`=스테이지당 최대 aggressor.
 
 **코너 그리드**
+
 | 키 | shape / dtype | 의미 |
 |---|---|---|
-| `corners` | `[C]` str | 라벨, 예: `TT_0p65V_Cnom` |
-| `vt` | `[C,2]` f32 | 코너별 `(전압, 레벨값)` |
-| `measured` | `[C]` bool (선택) | False = 측정 없는 **순수 추론 코너**(`data.query_corners`가 자동 생성; 직접 npz를 만들 때도 NaN 측정 + False로 두면 예측만 출력됨). 생략 시 전부 True |
+| `corners` | `[C]` str | 라벨, 예 `SSPG_0p5V_cmax` |
+| `vt` | `[C,2]` f32 | 코너별 (전압, 레벨값) |
+| `measured` | `[C]` bool (선택) | False = 순수 추론 코너. 생략 시 전부 True |
 
-**경로×코너 스칼라** (전부 `[N,C]` f32, 단위 없는 것 빼고 **ns**)
+**경로×코너 스칼라** — 전부 `[N,C]` f32, 단위 **ns**
 `slack`(라벨, SI 포함), `si_label`(Σ 크로스토크 델타), `arrival`, `required`,
 `launch_clk`, `capture_clk`, `lib_check_time`.
 
-**경로 식별 / 인코더 옆입력**
+**경로 식별 / 인코더 입력**
+
 | 키 | shape | 의미 |
 |---|---|---|
-| `path_keys` | `[N]` str | 정규화된 경로 키 |
+| `path_keys` | `[N]` str | 정규화된 경로 키 (코너 간 join 키) |
 | `path_idx` | `[N]` i32 | 원본 리포트 idx |
 | `path_sig` | `[N,27]` f32 | 세그먼트별 경로 시그니처 |
 | `sig_names` | `[27]` str | 그 열 이름 |
 | `node_fam` | `[N,L]` i16 | ref 코너 stage 체인 패밀리 id |
-| `node_feat` | `[N,L,9]` f32 | 노드별 feature (열 5 = critical 마커) |
-| `edge_feat` | `[N,L-1,5]` f32 | 엣지별 feature (cap,fanout,res,dist,cpin) |
-| `node_mask` | `[N,L]` bool | 유효 stage 체인 노드 |
+| `node_feat` | `[N,L,9]` f32 | 노드 feature (열 5 = critical 마커) |
+| `edge_feat` | `[N,L-1,5]` f32 | 엣지 feature (cap, fanout, res, dist, cpin) |
+| `node_mask` | `[N,L]` bool | 유효 노드 |
 | `fam_vocab` | `[V]` str | 패밀리 어휘 (인덱스 0 = `<pad>`) |
-| `node_feat_names`,`edge_feat_names` | str | 열 이름 |
+| `node_feat_names`, `edge_feat_names` | str | 열 이름 |
 
-**SI-branch 입력** (SI 스테이지별)
+**SI branch 입력** — SI 자료가 없으면 `S=0`, `A=1` 로 두면 된다
+
 | 키 | shape | 의미 |
 |---|---|---|
 | `stage_path` | `[S]` i32 | 스테이지 → 경로 인덱스 |
@@ -223,157 +444,13 @@ feature의 단위.
 | `vwin` | `[S,C,2]` f32 | victim (min,max) arrival 윈도우, ns |
 | `arc_delta` | `[S,C]` f32 | victim 크로스토크 델타, ns |
 | `abump` | `[S,A,C]` f32 | aggressor bump 비율 (이미 /VDD) |
-| `awin` | `[S,A,C,2]` f32 | aggressor (min,max) arrival 윈도우, ns |
+| `awin` | `[S,A,C,2]` f32 | aggressor (min,max) 윈도우, ns |
 | `aslew` | `[S,A,C]` f32 | aggressor slew, ns |
-| `acc` | `[S,A]` f32 | 커플링 cap (V/RC 무관) |
+| `acc` | `[S,A]` f32 | 커플링 cap (V/BEOL 무관) |
 
-없는 항목은 `NaN`(예: 어떤 코너에서 비활성 aggressor); feature 단계가 보간하고
-마스킹함. `si_features.npz`는 자동 생성.
+없는 값은 `NaN` (예: 어떤 코너에서 비활성인 aggressor) — feature 단계가 보간하고
+마스킹한다. `si_features.npz` 는 첫 학습 때 자동 생성된다.
 
-### 4.2 slew 모델 (`slew.npz`)
-
-더 작음: `corners`, `vt`, `path_keys`, `path_idx`, `slew` `[N,C]`(ns, 라벨),
-`cap` `[N,C]`(학습 안 함, 이웃에서 가져옴), 그리고 동일한 인코더 배열
-(`path_sig`, `sig_names`, `node_fam`, `node_feat`, `edge_feat`, `node_mask`,
-`fam_vocab`, `node_feat_names`, `edge_feat_names`). SI/crosstalk 배열 없음.
-
----
-
-## 5. 코드로 손대는 지점 (옵션 A 정규식으로 부족할 때만)
-
-어떤 config도 임의의 텍스트 형식을 파싱할 순 없어. 코드를 고치는 곳은 **오직
-이 3곳**이고, 각각 작고 독립적:
-
-| 파일 | 파싱하는 것 | 언제 고치나 |
-|---|---|---|
-| `si_model/parsing/annotated.py` | 타이밍 리포트 한 개의 줄 배치 | 리포트 열/키워드가 다를 때 |
-| `si_model/parsing/crosstalk.py` | 14열 crosstalk 행 | crosstalk dump 스키마가 다를 때 |
-| `si_model/parsing/build_dataset.py` → `cell_family`,`cell_drive` | 셀명 → 함수 패밀리 / 드라이브 | 비-SAED14 표준셀 라이브러리 |
-
-`cell_family`는 인코더의 패밀리 임베딩만 먹임; 모르는 셀은 `<unk>`로 매핑되고도
-학습됨 — 처음엔 대충 분류해도 됨.
-
----
-
-## 6. 코너 키 & 무결성 체크 (건너뛰지 말 것)
-
-- **`#idx` 함정.** 경로 키는 `<start>-><end>_#<idx>` 모양. `#idx`는 리포트별
-  일련번호일 뿐 **식별자 아님**. `norm_path_key`가 이걸 떼. 원본 키로 정렬하면
-  공통 경로 ~2758개가 ~8개로 붕괴. 직접 짠 파서도 코너간 join 전에 똑같이 떼야 함.
-- **I1** (`discover`): annotated와 crosstalk 코너 집합이 일치해야 함.
-- **I2/I3** (`build`): 두 소스가 idx→key 매핑과 (경로,코너)별 `slack`에 대해
-  5e-5 이내로 일치해야 함. 직접 짠 빌더가 이걸 assert 못 하면, 최소한 코너간
-  키가 맞는지는 검증해.
-
----
-
-## 7. 새 딜리버러블 적응 — 빠른 레시피
-
-1. **리포트를 봐.** PrimeTime `report_timing -nets` + compact crosstalk?
-   → 옵션 A. 다른 거? → 옵션 B (§4).
-2. **config를 디렉토리에 겨눔**, `rc_corners`를 레벨 폴더명으로, `axes[1].levels`를
-   그 좌표로, `ref` 코너 설정.
-3. **빌드 시도:** `bash scripts/build.sh configs/<너>/<모델>.yaml`.
-   - "no corners discovered" → `patterns.voltage_regex` / suffix 수정.
-   - "corner sets differ" (I1) → annotated vs crosstalk 폴더 불일치.
-4. **본문 파싱이 깨지면**, `annotated.py`/`crosstalk.py` 정규식 조정(§5), 아니면
-   옵션 B로 전환해 npz 직접 생성.
-5. **점검:** 출력된 `N`, `C`, `S`, `A`와 짧은 학습의 base-only hidden MAE.
-
----
-
-## 8. 코드 맵 — 어느 파일이 무엇을, 함수별로
-
-전체 파싱 경로를 위에서 아래로. 함수마다: 무엇을 하는지, 그리고 **[수정]** =
-데이터가 다를 때 손대는 곳(아니면 그대로).
-
-### `si_model/parsing/keys.py` — 코너 & 경로 키 헬퍼 (파일 I/O 없음)
-
-| 함수 | 하는 일 | 새 데이터에 수정? |
-|---|---|---|
-| `RC_VAL`, `RC_NAMES`, `TEMP_MAP` | 기본 BEOL/온도 이름→값 맵 | 아니오 — config `axes.levels`로 덮음 |
-| `norm_path_key(key)` | `_#<idx>` / `#<idx>` 일련번호를 떼 코너간 매칭 | **[수정]** idx 접미사가 다를 때만 |
-| `volt_to_float` / `volt_to_tok` | `0p605` ↔ `0.605` | **[수정]** 전압이 `0p<숫자>`가 아닐 때 |
-| `parse_voltage_from_annotated(fname, regex)` | annotated 파일명에서 전압 추출 | 수정 대신 `data.patterns.voltage_regex` 전달 |
-| `parse_xt_name(fname)` | crosstalk 파일명 → `(전압, 온도토큰)` | **[수정]** crosstalk 파일명이 다를 때 |
-| `corner_label(v, axis1)` | 표준 `TT_<v>V_<level>` 문자열 생성 | 드묾 |
-| `parse_corner(label, levels)` | 라벨 → `(전압, 레벨값)`; config `levels` 사용, RC→온도 폴백 | 아니오 — config에서 `levels` 공급 |
-
-### `si_model/parsing/annotated.py` — 타이밍 리포트 본문
-
-- **상단 정규식들** (`FIXED_PATH_RE`, `SLACK_RE`, `ARRIVAL_RE`, `REQUIRED_RE`,
-  `CHECK_RE`, `CELL_RE`, `NET_RE`)이 줄 문법을 정의.
-  **[수정] 리포트 형식이 다를 때 1순위로 고치는 곳.**
-- `Stage` / `AnnotatedPath` 데이터클래스 = 스테이지별/경로별 추출 필드.
-- `parse_annotated(fp, with_stages)` = 줄 루프: `### FIXED_PATH` 블록 분리,
-  launch_clock→data→capture_clock 세그먼트 추적,
-  `slack, arrival, required, launch_clk, capture_clk, lib_check_time`(+ `with_stages`면
-  cell/net `stages`) 채움. `{idx: AnnotatedPath}` 반환.
-- 산출(경로당): 라벨 `slack` + 스칼라들 + 인코더 입력이 되는 ref 코너 stage 체인.
-
-### `si_model/parsing/crosstalk.py` — crosstalk 리포트 본문
-
-- 행 스키마 = **14 탭 구분 열** (파일 헤더에 문서화됨).
-  **[수정]** dump가 다르면 `parse_crosstalk`의 열 인덱스.
-- `Aggressor` / `VictimArc` / `CrosstalkPath` 데이터클래스가 파싱된 행 보관.
-- `CrosstalkPath.si_total()` = 경로별 SI 델타(launch+data 유니크 arc 델타 합) →
-  `si_label`이 됨.
-- `parse_crosstalk(fp)`는 `{idx: CrosstalkPath}` 반환; 반복 victim 델타 일관성 검증.
-
-### `si_model/parsing/build_dataset.py` — `dataset.npz` 조립 (총괄)
-
-이게 네가 실행하는 파일(`python -m si_model.parsing.build_dataset`). 순서:
-
-1. `load_config(fp)` → `_defaults.yaml` 병합.
-2. `corner_levels(cfg)` → 2번째 축 이름→값 맵 (`axes.levels`, RC 폴백).
-   **config 주도; 수정 불필요.**
-3. `discover(cfg)` → `<annotated_dir>/<level>`, `<crosstalk_dir>/<level>` 순회,
-   파일을 코너 라벨에 매칭, 두 집합 일치 assert(**I1**). 레벨 폴더명은
-   `data.rc_corners`, 파일 suffix+전압 정규식은 `data.patterns`.
-   **[수정]** 디렉토리 배치가 특이할 때만.
-4. `cell_family(cell)` / `cell_drive(cell)` → SAED14 셀명 → 함수 패밀리 + 드라이브
-   강도(인코더 feature). **[수정] 비-SAED 라이브러리.** 모르는 셀 → `<unk>`, 학습은 됨.
-5. `path_signature(stages)` → 27차 세그먼트별 경로 요약(`path_sig`).
-6. `stage_sequence(stages)` → 인코더가 먹는 ref 코너 cell/net 체인
-   (`node_fam`, `node_feat`, `edge_feat`).
-7. `build(cfg)` → 메인 루프: 코너마다 annotated(+crosstalk) 읽고, 정규화 키로
-   경로 정렬, slack 일치 검사(**I2/I3**), `[N,C]` 스칼라 배열 + SI 스테이지 배열
-   조립, `np.savez_compressed`로 `data.cache`에 저장. `N C S A` 출력.
-
-### `si_model/tasks/slew/build_slew.py` — `slew.npz` 조립
-
-build_dataset과 같은 모양이지만 **annotated만**(crosstalk 없음):
-`discover`(레벨 폴더), `slew_cap_of(path)`(파싱된 스테이지에서 launch slew +
-endpoint cap), `build` → `slew`, `cap`, 인코더 배열 저장.
-
-### `si_model/features/si_features.py` — `dataset.npz` → `si_features.npz`
-
-`build_si_features(ds, phi, seen)`가 aggressor bump/윈도우/slew를 코너 전체로
-보간(seen 코너에서 누수 안전 LOO)하고 overlap 계산. 파일 없으면 첫 학습 때
-**자동 실행**; 직접 부르지 않고 거의 수정 안 함.
-
-### `si_model/config.py` — 파싱 관련 config 헬퍼
-
-`load_config`(기본 병합), `axis_levels`(BEOL/공정 레벨 맵),
-`fit_scales`/`token_scales`(축 좌표 스케일). `expand_terms`는 OLS 기저를
-만들지만 파싱과는 무관.
-
----
-
-## 9. "내 데이터가 다르면 정확히 여기만" — 치트시트
-
-| 내 데이터가 ...가 다르면 | 바꿀 것 (config 먼저, 코드 최후) |
-|---|---|
-| BEOL/공정 **레벨 이름·값** | `data.rc_corners` + `axes[1].levels` |
-| **전압/ref** 지점 | `split.seen_voltages` + `axes[].ref` |
-| **온도** 처리 | 분리 → 모델마다 `data.temp`; 축 → `t` 축 추가 |
-| **공정 코너 접두사** (TT가 아니라 FFPG/SSPG 등) | `data.corner_prefix` (+ `ref_corner`도 그 접두사로); 접두사마다 config 하나 |
-| **파일명**(suffix/전압 토큰) | `data.patterns.{annotated_suffix, crosstalk_suffix, voltage_regex}` |
-| **타이밍 리포트 본문**(열/키워드) | `annotated.py`의 정규식 |
-| **crosstalk dump** 스키마 | `crosstalk.py`의 열 인덱스 |
-| **표준셀 라이브러리** | `build_dataset.py`의 `cell_family` / `cell_drive` |
-| **완전히 다른 도구** | 텍스트 파서 건너뛰고 §4대로 `dataset.npz` 직접 생성 |
-
-새 데이터셋 실행 순서:
-`build.sh <config>` → (처음) `train.sh <config>`가 `si_features.npz` 자동 빌드 →
-`runs/.../summary.json` 확인. 전체 명령어 레퍼런스는 [USAGE.md](USAGE.md).
+**`task: slew` 는 더 작다**: `corners`, `vt`, `path_keys`, `path_idx`,
+`slew` `[N,C]`(ns, 라벨), `cap` `[N,C]`, 그리고 위와 동일한 인코더 배열.
+SI/크로스토크 배열 없음.

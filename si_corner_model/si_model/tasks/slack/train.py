@@ -1,6 +1,6 @@
 """Slack training CLI (setup / hold).
 
-    python -m si_model.tasks.slack.train --config configs/beol14/setup_m40.yaml [--lambda-si 1.0]
+    bash scripts/run.sh train [--design <회로>] [--temp <온도>]
 
 Scheme: all-seen leave-one-out. A training sample is (path, seen corner c); the
 model sees the other seen corners as tokens (LOO fold) and predicts the residual
@@ -17,8 +17,6 @@ unaffected.
 There is no per-stage cell/net delay head (dropped in the unified engine): the
 model is OLS base + gated (attention correction + SI-deviation branch).
 """
-from __future__ import annotations
-
 import argparse
 import json
 import math
@@ -28,6 +26,7 @@ import sys
 import numpy as np
 import torch
 
+from si_model.compat import load_checkpoint
 from si_model.config import gap_caps, load_config, token_scales
 from si_model.features.si_features import build_si_features
 from si_model.model.path_encoder import PathEncoder
@@ -66,7 +65,7 @@ def standardize(x: np.ndarray, axis=None, eps=1e-8):
 
 
 class Trainer:
-    def __init__(self, cfg: dict, lambda_si: float | None = None):
+    def __init__(self, cfg: dict, lambda_si: "float | None" = None):
         self.cfg = cfg
         if lambda_si is not None:
             cfg["train"]["lambda_si"] = lambda_si
@@ -94,6 +93,12 @@ class Trainer:
             np.savez_compressed(sf_fp, **sf)
         self.N, self.C = ds["slack"].shape
         self._prep_tensors(sf)
+        # Seed BEFORE building the model: weight init draws from the torch RNG,
+        # so seeding only inside run() left every run with different initial
+        # weights -- two identical-input runs then reported different losses,
+        # which makes any A/B comparison (leakage checks, ablations, ensembles
+        # sharing a path split) meaningless.
+        torch.manual_seed(int(cfg["train"].get("seed", 42)))
         self._prep_model()
         self._prep_splits()
 
@@ -116,8 +121,14 @@ class Trainer:
         raw = np.stack([ds["slack"], ds["si_label"], ds["arrival"],
                         ds["required"], ds["launch_clk"], ds["capture_clk"],
                         ds["lib_check_time"], self.base.resid], -1)       # [N,C,8]
-        self.tok_mu = raw[:, sp.seen_idx].mean((0, 1))
-        self.tok_sd = raw[:, sp.seen_idx].std((0, 1)) + 1e-8
+        # nan-safe: a deliverable may not report some field at all (e.g. no
+        # 'library setup time' row). That channel stays NaN and is zeroed below;
+        # using plain mean/std would make ITS statistics NaN and silently zero
+        # the channel for every path instead of just the missing entries.
+        self.tok_mu = np.nanmean(raw[:, sp.seen_idx], axis=(0, 1))
+        self.tok_sd = np.nanstd(raw[:, sp.seen_idx], axis=(0, 1)) + 1e-8
+        self.tok_mu = np.nan_to_num(self.tok_mu)
+        self.tok_sd = np.where(np.isfinite(self.tok_sd), self.tok_sd, 1.0)
         tok = (raw - self.tok_mu) / self.tok_sd
         tok = np.concatenate([tok, np.broadcast_to(
             self.dvdt.cpu().numpy()[None], (self.N, self.C, self.A))], -1)
@@ -170,7 +181,14 @@ class Trainer:
         feats = np.nan_to_num(feats)
         pres = sf["present"]
         m = feats[:, :, self.split.seen_idx][pres].reshape(-1, 5)
-        mu, sd = m.mean(0), m.std(0) + 1e-8
+        # an SI-free dataset (no crosstalk drop) has zero stages -> nothing to
+        # standardize against; leave the (empty) features untouched.
+        self.has_si = m.size > 0
+        if not self.has_si:
+            print("[SI] dataset has no crosstalk stages -- SI branch disabled "
+                  "(lambda_si forced to 0); model = OLS base + attention.", flush=True)
+        mu, sd = ((m.mean(0), m.std(0) + 1e-8) if self.has_si
+                  else (np.zeros(5, np.float32), np.ones(5, np.float32)))
         self.si_x = t((feats - mu) / sd)                              # [S,A_agg,C,5]
         self.si_awin = t(sf["awin_hat"])                              # [S,A_agg,C,2]
         self.si_vwin = t(sf["vwin_hat"])                              # [S,C,2]
@@ -337,7 +355,7 @@ class Trainer:
         torch.manual_seed(tcfg["seed"])
         rng = np.random.RandomState(tcfg["seed"])
         bs = tcfg["batch_paths"]
-        lam = tcfg["lambda_si"]
+        lam = tcfg["lambda_si"] if self.has_si else 0.0
         best = (float("inf"), -1)
 
         # SI worst-instant sweep annealing: soft->hard over training.
@@ -392,7 +410,7 @@ class Trainer:
                       f"| val-hidden {hid['mae'].mean():6.2f}ps"
                       f" lr={lr_:.1e}{tag}", flush=True)
 
-        ck = torch.load(f"{out_dir}/best.pt", map_location=self.dev, weights_only=False)
+        ck = load_checkpoint(f"{out_dir}/best.pt", map_location=self.dev)
         self.model.load_state_dict(ck["model"]); self.enc.load_state_dict(ck["enc"])
         return self.report(out_dir, ck["epoch"])
 
@@ -427,7 +445,7 @@ class Trainer:
         Writes ``predictions_<tag>.csv`` and ``.npz`` (path_keys, corners,
         truth_ps, model_ps). The OLS base is never reported anywhere -- to
         inspect base-only quality use the standalone
-        ``python -m si_model.training.base_check``. Default corners = hidden;
+        ``bash scripts/run.sh base``. Default corners = hidden;
         at SEEN corners the target's own token is masked (LOO-style).
         """
         self.model.eval(); self.enc.eval()
@@ -480,7 +498,8 @@ class Trainer:
             name: {"hidden_mae_ps": float(r["mae"].mean()),
                    "hidden_worst_ps": float(r["mae"].max())}
             for name, r in rows.items()}
-        summary["lambda_si"] = self.cfg["train"]["lambda_si"]
+        summary["lambda_si"] = (self.cfg["train"]["lambda_si"] if self.has_si else 0.0)
+        summary["si_branch"] = bool(self.has_si)
         summary["enc_blocks"] = self.cfg["model"].get("enc_blocks", 3)
         summary["best_epoch"] = best_ep + 1
         for name in ("train", "val", "test", "all"):

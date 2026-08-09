@@ -12,6 +12,7 @@ runs/
 *.pt
 *.log
 *.summary.json
+recon_out.txt
 
 # local envs / editors
 .venv/

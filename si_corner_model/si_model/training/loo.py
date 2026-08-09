@@ -4,8 +4,6 @@ The corner grid is (voltage, second-axis); the second axis is RC or temperature
 (see parsing/keys.py). The OLS basis and its fit mode come from the config via
 ``config.expand_terms`` and ``base.weighting`` -- this module is axis-agnostic.
 """
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import numpy as np
@@ -18,7 +16,7 @@ from si_model.parsing.keys import RC_VAL
 
 @dataclass
 class Split:
-    corners: list[str]
+    corners: "list[str]"
     vt: np.ndarray            # [C, 2] = (voltage, axis1_val)
     seen: np.ndarray          # [C] bool
     hidden: np.ndarray        # [C] bool
@@ -33,18 +31,73 @@ class Split:
         return np.where(self.hidden)[0]
 
 
+def _level_map(cfg: dict) -> dict:
+    """Level NAME -> axis coordinate, from ``base.axes[1].levels`` when the
+    config declares one (any vendor naming), else the built-in RC map."""
+    try:
+        lv = axes(cfg)[1].get("levels")
+    except (KeyError, IndexError):
+        lv = None
+    return {str(k): float(v) for k, v in lv.items()} if lv else dict(RC_VAL)
+
+
+# Corner coordinates are stored in the cache as float32, so a declared 0.54 comes
+# back as 0.54000002. Any tolerance tighter than float32 resolution (~1.2e-7 near
+# 0.5) can therefore NEVER match, which is how `hidden_voltages: [0.54]` used to
+# select nothing at all and leave the split with no hidden corners. Grid spacings
+# here are ~1e-2 V and ~1 level, so 1e-5 is far below any real gap while sitting
+# comfortably above float32 noise.
+_TOL = 1e-5
+
+
+def _near(a, b) -> bool:
+    return abs(float(a) - float(b)) < _TOL
+
+
 def _hidden_axis1_values(cfg: dict) -> set:
-    """Second-axis levels to hold out, from any of ``hidden_axis1`` (values or
-    RC names), ``hidden_rc`` (RC names), or ``hidden_temps`` (temperatures)."""
+    """Second-axis levels to hold out, from any of ``hidden_axis1``,
+    ``hidden_rc``/``hidden_levels`` (level NAMES or raw values), or
+    ``hidden_temps`` (temperatures).
+
+    Names are resolved through the config's own ``levels`` map, so a vendor
+    naming like ``cmin``/``rcmax`` works -- previously only the built-in
+    ``Cmin``/``Cnom``/``Cmax`` did, and anything else raised a bare
+    ``could not convert string to float``.
+    """
+    lv = _level_map(cfg)
     out = set()
-    for key in ("hidden_axis1", "hidden_rc", "hidden_temps"):
-        for r in cfg["split"].get(key, []):
-            out.add(RC_VAL[r] if isinstance(r, str) and r in RC_VAL else float(r))
+    for key in ("hidden_axis1", "hidden_rc", "hidden_levels", "hidden_temps"):
+        for r in cfg["split"].get(key) or []:
+            if isinstance(r, str):
+                assert r in lv, (
+                    f"split.{key}: unknown level {r!r}; known levels = {sorted(lv)} "
+                    f"(declare it in the config's level map)")
+                out.add(lv[r])
+            else:
+                out.add(float(r))
+    return out
+
+
+def _hidden_corner_pairs(cfg: dict) -> list:
+    """Individually named corners to hold out: ``[[0.6, cmax], [0.54, rcmax]]``.
+
+    Lets a specific (voltage, level) cell be hidden without hiding its whole row
+    or column -- the finest-grained holdout, useful when the grid is small and
+    dropping an entire voltage would cost too many anchors."""
+    lv = _level_map(cfg)
+    out = []
+    for pair in cfg["split"].get("hidden_corners") or []:
+        assert len(pair) == 2, f"split.hidden_corners entry must be [voltage, level]: {pair!r}"
+        v, a = pair
+        if isinstance(a, str):
+            assert a in lv, f"split.hidden_corners: unknown level {a!r}; known = {sorted(lv)}"
+            a = lv[a]
+        out.append((float(v), float(a)))
     return out
 
 
 def make_split(corners, vt: np.ndarray, cfg: dict,
-               measured: np.ndarray | None = None) -> Split:
+               measured: "np.ndarray | None" = None) -> Split:
     """Seen/hidden corner split.
 
     Voltage rule (pick one):
@@ -57,25 +110,42 @@ def make_split(corners, vt: np.ndarray, cfg: dict,
     is always hidden -- it can never be an input.
     """
     sv = cfg["split"].get("seen_voltages")
-    hv = set(cfg["split"].get("hidden_voltages", []))
+    hv = set(cfg["split"].get("hidden_voltages") or [])
     h1 = _hidden_axis1_values(cfg)
+    hc = _hidden_corner_pairs(cfg)
 
     def v_hidden(v: float) -> bool:
-        if sv is not None:                       # hidden = off the seen V grid
-            return not any(abs(v - x) < 1e-6 for x in sv)
-        return any(abs(v - x) < 1e-9 for x in hv)
+        if sv:                                   # hidden = off the seen V grid
+            return not any(_near(v, x) for x in sv)
+        return any(_near(v, x) for x in hv)
 
     hidden = np.array([
-        v_hidden(v) or any(abs(a - x) < 1e-9 for x in h1)
+        v_hidden(v)
+        or any(_near(a, x) for x in h1)
+        or any(_near(v, hvv) and _near(a, hav) for hvv, hav in hc)
         for v, a in vt
     ])
     if measured is not None:
         hidden |= ~np.asarray(measured, bool)    # query corners: never seen
     ref = cfg["data"]["ref_corner"]
     names = list(corners)
+    assert ref in names, (f"ref corner {ref} not in the discovered grid; "
+                          f"first few = {names[:4]}")
     ref_ci = names.index(ref)
     assert not hidden[ref_ci], f"ref corner {ref} must be seen"
-    assert hidden.any() and (~hidden).sum() >= 8, "degenerate split"
+    # `min_seen` guards against fitting a polynomial on too few anchors. The
+    # default (8) suits the dense reference grids; a small deliverable (e.g.
+    # 4 V x 2 BEOL = 8 corners) must lower it CONSCIOUSLY in config and shrink
+    # the basis order to match -- see docs/COMPANY.md.
+    min_seen = int(cfg["split"].get("min_seen", 8))
+    n_seen = int((~hidden).sum())
+    assert hidden.any(), ("degenerate split: no hidden corners -- give split a "
+                          "holdout (hidden_voltages / seen_voltages) or add "
+                          "data.query_corners for pure inference")
+    assert n_seen >= min_seen, (
+        f"degenerate split: {n_seen} seen corners < min_seen={min_seen}. "
+        f"Widen the split, or lower split.min_seen if the deliverable really is "
+        f"this small (then also lower base.axes[*].order).")
     return Split(names, vt, ~hidden, hidden, ref_ci)
 
 

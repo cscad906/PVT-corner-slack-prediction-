@@ -15,8 +15,6 @@ There is deliberately NO per-stage cell/net delay head: the OLS base already
 carries per-stage delays as well as it carries slack (the "OLS-base-is-enough"
 finding), so the extra multi-task head was dropped in the unified engine.
 """
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 

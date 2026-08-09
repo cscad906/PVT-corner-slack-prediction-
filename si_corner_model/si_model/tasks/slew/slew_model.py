@@ -9,8 +9,6 @@ The CorrHead cross-attends to the measured seen-corner tokens (a learned
 interpolation over corner space); the support gate shrinks the residual where
 the query extrapolates. All outputs are the base residual in ps.
 """
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 
