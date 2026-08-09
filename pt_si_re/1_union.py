@@ -221,6 +221,9 @@ def main():
     ap.add_argument("--out-tcl", default=None)
     ap.add_argument("--out-txt", default=None,
                     help="vi 로 보기 좋게 정렬한 요약 파일")
+    ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
+                    help="setup(-delay_type max) / hold(min). **1회차 리포트를 "
+                         "뽑을 때 쓴 것과 같아야 한다.** 2회차 tcl 에 그대로 들어간다")
     ap.add_argument("--slack-max", type=float, default=None,
                     help="이 값보다 slack 이 큰 경로는 제외. 생략하면 리포트에 있는 것 전부.")
     ap.add_argument("--no-edge", action="store_true",
@@ -246,6 +249,8 @@ def main():
 
     print("  폴더 : %s" % d)
     print("  코너 : %d개" % len(files))
+    print("  분석 : %s  (2회차는 -delay_type %s 로 측정)"
+          % (args.mode, "min" if args.mode == "hold" else "max"))
     print("")
 
     union = {}
@@ -438,7 +443,8 @@ def main():
         fh.write('puts "  이번 코너 : $CORNER   ->  $CORNER.rpt"\n')
         fh.write('puts "  (위 이름이 방금 로드한 db 와 다르면 지금 멈출 것)"\n\n')
         fh.write('set OUT "$CORNER.rpt"\n')
-        fh.write('set DTYPE "max"      ;# setup=max, hold=min\n')
+        fh.write('set DTYPE "%s"      ;# setup=max, hold=min\n'
+                 % ("min" if args.mode == "hold" else "max"))
         fh.write('set SIGDIG 6\n\n')
         fh.write("file delete -force $OUT\n")
         fh.write("set FIXED_PATHS {\n")

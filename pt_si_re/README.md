@@ -241,12 +241,98 @@ python3 4_all_corners.py --root /data/results/round2 --phase 3
 | `--only 2a,2b` | 그 묶음 안에서 일부만 |
 | `--mode hold` | hold 데이터를 만들 때 (5b 에 전달) |
 
-### 손으로 하나씩 하고 싶으면
+### 5a / 5b / 5c 가 하는 일
 
-`4_all_corners.py` 는 아래를 대신 쳐줄 뿐이다. 결과 파일은 바이트 단위로 같다.
+crosstalk 14열을 만드는 세 조각이다. 중간에 PT 를 두 번 다녀와야 해서 셋으로
+나뉘어 있다.
+
+| | 하는 일 | 나오는 것 |
+|---|---|---|
+| **5a** | 리포트를 읽어 **PT 에 뭘 물어볼지** 목록을 만든다. 같은 넷이 여러 경로에 나오므로 중복을 뺀다 | `xtalk/unique_contexts.tsv` |
+| PT 1차 | 그 넷마다 `report_delay_calculation -crosstalk` | `xtalk/context_raw.rpt` |
+| **5b** | PT 출력을 파싱해 **victim–aggressor 쌍**으로 만든다. 다음에 물어볼 핀/넷 목록도 뽑는다 | `xtalk/active_features.tsv` |
+| PT 2차 | 그 핀·넷의 도착시각과 slew | `xtalk/*_windows.tsv` |
+| **5c** | 위를 합쳐 14열로 쓴다 | `<코너>.path_context_si_compact.by_path.rpt` ★ |
+
+실제 숫자(294경로 기준): victim 넷 줄 8,930 → 물어볼 넷 **788개**(중복 제거) →
+쌍 **13,947줄**.
+
+**왜 PT 를 두 번 가나**
+
+- `report_attribute`(2회차에서 이미 뽑음)로는 **합계**만 나온다.
+  "이 넷에 aggressor 151개, coupling cap 합은 얼마".
+- 14열은 **하나하나**를 요구한다. "그중 `gre_a_INV_857_152` 가 0.023240 밀었고,
+  걔 coupling cap 은 0.315fF". 이건 `report_delay_calculation -crosstalk` 만 안다.
+  → **PT 1차**
+- 그런데 그 aggressor 가 **언제 스위칭하는지**는 안 알려준다. crosstalk 은 victim 과
+  aggressor 가 같은 시점에 움직여야 실제 영향이 있으므로 그게 필요하다. aggressor 는
+  우리 경로 밖의 남의 넷이라 `pin_attr.txt` 에 없다. → **PT 2차**
+
+---
+
+## 한 단계씩 / 일부만 돌리기
+
+`--only` 로 그 묶음 안에서 원하는 단계만 돌린다. 이름은 `2a` `2b` `2c` `5a` `5b` `5c`.
+
+### annotation 만
 
 ```bash
-setenv D /data/results/round2/TT_0p6V_25C
+python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2a,2b,2c
+```
+```
+생긴 파일:  cpin.tsv  distres.tsv  <코너>_fixed_annotated.txt
+```
+
+crosstalk 준비를 건너뛰고 **annotation 만** 나온다. PT 를 더 안 가도 된다.
+
+### crosstalk 만
+
+```bash
+python3 4_all_corners.py --root <round2> --phase 1 --only 5a
+```
+
+**SPEF 도 `annotated` 도 필요 없다.** crosstalk 14열은 Dist/Res/Cpin 을 쓰지
+않으므로 2회차 `.rpt` 만 있으면 된다. SPEF 가 아직 없거나 `2b` 가 오래 걸릴 때
+이쪽을 먼저 돌려도 된다.
+
+### 한 단계씩
+
+```bash
+python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2a
+python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2b
+python3 4_all_corners.py --root <round2>                --phase 1 --only 2c
+python3 4_all_corners.py --root <round2>                --phase 1 --only 5a
+```
+
+순서는 지켜야 한다. `2c` 는 `2a`/`2b` 결과를 합치는 것이고, `5b` 는 PT 1차,
+`5c` 는 PT 2차를 거쳐야 한다.
+
+```
+2a ──┐
+     ├──> 2c ──> <코너>_fixed_annotated.txt
+2b ──┘
+
+5a ──> [PT 1차] ──> 5b ──> [PT 2차] ──> 5c ──> 14열 리포트
+```
+
+### 중간에 끊겼을 때
+
+```bash
+python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --skip-done
+```
+
+이미 만들어진 단계는 `SKIP` 으로 건너뛰고 안 된 것만 이어서 한다.
+코너 17개 중 12개에서 끊겨도 처음부터 다시 할 필요가 없다.
+
+---
+
+### 코너 하나만 손으로
+
+`4_all_corners.py` 는 아래를 대신 쳐줄 뿐이다. 결과 파일은 바이트 단위로 같다.
+한 코너가 실패해서 화면을 자세히 보고 싶을 때 이렇게 한다.
+
+```bash
+D=<round2>/<코너>
 python3 2a_cpin.py     --dir $D                    # -> cpin.tsv       1초
 python3 2b_distres.py  --dir $D --spef <SPEF>      # -> distres.tsv    SPEF 크기에 따라
 python3 2c_merge.py    --dir $D                    # -> <코너>_fixed_annotated.txt ★
@@ -266,6 +352,10 @@ pt_shell> source <패키지>/pt/xtalk_windows.tcl
 ```bash
 python3 5c_report.py --dir $D                      # -> <코너>.path_...by_path.rpt ★
 ```
+
+> 코너 폴더로 `cd` 한 상태에서 `xtalk_calc.tcl` 을 직접 돌리면, 그 폴더의
+> `corner_info.tcl` 을 읽어 **어느 db 로 만든 폴더인지** 화면에 찍어 준다.
+> 지금 PT 에 올라온 db 가 그것과 다르면 멈추고 다시 로드할 것.
 
 ---
 
@@ -296,6 +386,45 @@ number_of_aggressors  victim_load_pin  victim_load_min/max_arrival
 aggressor_driver_pin  aggressor_driver_min/max_arrival
 aggressor_driver_slew_max  coupling_cap_ff
 ```
+
+---
+
+## setup 과 hold — 완전히 별개 2세트
+
+**섞이면 안 되고, 폴더를 나누는 게 유일한 방법이다.** 산출물 이름이 코너 이름
+하나로 정해지므로, 같은 폴더에 두면 서로 덮어쓴다.
+
+```
+/data/results/setup/
+    round1/corners/*.rpt          report_timing -delay_type max
+    round2/<코너>/...
+/data/results/hold/
+    round1/corners/*.rpt          report_timing -delay_type min
+    round2/<코너>/...
+```
+
+각 단계에서 바꿀 것:
+
+| 단계 | setup | hold |
+|---|---|---|
+| 1회차 `report_timing` | `-delay_type max` | `-delay_type min` |
+| `1_union.py` | `--mode setup` (기본) | **`--mode hold`** |
+| `02_round2_all.tcl` | `FIXED`/`OUTTOP` 을 setup 폴더로 | hold 폴더로 |
+| `4_all_corners.py` | `--mode setup` (기본) | **`--mode hold`** |
+
+`1_union.py --mode` 는 생성되는 `fixed_paths.tcl` 의 `set DTYPE` 을 정한다.
+이걸 안 주면 hold 리포트로 고른 경로를 **setup 으로 측정**하게 된다.
+화면에 어느 쪽인지 찍히니 확인할 것.
+
+```
+  분석 : hold  (2회차는 -delay_type min 로 측정)
+```
+
+`4_all_corners.py --mode hold` 는 `5b_pairs.py` 와 crosstalk PT 단계의
+`DELAY_TYPE` 에 전달된다.
+
+> db/spef 는 setup/hold 와 무관하다. **같은 코너 목록을 그대로 쓰면 된다.**
+> 달라지는 것은 `-delay_type` 과 출력 폴더뿐이다.
 
 ---
 
