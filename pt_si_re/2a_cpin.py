@@ -114,8 +114,6 @@ CODE_INFO = {
                    "report_attribute 에 -application 을 넣어 다시 뽑아 주세요."),
     "E-PINNAME":  ("리포트의 핀 이름이 속성 덤프와 하나도 안 맞습니다",
                    "지금 쓰는 리포트로 dump_attr.tcl 을 다시 돌려 주세요."),
-    "E-NETNAME":  ("리포트의 넷 이름이 속성 덤프와 하나도 안 맞습니다",
-                   "지금 쓰는 리포트로 dump_attr.tcl 을 다시 돌려 주세요."),
     "E-RES0":     ("SPEF 에서 저항(Res)을 하나도 못 구했습니다",
                    "SPEF 가 이 리포트와 같은 디자인/코너인지 확인해 주세요."),
     "E-NOINPUT":  ("붙일 값(cpin/distres)이 하나도 없습니다",
@@ -131,9 +129,6 @@ CODE_INFO = {
                    "9_diagnose.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다."),
     "W-NA":       ("결과에 N/A 가 남아 있습니다",
                    "9_diagnose.py 를 돌리면 원인을 알려줍니다."),
-    "W-XT0":      ("crosstalk 값이 전부 0 입니다",
-                   "PT 에서 si_enable_analysis 가 true 인지, SPEF 에 coupling 이 "
-                   "있는지 확인해 주세요."),
 }
 
 
