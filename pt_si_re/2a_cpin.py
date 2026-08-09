@@ -100,6 +100,8 @@ CODE_INFO = {
     # 코드            (한 줄 설명,                          무엇을 하면 되는지)
     "E-NORPT":    ("리포트 파일(.rpt)을 못 찾았습니다",
                    "--dir 로 준 폴더에 코너별 report_timing 결과를 넣어 주세요."),
+    "E-ISPARENT": ("코너 폴더가 아니라 코너들이 든 상위 폴더를 주셨습니다",
+                   "코너 폴더까지 지정하거나, 4_all_corners.py --root 를 쓰세요."),
     "E-RPTMANY":  ("폴더에 .rpt 가 여러 개라 어느 것인지 모르겠습니다",
                    "--rpt <파일> 로 하나를 지정하거나, 코너마다 폴더를 나눠 주세요."),
     "E-NOFILE":   ("필요한 입력 파일이 없습니다",
@@ -165,7 +167,8 @@ def code(c, *msg):
 
 def main():
     ap = argparse.ArgumentParser(description="Cpin 표를 만든다 (SPEF 불필요).")
-    ap.add_argument("--dir", default=".")
+    ap.add_argument("--dir", default=".",
+                    help="**코너 폴더 하나** (그 안에 .rpt 가 있는 폴더). 여러 코너를 한 번에 하려면 4_all_corners.py --root")
     ap.add_argument("--rpt", default=None)
     ap.add_argument("--pin-attr", default=None)
     ap.add_argument("--out", default=None)

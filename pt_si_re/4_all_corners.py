@@ -95,7 +95,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="round2 아래 코너 폴더 전부에 2a/2b/2c/3 을 돌린다.")
     ap.add_argument("--root", required=True,
-                    help="코너 폴더들이 들어 있는 폴더 (예: round2)")
+                    help="코너 폴더들이 **들어 있는 상위 폴더** (예: round2). 코너 폴더 하나가 아니다")
     ap.add_argument("--spef", default=None,
                     help="모든 코너가 함께 쓸 SPEF. 코너 폴더에 design.spef 가 "
                          "있으면 그쪽이 우선한다")
@@ -117,6 +117,23 @@ def main():
 
     corners = corner_dirs(args.root)
     if not corners:
+        # 반대 착각: 코너들이 든 상위 폴더가 아니라 코너 폴더 하나를 준 경우
+        here, _, _ = find_rpt(args.root)
+        if here:
+            print("  여기는 **코너 폴더 하나** 입니다: %s" % args.root)
+            print("      (%s 이 바로 들어 있습니다)" % os.path.basename(here))
+            print("")
+            print("  --root 에는 코너 폴더들이 **들어 있는 상위 폴더**를 주세요:")
+            print("      %s --root %s"
+                  % (os.path.basename(__file__), os.path.dirname(args.root.rstrip("/")) or "."))
+            print("")
+            print("  이 코너 하나만 하려면 각 단계를 직접 돌리시면 됩니다:")
+            print("      2a_cpin.py     --dir %s" % args.root)
+            print("      2b_distres.py  --dir %s --spef <SPEF>" % args.root)
+            print("      2c_merge.py    --dir %s" % args.root)
+            print("      3_crosstalk.py --dir %s --corner %s"
+                  % (args.root, os.path.basename(args.root.rstrip("/"))))
+            sys.exit(1)
         print("  %s 아래에 .rpt 를 가진 폴더가 없습니다." % args.root)
         print("  2회차(02_round2.tcl)를 먼저 돌리세요.")
         sys.exit(1)
