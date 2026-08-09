@@ -74,11 +74,6 @@ def show_env():
     head("1. 환경")
     print("  python  : %s" % sys.executable)
     print("  version : %s" % sys.version.split()[0])
-    try:
-        import networkx
-        print("  networkx: %s" % networkx.__version__)
-    except Exception:
-        print("  networkx: 없음  <- 2b_distres.py 가 안 돕니다")
     pt = None
     for d in os.environ.get("PATH", "").split(os.pathsep):
         q = os.path.join(d, "pt_shell")
@@ -276,11 +271,11 @@ def main():
     rpt, _, _ = find_rpt(d)     # 폴더 안의 .rpt 를 찾는다(이름 자유)
     rpt = rpt or os.path.join(d, "timing.rpt")
     if os.path.isfile(rpt):
-        head("3-1. timing.rpt 형식")
+        head("3-1. %s 형식" % os.path.basename(rpt))
         fingerprint_report(rpt, mask)
     else:
-        head("3-1. timing.rpt")
-        print("  없습니다.")
+        head("3-1. 타이밍 리포트")
+        print("  폴더에서 .rpt 를 못 찾았습니다: %s" % d)
 
     for name in ("pin_attr.txt", "net_attr.txt"):
         p = os.path.join(d, name)

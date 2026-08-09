@@ -15,8 +15,12 @@
 """
 import os
 
-# 우리가 만들어 낸 파일은 입력 후보가 아니다
+# 우리가 만들어 낸 파일은 입력 후보가 아니다.
+# 특히 5c_report.py 의 결과가 .rpt 로 끝나므로, 이걸 빼지 않으면 한 번 돌린
+# 뒤에는 2a/2b/2c/5a 가 전부 "어느 것인지 모르겠다"(E-RPTMANY)로 막힌다.
 _SKIP_PREFIX = ("annotated", "union_")
+_SKIP_SUFFIX = (".path_context_si_compact.by_path.rpt",
+                ".path_context_si_compact.flat.rpt")
 
 
 def find_rpt(work_dir, explicit=None):
@@ -30,7 +34,9 @@ def find_rpt(work_dir, explicit=None):
         return None, "폴더가 없습니다: %s" % work_dir, "E-NORPT"
 
     names = [n for n in sorted(os.listdir(work_dir))
-             if n.endswith(".rpt") and not n.startswith(_SKIP_PREFIX)]
+             if n.endswith(".rpt")
+             and not n.startswith(_SKIP_PREFIX)
+             and not n.endswith(_SKIP_SUFFIX)]
 
     if len(names) == 1:
         return os.path.join(work_dir, names[0]), None, None
