@@ -19,10 +19,28 @@
 # ---------------------------------------------------------------------
 
 
-### 여기 두 줄만 고치면 된다 ###########################################
-set RPT     "/tmp/r2/cA_0p8/timing.rpt"     ;# 위에서 만든 리포트 파일
-set OUTDIR  "/tmp/r2/cA_0p8"              ;# 결과를 저장할 폴더
+### 여기 두 줄이 기본값 ###############################################
+if {![info exists OUTDIR]} { set OUTDIR "." }                        ;# 결과를 저장할 폴더
+if {![info exists RPT]}    { set RPT [lindex [glob -nocomplain -directory $OUTDIR *.rpt] 0] }
 #######################################################################
+# 기본값은 "지금 있는 폴더에 있는 .rpt". pt_shell 에서 그 코너 폴더로 cd 해
+# 두었으면 아무것도 안 고쳐도 된다.
+#     cd /data/round2/tt0p7v25c_Cnom   ->   source dump_attr.tcl
+# 리포트가 여러 개거나 다른 곳에 있으면 미리 정해 준다.
+#     set RPT "/data/round2/tt0p7v25c_Cnom/tt0p7v25c_Cnom.rpt"
+
+if {$RPT eq "" || ![file exists $RPT]} {
+    puts "=================================================================="
+    puts "  문제 발생"
+    puts "    무엇이   : 읽을 리포트(.rpt)를 못 찾았습니다."
+    puts "               찾아본 곳: $OUTDIR"
+    puts "    하실 일  : 2회차를 먼저 돌리세요 ->  source fixed_paths.tcl"
+    puts "               리포트가 다른 곳에 있으면  set RPT \"<파일>\"  후 다시."
+    puts ""
+    puts "    에러 코드: E-NORPTFILE"
+    puts "=================================================================="
+    return
+}
 
 
 # 뽑을 속성 목록. 여기 있는 것만 저장한다.
@@ -73,4 +91,18 @@ redirect -file $OUTDIR/net_attr.txt { report_attribute -application -attribute $
 puts "  net_attr.txt  <- 넷 [sizeof_collection $NETS] 개"
 
 puts ""
-puts "끝났습니다. 이제 셸에서 파이썬을 실행하세요."
+if {[sizeof_collection $PINS] == 0} {
+    puts "=================================================================="
+    puts "  문제 발생"
+    puts "    무엇이   : 리포트에서 핀을 하나도 못 찾았습니다."
+    puts "    하실 일  : $RPT 을 열어 보세요."
+    puts "               - Error 로만 차 있으면 : 디자인이 안 올라온 것입니다."
+    puts "                 (read_verilog / link_design 부터 다시)"
+    puts "               - 경로는 있는데 핀 줄이 없으면 : report_timing 에"
+    puts "                 -input_pins -nosplit 이 빠진 것입니다."
+    puts ""
+    puts "    에러 코드: E-NOPININRPT"
+    puts "=================================================================="
+} else {
+    puts "끝났습니다. 이제 셸에서 파이썬을 실행하세요."
+}

@@ -29,6 +29,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
+from find_rpt import find_rpt
 
 ATTR_NAME = "pin_capacitance_max"
 
@@ -100,7 +101,9 @@ def main():
     args = ap.parse_args()
 
     d = args.dir
-    rpt = args.rpt or os.path.join(d, "timing.rpt")
+    rpt, _err, _ec = find_rpt(d, args.rpt)   # 폴더 안의 .rpt 를 찾는다(이름 자유)
+    if _err:
+        die(_err, "2회차(fixed_paths.tcl)를 먼저 돌리세요.")
     spef = args.spef or os.path.join(d, "design.spef")
     pin_attr = args.pin_attr or os.path.join(d, "pin_attr.txt")
     out = args.out or os.path.join(d, "annotated.txt")

@@ -21,6 +21,10 @@ import re
 import subprocess
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from find_rpt import find_rpt
+
 W = 72
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 
@@ -267,7 +271,8 @@ def main():
     show_env()
     show_files(d, mask)
 
-    rpt = os.path.join(d, "timing.rpt")
+    rpt, _, _ = find_rpt(d)     # 폴더 안의 .rpt 를 찾는다(이름 자유)
+    rpt = rpt or os.path.join(d, "timing.rpt")
     if os.path.isfile(rpt):
         head("3-1. timing.rpt 형식")
         fingerprint_report(rpt, mask)

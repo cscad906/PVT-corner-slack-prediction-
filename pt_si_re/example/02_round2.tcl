@@ -20,14 +20,15 @@ if {![file exists $FIXED]} {
     return
 }
 
-# 코너 이름 = 결과가 쌓일 폴더 이름. 코너마다 이 한 줄만 바꾼다.
-set CORNER "tt0p7v25c_Cnom"
+# 코너 이름. 폴더 이름이자 리포트 파일 이름이 된다. 코너마다 이 한 줄만 바꾼다.
+# 밖에서 미리 set CORNER 해 두었으면 그 값이 쓰인다(아래는 기본값).
+if {![info exists CORNER]} { set CORNER "tt0p7v25c_Cnom" }
 
 file mkdir $BASE/example/round2/$CORNER
 cd        $BASE/example/round2/$CORNER
 
-# 두 tcl 모두 기본값이 "지금 폴더"라, cd 만 해 두면 고칠 것이 없다.
-source $FIXED                  ;# -> timing.rpt
+# 두 tcl 모두 "지금 폴더" 기준이라 cd 만 해 두면 고칠 것이 없다.
+source $FIXED                  ;# -> <코너이름>.rpt
 source $BASE/pt/dump_attr.tcl  ;# -> pin_attr.txt, net_attr.txt
 
 cd $BASE

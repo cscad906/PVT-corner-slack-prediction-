@@ -23,6 +23,10 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from find_rpt import find_rpt
+
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 END_RE = re.compile(r"^\s*Endpoint:\s+(\S+)")
 GROUP_RE = re.compile(r"^\s*Path Group:\s+(.+?)\s*$")
@@ -168,6 +172,8 @@ CODE_INFO = {
     # 코드            (한 줄 설명,                          무엇을 하면 되는지)
     "E-NORPT":    ("리포트 파일(.rpt)을 못 찾았습니다",
                    "--dir 로 준 폴더에 코너별 report_timing 결과를 넣어 주세요."),
+    "E-RPTMANY":  ("폴더에 .rpt 가 여러 개라 어느 것인지 모르겠습니다",
+                   "--rpt <파일> 로 하나를 지정하거나, 코너마다 폴더를 나눠 주세요."),
     "E-NOFILE":   ("필요한 입력 파일이 없습니다",
                    "0_check.py 를 돌리면 무엇이 없는지 알려줍니다."),
     "E-NOPATH":   ("리포트에서 경로를 하나도 못 읽었습니다",
@@ -256,7 +262,10 @@ def main():
     args = ap.parse_args()
 
     d = args.dir
-    rpt = args.rpt or os.path.join(d, "timing.rpt")
+    rpt, _err, _ec = find_rpt(d, args.rpt)   # 폴더 안의 .rpt 를 찾는다(이름 자유)
+    if _err:
+        print("")
+        code(_ec, "[ 실패 ] " + _err)
     net_attr = args.net_attr or os.path.join(d, "net_attr.txt")
     pin_attr = args.pin_attr or os.path.join(d, "pin_attr.txt")
     out = args.out or os.path.join(d, "crosstalk.tsv")

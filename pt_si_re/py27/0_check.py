@@ -16,13 +16,17 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from find_rpt import find_rpt
 
 # 이 폴더에 있어야 하는 입력 파일들. (이름, 설명, 만드는 방법)
 INPUTS = [
-    ("timing.rpt", "타이밍 리포트",
-     "pt_shell: redirect -file timing.rpt { report_timing -nets -input_pins \\\n"
-     "               -capacitance -transition_time -path_type full_clock_expanded \\\n"
-     "               -nosplit -significant_digits 6 ... }"),
+    # 리포트 파일 이름은 자유다(코너 이름으로 짓는다). 폴더 안의 .rpt 를 찾는다.
+    ("*.rpt", "타이밍 리포트",
+     "pt_shell: source fixed_paths.tcl   (2회차)\n"
+     "               또는 report_timing -nets -input_pins -capacitance \\\n"
+     "               -transition_time -path_type full_clock_expanded \\\n"
+     "               -nosplit -significant_digits 6 ... 을 리다이렉트"),
     ("pin_attr.txt", "핀 attribute 덤프 (Cpin, arrival, slew)",
      "pt_shell: redirect -file pin_attr.txt { report_attribute -application [get_pins *] }"),
     ("net_attr.txt", "넷 attribute 덤프 (crosstalk)",
@@ -182,11 +186,19 @@ def check_inputs(work, spef_override):
     hr("2. 입력 파일 점검  (폴더: %s)" % work)
     missing = []
     for name, desc, howto in INPUTS:
-        path = spef_override if (name == "design.spef" and spef_override) else os.path.join(work, name)
-        if os.path.isfile(path):
-            print("  %s %-14s %-38s %s" % (OK, name, desc, human_size(os.path.getsize(path))))
+        if name == "*.rpt":
+            # 리포트는 코너 이름으로 짓기 때문에 이름이 고정이 아니다
+            path, _e, _c = find_rpt(work)
+            if path:
+                name = os.path.basename(path)
+        elif name == "design.spef" and spef_override:
+            path = spef_override
         else:
-            print("  %s %-14s %-38s" % (NG, name, desc))
+            path = os.path.join(work, name)
+        if path and os.path.isfile(path):
+            print("  %s %-22s %-30s %s" % (OK, name, desc, human_size(os.path.getsize(path))))
+        else:
+            print("  %s %-22s %-30s" % (NG, name, desc))
             missing.append((name, howto))
 
     if missing:
@@ -203,7 +215,8 @@ def check_content(work, spef_override):
     hr("3. 입력 내용 점검")
     ok = True
 
-    rpt = os.path.join(work, "timing.rpt")
+    rpt, _, _ = find_rpt(work)   # 폴더 안의 .rpt 를 찾는다(이름 자유)
+    rpt = rpt or os.path.join(work, "timing.rpt")
     if os.path.isfile(rpt):
         n_net = n_start = 0
         with io.open(rpt, "r", errors="ignore") as f:

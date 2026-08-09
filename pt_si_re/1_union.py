@@ -386,8 +386,12 @@ def main():
     with open(out_tcl, "w") as fh:
         fh.write("# 2회차용. pt_shell 에서:  source fixed_paths.tcl\n")
         fh.write("# 코너를 바꿔 로드할 때마다 한 번씩 실행한다.\n")
-        fh.write("#   출력 파일 이름은 아래 OUT 을 코너마다 바꿔 준다.\n\n")
-        fh.write('set OUT "timing.rpt"\n')
+        fh.write("#   결과는 <코너이름>.rpt 로 저장된다. 코너마다 CORNER 만 바꾼다.\n\n")
+        fh.write("### 코너마다 이 한 줄만 바꾼다 #################################\n")
+        fh.write('if {![info exists CORNER]} { set CORNER "corner1" }\n')
+        fh.write("###############################################################\n")
+        fh.write("# 밖에서 미리 set CORNER 해 두었으면 그 값이 쓰인다(위 줄은 기본값).\n\n")
+        fh.write('set OUT "$CORNER.rpt"\n')
         fh.write('set DTYPE "max"      ;# setup=max, hold=min\n')
         fh.write('set SIGDIG 6\n\n')
         fh.write("file delete -force $OUT\n")
@@ -425,19 +429,30 @@ def main():
     code("W-DROP" if warn else "OK-UNION",
          "[ %s ] 합집합 %d경로. 2회차: 코너마다 pt_shell 에서"
          % ("주의" if warn else "정상", len(rows)))
-    print("           set OUT \"round2/<코너>/timing.rpt\"   (파일 안에서 수정)")
-    print("           source %s" % out_tcl)
-    print("           source pt/dump_attr.tcl")
-    print("")
-    return
-    print("[ 정상 ] 2회차: 코너마다 pt_shell 에서")
-    print("           set OUT \"round2/<코너>/timing.rpt\"   (파일 안에서 수정)")
+    print("           set CORNER \"<코너이름>\"      (결과는 <코너이름>.rpt 로 저장)")
     print("           source %s" % out_tcl)
     print("           source pt/dump_attr.tcl")
     print("")
 
 
 TCL_LOOP = r"""
+# --- 시작 전 확인 : 디자인이 올라와 있나 -------------------------------
+# 이게 없으면 294개 report_timing 이 전부 "Current design is not defined" 로
+# 실패하는데도 파일은 만들어져서, 다 된 줄 알고 넘어가게 된다.
+if {[sizeof_collection [get_designs -quiet *]] == 0} {
+    puts ""
+    puts "=================================================================="
+    puts "  문제 발생"
+    puts "    무엇이   : PT 에 디자인이 안 올라와 있습니다."
+    puts "               넷리스트/라이브러리를 먼저 읽어야 합니다."
+    puts "    하실 일  : read_verilog + link_design + read_sdc + read_parasitics"
+    puts "               예제라면 :  source example/00_setup.tcl"
+    puts ""
+    puts "    에러 코드: E-NODESIGN"
+    puts "=================================================================="
+    return
+}
+
 # --- 위 목록의 경로를 하나씩 다시 뽑는다 (내용은 안 봐도 된다) ---------
 proc edge_opt {base dir} {
     if {$dir eq "r"} { return "-rise_$base" }
@@ -482,7 +497,40 @@ foreach item $FIXED_PATHS {
         puts ""
     }
 }
-puts "$idx 개 경로를 $OUT 에 저장했습니다."
+
+# --- 끝나고 확인 : 요청한 만큼 실제로 측정됐나 -------------------------
+# 리포트 안의 "Startpoint:" 개수를 센다. 요청 수보다 적으면 그만큼 실패한 것.
+proc count_measured {f} {
+    set n 0
+    set fh [open $f r]
+    while {[gets $fh line] >= 0} {
+        if {[string first "Startpoint:" $line] >= 0} { incr n }
+    }
+    close $fh
+    return $n
+}
+
+set NGOT [count_measured $OUT]
+puts ""
+puts "  요청한 경로   : $idx"
+puts "  측정된 경로   : $NGOT"
+puts "  결과 파일     : $OUT"
+if {$NGOT == 0} {
+    puts ""
+    puts "=================================================================="
+    puts "  문제 발생"
+    puts "    무엇이   : 경로가 하나도 안 잡혔습니다. 리포트가 에러로만 차 있습니다."
+    puts "    하실 일  : $OUT 을 열어 첫 몇 줄의 Error 메시지를 보세요."
+    puts "               'Current design is not defined' 이면 디자인이 안 올라온 것,"
+    puts "               'get_pins' 관련이면 이 코너의 넷리스트가 1회차와 다른 것입니다."
+    puts ""
+    puts "    에러 코드: E-NOMEASURED"
+    puts "=================================================================="
+} elseif {$NGOT < $idx} {
+    puts "  주의: [expr {$idx - $NGOT}] 개가 안 잡혔습니다."
+    puts "        코너가 달라 경로가 없어진 경우도 있어 조금 줄어드는 것은 정상입니다."
+    puts "        많이 줄었으면 $OUT 에서 Error 줄을 확인하세요."
+}
 """
 
 

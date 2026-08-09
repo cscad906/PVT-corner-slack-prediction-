@@ -116,17 +116,32 @@ pt_shell> source example/02_round2.tcl
 `example/round2/tt0p7v25c_Cnom/` 에 세 파일이 생깁니다.
 
 ```
-timing.rpt      294 경로   (1회차에서 뽑은 그 경로들, 순서·번호 동일)
-pin_attr.txt    Cpin, arrival, slew
-net_attr.txt    crosstalk delta, aggressor, coupling cap
+tt0p7v25c_Cnom.rpt   294 경로   (1회차에서 뽑은 그 경로들, 순서·번호 동일)
+pin_attr.txt         Cpin, arrival, slew
+net_attr.txt         crosstalk delta, aggressor, coupling cap
 ```
+
+**리포트 이름은 코너 이름이 됩니다.** 폴더만 봐도 어느 코너인지 알 수 있고,
+다른 곳으로 옮겨도 섞이지 않습니다. 뒤 파이썬 스크립트들은 폴더 안의 `.rpt`
+를 알아서 찾으므로 이름을 신경 쓸 필요가 없습니다 (`.rpt` 가 여러 개면
+`E-RPTMANY` 로 멈추고 골라 달라고 합니다).
+
+끝에 이렇게 나오면 정상입니다.
+
+```
+  요청한 경로   : 294
+  측정된 경로   : 294
+```
+
+두 숫자가 다르면 그만큼 실패한 것입니다. **0 이면 대개 디자인을 안 읽은
+것**이고 (`E-NODESIGN` / `E-NOMEASURED`), 1번을 먼저 하셔야 합니다.
 
 **현장에서 코너를 바꿔 가며 반복할 때는 `02_round2.tcl` 의 `CORNER` 한 줄만**
 바꾸면 됩니다. 스크립트가 그 이름으로 폴더를 만들고 `cd` 한 뒤 두 tcl 을
 그대로 source 합니다 (두 tcl 모두 기본 출력이 "지금 폴더"라 고칠 것이 없습니다).
 
 ```tcl
-set CORNER "tt0p6v25c_Cnom"     ;# <- 이 줄만
+set CORNER "tt0p6v25c_Cnom"     ;# <- 이 줄만. 폴더 이름이자 리포트 이름이 된다
 ```
 
 여기서는 **hidden 코너도 포함해 전부** 돌립니다. 경로 선정에서만 뺐을 뿐,
