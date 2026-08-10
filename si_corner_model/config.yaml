@@ -21,11 +21,17 @@
 #      ├── 회로2/  ...
 #      └── 회로3/  ...
 #
-root: auto                          # auto = 이 repo 의 부모 디렉토리.
+root: auto                          # auto = 이 repo 의 부모 디렉토리
+                                    #        = /user/s5e9965p5/academy_experiment
                                     #   repo 가 회로들과 다른 곳에 있으면 절대경로로 적는다
                                     #   환경변수 SI_ROOT 가 우선한다
 
-designs: auto                       # 회로 목록. 세 가지 형태 중 하나:
+designs:                            # ★ 회로만 적는다. auto 로 두면 pr_si / spice 까지
+  - MFC_Timing_Report               #   회로로 잘못 잡힌다.
+  - MIF_Timing_Report
+  - PERIC0_Timing_Report
+
+_designs_note: |                    # (참고) designs 는 세 가지 형태 중 하나:
                                     #
                                     #  ① auto  = root 밑 모든 하위폴더를 회로로 간주
                                     #     (si_corner_model / cache / runs / 숨김폴더는 자동 제외)
@@ -59,9 +65,9 @@ temps:                              # 온도 = 분리 차원(모델이 갈린다
     levels: [rcmax, cmax, rcmin]
     hidden_corners: [[0.5, cmax], [0.685, rcmin]]
 
-out:
-  cache: cache                      # cache/<design>/<temp>/dataset.npz
-  runs: runs                        # runs/<design>/<temp>/  + runs/_all/ (통합)
+out:                                # hold 를 돌릴 땐 이 두 줄도 바꾼다 (cache/hold, runs/hold)
+  cache: cache/setup                # cache/setup/<회로>/<온도>/dataset.npz
+  runs: runs/setup                  # runs/setup/<회로>/<온도>/ + runs/setup/_all/
 
 
 # ─── 2. 코너 정의 & 어떤 코너를 숨길지 ────────────────────────── [필수] ──────
@@ -110,8 +116,14 @@ split:
 files:
   layout: flat                      # flat   = 코너가 전부 파일명에 있음 (이번 데이터)
                                     # levels = <dir>/<레벨폴더>/<전압당 1파일> 배치
-  subdir: ""                        # 회로폴더 밑 하위경로. 비우면 회로폴더 전체를 재귀 탐색
-                                    #   예: reports -> <root>/<design>/reports
+  # 배치:  <root>/<회로>/setup/report.*.rpt
+  #        <root>/<회로>/setup/xtalk/xt.*.rpt
+  #        <root>/<회로>/hold/...                 <- hold 는 따로 돌린다(아래)
+  #
+  # ★ setup 과 hold 는 분리 차원이라 한 번에 못 섞는다. hold 를 돌리려면
+  #   subdir / crosstalk_subdir 의 setup 을 hold 로 바꾸고,
+  #   out.cache / out.runs 도 다른 이름으로 바꾼 뒤 다시 실행한다.
+  subdir: setup                     # annotated 리포트가 있는 곳
 
   # ── layout: flat 일 때 ──────────────────────────────────────────────────
   #   auto = 파일명을 토큰으로 쪼개 전압/레벨/온도/공정을 각각 알아서 찾는다.
@@ -132,7 +144,7 @@ files:
   #  정확히 일치해야 한다. 이 폴더는 annotated 탐색에서 자동 제외되므로
   #  회로폴더 안에 두어도 "같은 코너가 두 파일에 매칭" 에러가 안 난다.
   #  위치를 모르면 null -> SI 없이 학습 (나중에 두 줄만 채우면 켜짐)
-  crosstalk_subdir: null            # 예: xtalk  ->  <root>/<회로>/xtalk
+  crosstalk_subdir: setup/xtalk     # 크로스토크 리포트가 있는 곳
   crosstalk_regex: auto             # annotated_regex 와 동일한 규칙 (파일명 접두사 무관)
 
   # ── annotated 와 crosstalk 이 "같은 폴더" 에 있을 때 (pt_si_re 배치) ──────
