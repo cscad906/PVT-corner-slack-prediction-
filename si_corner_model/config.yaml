@@ -53,11 +53,11 @@ temps:                              # 온도 = 분리 차원(모델이 갈린다
     # 숨길 코너는 온도마다 따로 적는다. 온도별로 levels 가 다르므로 전역 목록
     # 하나로는 표현 자체가 안 된다 (125C 엔 rcmin 이 없다).
     # 아래 corners.* 의 홀드아웃 키를 여기에 쓰면 이 온도에만 적용된다.
-    hidden_corners: [[0.5, rcmax], [0.6, cmax]]
+    hidden_corners: [[0.54, rcmax], [0.6, cmax]]
   - tag: m25
     token: m25
     levels: [rcmax, cmax, rcmin]
-    hidden_corners: [[0.54, rcmin], [0.685, rcmax]]
+    hidden_corners: [[0.5, cmax], [0.685, rcmin]]
 
 out:
   cache: cache                      # cache/<design>/<temp>/dataset.npz
