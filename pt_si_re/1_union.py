@@ -229,6 +229,10 @@ def main():
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
                     help="setup(-delay_type max) / hold(min). **1회차 리포트를 "
                          "뽑을 때 쓴 것과 같아야 한다.** 2회차 tcl 에 그대로 들어간다")
+    ap.add_argument("--max-paths", type=int, default=None,
+                    help="합집합 결과를 이 개수만 남긴다. **가장 나쁜 slack 부터** "
+                         "고른다. 문턱값을 계산할 필요 없이 개수로 바로 정할 때. "
+                         "--slack-max 와 같이 주면 둘 다 적용된다")
     ap.add_argument("--slack-max", type=float, default=None,
                     help="이 값보다 slack 이 큰 경로는 제외. 생략하면 리포트에 있는 것 전부.")
     ap.add_argument("--no-edge", action="store_true",
@@ -377,6 +381,16 @@ def main():
             "worst": s[worst_c], "worst_c": worst_c, "slacks": s,
         })
     rows.sort(key=lambda r: (r["worst"], r["start"], r["end"]))
+
+    # ---- 개수로 자르기 --------------------------------------------
+    # 위에서 이미 '가장 나쁜 slack' 순으로 정렬돼 있으므로 앞에서부터 자르면
+    # 위험한 것부터 남는다. 문턱값(--slack-max)을 계산해 줄 필요가 없다.
+    n_before_cut = len(rows)
+    cut_at = None
+    if args.max_paths is not None and len(rows) > args.max_paths:
+        cut_at = rows[args.max_paths - 1]["worst"]
+        rows = rows[:args.max_paths]
+
     for i, r in enumerate(rows, 1):
         r["idx"] = i
 
@@ -470,6 +484,11 @@ def main():
                  if all(d in ("r", "f") for d in r["dirs"]) and len(r["dirs"]) == len(r["pins"]))
     print("")
     print("-" * 68)
+    if cut_at is not None:
+        print("  --max-paths %d 로 %d개 중 %d개만 남겼습니다."
+              % (args.max_paths, n_before_cut, len(rows)))
+        print("    (가장 나쁜 slack 부터. 자른 지점의 slack = %.4f)" % cut_at)
+        print("")
     print("  합집합 경로 : %d개" % len(rows))
     print("  결과 목록   : %s   (vi 로 열어 보세요)" % out_txt)
     print("  같은 내용 TSV: %s" % out_tsv)
