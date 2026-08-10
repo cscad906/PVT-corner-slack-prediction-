@@ -168,10 +168,8 @@ def check_env():
         print("")
         print("  1) PrimeTime 환경을 먼저 source 한 뒤 다시 돌려 보세요.")
         print("     (PrimeTime / ICC2 설치본 안에 python3 이 들어 있습니다)")
-        print("  2) 그래도 없으면 파이썬 2.7 판을 씁니다:")
-        print("       python %s --dir <폴더>"
-              % os.path.join(HERE, "py27", "0_check.py"))
-        print("     제약이 있으니 py27/README.md 를 먼저 읽으세요.")
+        print("  2) 그래도 없으면 CAD 팀에 파이썬 3.6 이상을 요청하세요.")
+        print("     이 패키지는 파이썬 3.6+ 가 있어야 돌아갑니다.")
         return None
 
     print("  %-56s %-8s %s" % ("경로", "버전", "networkx"))
@@ -194,10 +192,8 @@ def check_env():
         print("  찾은 파이썬이 전부 3.6 미만이라 쓸 수 없습니다.")
         print("")
         print("  1) PrimeTime 환경을 source 한 뒤 다시 돌려 보세요.")
-        print("  2) 그래도 없으면 파이썬 2.7 판을 씁니다:")
-        print("       python %s --dir <폴더>"
-              % os.path.join(HERE, "py27", "0_check.py"))
-        print("     제약이 있으니 py27/README.md 를 먼저 읽으세요.")
+        print("  2) 그래도 없으면 CAD 팀에 파이썬 3.6 이상을 요청하세요.")
+        print("     이 패키지는 파이썬 3.6+ 가 있어야 돌아갑니다.")
         return None
 
     print("  >>> 이 파이썬을 쓰세요:")

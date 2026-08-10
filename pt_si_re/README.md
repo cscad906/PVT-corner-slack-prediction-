@@ -47,7 +47,6 @@ python 0_check.py
            다음 단계:  /usr/synopsys/pt/.../python3 2b_distres.py --dir round2/TT_0p6V_25C
   ```
 
-- 파이썬 3 이 전혀 없을 때만 `py27/` 을 쓴다 (`py27/README.md` 에 제약 명시).
 
 **터미널을 두 개 띄운다.** 하나는 pt_shell, 하나는 셸. 파이썬 터미널은
 라이선스를 안 먹으므로 PT 는 켜 둔 채로 왔다 갔다 한다.
@@ -554,7 +553,6 @@ UNION_설명.md      union 이 하는 일과 결과 읽는 법
 코드표.md          에러 코드 44개 전체
 원격문의.md        화면 읽는 법, 원격으로 물어볼 때
 example/README.md  BoomCoreV3 로 전 과정을 돌려 본 기록
-py27/README.md     파이썬 3 이 전혀 없을 때만 (제약 있음)
 ```
 
 ---
