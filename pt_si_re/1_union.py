@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """1 - 코너별 리포트를 합쳐 '측정할 경로 목록' 을 만든다.  (1회차 -> 2회차)
 
-    python3 1_union.py --dir round1/corners --max-paths 2000 --jobs 16
+    python3 1_union.py --dir round1/corners --max-paths 2000
 
 가장 많이 쓰는 옵션 두 개
     --max-paths N   합친 뒤 **가장 나쁜 slack 부터** N개만 남긴다. 개수로 바로
@@ -14,10 +14,19 @@
 
     --jobs N        리포트를 **코너 단위로** N개씩 동시에 읽는다. 코너끼리는
                     서로 독립이라 몇으로 나누든 결과 파일은 완전히 같다.
-                    현업 리포트(코너당 수백 MB)에서 읽는 시간이 통째로 줄어든다.
-                    실측: 279MB 16코너 -> -j 1 은 6.3초, -j 16 은 0.8초.
+                    **기본은 1(하나씩)** 이다. 올리면 그만큼 빨라지지만
+                    메모리도 같이 늘어나므로, 먼저 1로 돌려 보고 여유가 있으면
+                    올린다. 실측: 279MB 16코너 -> -j 1 은 6.3초, -j 16 은 0.8초.
 
-    둘 다 생략해도 된다. 생략하면 경로는 전부 쓰고, 병렬은 자동(최대 8)이다.
+    --max-paths 는 생략해도 되지만, 코너당 경로가 수만 개면 생략하지 말 것.
+    메모리가 남길 경로 수에 비례한다.
+
+리포트가 너무 커서 이 단계에서 메모리가 터지면
+    먼저 0_trim.py 로 리포트 자체를 줄인 뒤 그걸로 합치면 된다.
+        python3 0_trim.py  --dir round1/corners --keep 5000
+        python3 1_union.py --dir round1/corners_top5000 --max-paths 2000
+    0_trim.py 는 경로를 쌓아 두지 않아 리포트가 몇 GB 든 34MB 면 끝난다.
+    코너별로 잘라도 합집합은 멀쩡하다(0_trim.py 헤더에 이유가 적혀 있다).
 
 무엇을 왜 하나
     코너마다 위반하는 경로가 다르다. 0.8V 에서만 위반인 경로와 0.6V 에서만
@@ -60,9 +69,11 @@
   속도
     --jobs N  (-j N)    리포트를 **코너 단위로** 동시에 읽을 프로세스 수.
                         코너끼리는 독립이라 나눠도 결과가 완전히 같다.
-                        0=자동(코어 수와 코너 수 중 작은 쪽, 최대 8), 1=하나씩.
+                        **기본 1(하나씩)**. 0 을 주면 자동(최대 8).
                         코너 수보다 크게 줘도 코너 수로 잘린다.
                         예: 코너 16개 279MB 를 -j 1 은 6.3초, -j 16 은 0.8초.
+                        빨라지는 만큼 메모리도 늘어난다. 터진 적이 있으면
+                        1 로 두고 대신 --max-paths 로 개수를 줄인다.
 
   나머지
     --no-edge           rise/fall 고정을 끈다. 기본은 켜짐.
@@ -72,9 +83,9 @@
                         생략하면 --dir 안에 위 이름으로 만든다.
 
 자주 쓰는 형태
-    python3 1_union.py --dir round1/corners                    # 전부, 자동 병렬
-    python3 1_union.py --dir round1/corners -j 16              # 코너 많을 때
-    python3 1_union.py --dir round1/corners --max-paths 2000   # 2회차가 오래 걸릴 때
+    python3 1_union.py --dir round1/corners --max-paths 2000   # 보통 이것
+    python3 1_union.py --dir round1/corners                    # 경로 전부
+    python3 1_union.py --dir round1/corners --max-paths 2000 -j 8   # 코너 많을 때
     python3 1_union.py --dir round1/corners --mode hold        # 홀드 분석
 
 경로를 같다고 보는 기준
@@ -84,6 +95,7 @@
 """
 import argparse
 import glob
+import hashlib
 import multiprocessing
 import os
 import re
@@ -155,78 +167,172 @@ def data_pin_chain(lines, start_inst, end_inst):
     return items[start_at:end_at + 1]
 
 
-def parse_report(path):
-    """리포트 하나 -> (경로 목록, 통계).
+def walk_report(path, stat):
+    """리포트를 훑으며 경로를 하나씩 내놓는다. (시작FF, 끝FF, 핀들, 방향들, slack)
 
-    통계는 '리포트에 Startpoint 가 몇 개인데 몇 개를 실제로 썼는가' 를 센다.
+    **한 번에 하나씩만 내놓는다.** 예전에는 리포트 하나의 경로를 전부 리스트에
+    담아 돌려줬는데, 코너당 8만 경로가 나오는 현업 리포트에서 그 리스트만으로
+    수 GB 가 됐다. 부르는 쪽이 필요한 것만 골라 담을 수 있어야 한다.
+
+    stat 은 부르는 쪽이 만들어 넘긴다(제너레이터라 return 으로는 못 준다).
+    '리포트에 Startpoint 가 몇 개인데 몇 개를 실제로 썼는가' 를 센다.
     경로가 조용히 빠지면 합집합이 불완전해지므로, 버린 개수와 이유를 화면에 알린다.
       no_chain  : 시작 FF 의 Q 부터 끝 FF 의 D 까지 이어지는 핀 줄을 못 찾음
                   (포트에서 시작/끝나는 경로이거나 -input_pins 가 빠진 경우)
       no_slack  : slack 줄을 못 만남 (파일이 중간에 잘린 경우)
     """
-    out = []
-    stat = {"startpoint": 0, "no_chain": 0, "no_slack": 0}
-    cur = None
+    start = end = None
     buf = []
     with open(path, "r", errors="ignore") as f:
         for line in f:
             m = START_RE.match(line)
             if m:
-                if cur is not None:
+                if start is not None:
                     stat["no_slack"] += 1      # 앞 경로가 slack 없이 끝났다
                 stat["startpoint"] += 1
-                cur = {"start": m.group(1), "end": "", "group": "", "slack": None}
-                buf = []
+                start, end, buf = m.group(1), "", []
                 continue
-            if cur is None:
+            if start is None:
                 continue
             m = END_RE.match(line)
             if m:
-                cur["end"] = m.group(1)
-                continue
-            m = GROUP_RE.match(line)
-            if m:
-                cur["group"] = m.group(1)
+                end = m.group(1)
                 continue
             m = SLACK_RE.match(line)
             if m:
-                cur["status"] = m.group(1)
-                cur["slack"] = float(m.group(2))
-                pd = data_pin_chain(buf, cur["start"], cur["end"])
+                slack = float(m.group(2))
+                pd = data_pin_chain(buf, start, end)
                 if pd:
-                    # 튜플로 만들고 sig 안에 **같은 객체**를 넣는다. --jobs 로
-                    # 프로세스를 나누면 결과가 부모로 pickle 되어 넘어오는데,
-                    # pickle 은 같은 객체를 한 번만 보낸다. 핀 목록이 이 결과의
-                    # 대부분이라, 이것만으로 넘기는 양이 절반이 된다.
-                    cur["pins"] = tuple(p for p, _ in pd)
-                    cur["dirs"] = tuple(d for _, d in pd)
-                    cur["sig"] = (cur["start"], cur["end"], cur["pins"])
-                    out.append(cur)
+                    yield (start, end,
+                           tuple(p for p, _ in pd), tuple(d for _, d in pd),
+                           slack)
                 else:
                     stat["no_chain"] += 1
-                cur = None
-                buf = []
+                start, end, buf = None, None, []
                 continue
             buf.append(line)
-    if cur is not None:
+    if start is not None:
         stat["no_slack"] += 1
+
+
+def new_stat():
+    return {"startpoint": 0, "no_chain": 0, "no_slack": 0, "npin": 0}
+
+
+def sig_key(start, end, pins):
+    """경로의 신원을 16바이트로 줄인다.
+
+    경로를 같다고 보는 기준은 (시작 FF, 끝 FF, 지나는 핀 전부) 인데, 이걸
+    그대로 dict 열쇠로 쓰면 경로 하나가 4~10 KB 다. 코너 17개 × 8만 경로면
+    열쇠만으로 10 GB 가 넘어 죽는다.
+
+    1차에서는 '어느 경로가 어느 slack 이었나' 만 알면 되고 핀 이름 자체는
+    필요 없다. 그래서 16바이트로 줄여서 센다. 128비트라 서로 다른 경로가
+    같은 값이 될 일은 사실상 없다(수십억 경로에서도 확률이 무시할 수준).
+    """
+    h = hashlib.blake2b(digest_size=16)
+    h.update(start.encode("utf-8", "replace"))
+    h.update(b"\x00")
+    h.update(end.encode("utf-8", "replace"))
+    for p in pins:
+        h.update(b"\x00")
+        h.update(p.encode("utf-8", "replace"))
+    return h.digest()
+
+
+def parse_report(path):
+    """리포트 하나 -> (경로 목록, 통계). 예전 형태 그대로.
+
+    지금 본체는 walk_report 를 쓴다. 이건 밖에서 부르던 코드와 시험용으로 남긴다.
+    """
+    stat = new_stat()
+    out = []
+    for start, end, pins, dirs, slack in walk_report(path, stat):
+        out.append({"start": start, "end": end, "pins": pins, "dirs": dirs,
+                    "slack": slack, "sig": (start, end, pins)})
     return out, stat
 
 
-
-# ---- 코너별로 나눠 읽기 (--jobs) --------------------------------------
-# 코너 하나를 읽는 일은 다른 코너와 아무 상관이 없다. 현업 리포트는 코너당
-# 수백 MB~GB 라 한 줄씩 정규식으로 훑는 시간이 그대로 전체 시간이 된다.
-# 코너 수만큼 프로세스로 나누면 그만큼 줄어든다.
+# ---- 두 번 나눠 읽기 : 메모리가 터지지 않게 --------------------------
+# 예전에는 한 번에 다 읽어 들고 있었다. 코너마다 8만 경로가 나오는 현업
+# 리포트에서 이게 죽는다. 이유는 두 가지였다.
 #
-# 스레드가 아니라 프로세스인 이유: 여기서 하는 일은 순수 파이썬 정규식이라
-# GIL 을 놓지 않는다. 스레드로는 하나도 안 빨라진다.
+#   1) best_slack 이 **모든 코너의 모든 고유 경로**를 핀 목록째로 붙잡았다.
+#      --slack-max 로 걸러도 이건 안 줄었다. 걸러진 경로까지 세고 있었기 때문.
+#   2) union 도 남길 경로가 정해지기 전에 미리 다 담았다.
+#
+# 그래서 두 번에 나눈다. 리포트를 두 번 읽지만, 읽는 것은 원래도 병렬이고
+# 1차는 담는 게 거의 없어 빠르다. 메모리는 수십 배 줄어든다.
+#
+#   1차(scan)    : 경로당 16바이트 열쇠 + slack 만. 핀 이름은 버린다.
+#                  -> 어디서 자를지, 몇 개가 남는지 여기서 정확히 정해진다.
+#   [자를 곳 결정]  남길 경로의 열쇠만 모은다(--max-paths 2000 이면 2000개).
+#   2차(collect) : 다시 읽되 **남길 열쇠에 해당하는 경로의 핀만** 담는다.
+#
+# 스레드가 아니라 프로세스로 나누는 이유: 여기서 하는 일은 순수 파이썬
+# 정규식이라 GIL 을 놓지 않는다. 스레드로는 하나도 안 빨라진다.
 
-def _parse_one(fp):
-    """워커 프로세스가 리포트 하나를 읽는다. -> (코너, 경로들, 통계)"""
+def _scan_one(fp):
+    """1차. -> (코너, [(열쇠, slack)...], 통계).  핀 이름은 안 넘긴다.
+
+    핀 개수만 stat["npin"] 에 세어 둔다. 2차에서 메모리가 얼마나 필요할지
+    미리 알려 주려는 것이다(핀이 많은 경로일수록 무겁다).
+    """
     corner = os.path.splitext(os.path.basename(fp))[0]
-    paths, stat = parse_report(fp)
-    return corner, paths, stat
+    stat = new_stat()
+    rows = []
+    for s, e, pins, dirs, sl in walk_report(fp, stat):
+        rows.append((sig_key(s, e, pins), sl))
+        stat["npin"] += len(pins)
+    return corner, rows, stat
+
+
+# 2차 워커가 볼 값들. 태스크마다 pickle 로 실어 보내면 낭비라, 프로세스를
+# 띄울 때 한 번만 넘긴다(fork 라 자식은 그냥 물려받는다).
+_KEEP = None            # 남길 경로의 열쇠 집합
+_SLACK_MAX = None
+_PER_CORNER_MAX = None
+
+
+def _init_collect(keep, slack_max, per_corner_max):
+    global _KEEP, _SLACK_MAX, _PER_CORNER_MAX
+    _KEEP, _SLACK_MAX, _PER_CORNER_MAX = keep, slack_max, per_corner_max
+
+
+def _collect_one(fp):
+    """2차. -> (코너, [(열쇠, 시작, 끝, 핀들, 방향들, slack)...])
+
+    남길 열쇠에 해당하는 경로만 담는다. --per-corner-max 는 1차와 **같은
+    기준**으로 잘라야 하므로, 코너 전체를 slack 순으로 세운 뒤 앞에서 N개를
+    고르는 것까지 여기서 똑같이 한다. 이때도 핀은 남길 것만 들고 있는다.
+    """
+    corner = os.path.splitext(os.path.basename(fp))[0]
+    stat = new_stat()
+    rows = []
+    for s, e, pins, dirs, sl in walk_report(fp, stat):
+        k = sig_key(s, e, pins)
+        keep_it = k in _KEEP
+        if _PER_CORNER_MAX is None:
+            # 자를 게 없으면 남길 것만 담고 나머지는 그 자리에서 버린다.
+            if keep_it:
+                rows.append((sl, k, (k, s, e, pins, dirs, sl)))
+            continue
+        # --per-corner-max 가 있으면 순위를 매겨야 해서 전부 세어는 둔다.
+        # 단 핀까지 들고 있는 것은 남길 것뿐이라 무겁지 않다.
+        rows.append((sl, k, (k, s, e, pins, dirs, sl) if keep_it else None))
+
+    if _PER_CORNER_MAX is not None and len(rows) > _PER_CORNER_MAX:
+        # 1차와 같은 정렬(slack 오름차순, 같으면 파일에 나온 순서)
+        rows = sorted(rows, key=lambda r: r[0])[:_PER_CORNER_MAX]
+
+    out = []
+    for sl, k, rec in rows:
+        if rec is None:
+            continue
+        if _SLACK_MAX is not None and sl > _SLACK_MAX:
+            continue
+        out.append(rec)
+    return corner, out
 
 
 def resolve_jobs(want, n_files):
@@ -247,8 +353,8 @@ def resolve_jobs(want, n_files):
     return max(1, min(ncpu, n_files, 8))
 
 
-def iter_parsed(files, jobs):
-    """리포트를 (코너, 경로들, 통계) 로 하나씩 내놓는다. **파일 순서를 지킨다.**
+def iter_parsed(files, jobs, work, init=None, initargs=()):
+    """work(파일) 결과를 하나씩 내놓는다. **파일 순서를 지킨다.**
 
     순서를 지키는 이유: 화면의 코너 표와 TSV 의 slack__<코너> 열 순서가 파일
     이름 순이어야 예전 결과와 그대로 비교된다. 그래서 imap 을 쓴다(순서 보장).
@@ -258,23 +364,28 @@ def iter_parsed(files, jobs):
     그럴 때는 조용히 1개로 되돌아간다. 멈추지 않는다.
     """
     if jobs <= 1:
+        if init is not None:
+            init(*initargs)                    # 1개로 돌 때도 같은 값을 쓴다
         for fp in files:
-            yield _parse_one(fp)
+            yield work(fp)
         return
 
     try:
-        pool = multiprocessing.Pool(processes=jobs)
+        pool = multiprocessing.Pool(processes=jobs,
+                                    initializer=init, initargs=initargs)
     except Exception as e:
         print("  [ 알림 ] 프로세스를 못 띄워 1개로 돌립니다 (%s)" % e)
         print("           결과는 같습니다. 시간만 더 걸립니다.")
+        if init is not None:
+            init(*initargs)
         for fp in files:
-            yield _parse_one(fp)
+            yield work(fp)
         return
 
     try:
         # chunksize=1 : 리포트 하나가 크고 코너마다 크기가 제각각이라,
         # 미리 뭉텅이로 나눠 주면 큰 것만 몰린 프로세스 하나를 다 같이 기다리게 된다.
-        for r in pool.imap(_parse_one, files, 1):
+        for r in pool.imap(work, files, 1):
             yield r
         pool.close()
     finally:
@@ -372,11 +483,12 @@ def main():
                     help="이 값보다 slack 이 큰 경로는 제외. 생략하면 리포트에 있는 것 전부.")
     ap.add_argument("--no-edge", action="store_true",
                     help="rise/fall 고정을 끈다. 기본은 켜짐(코너마다 엣지가 뒤바뀌는 것을 막는다).")
-    ap.add_argument("--jobs", "-j", type=int, default=0, metavar="N",
+    ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
                     help="리포트를 **코너 단위로** 동시에 읽을 프로세스 수. "
-                         "0=자동(코어 수와 코너 수 중 작은 쪽, 최대 8). "
-                         "1=예전처럼 하나씩. 코너 수보다 크게 줘도 코너 수로 "
-                         "잘린다. 결과는 몇을 주든 완전히 같다")
+                         "**기본 1(하나씩)**. 0 을 주면 자동(코어 수와 코너 수 "
+                         "중 작은 쪽, 최대 8). 올리면 빨라지지만 메모리도 그만큼 "
+                         "늘어난다. 코너 수보다 크게 줘도 코너 수로 잘린다. "
+                         "결과는 몇을 주든 완전히 같다")
     args = ap.parse_args()
 
     d = args.dir
@@ -434,46 +546,39 @@ def main():
               " 아래 표 참고")
     print("")
 
-    union = {}
+    # ---- 1차 : 무엇이 있는지만 가볍게 센다 --------------------------
+    # 경로당 16바이트 열쇠 + slack 만 본다. 핀 이름은 여기서 그냥 버린다.
+    # 어디서 자를지 정하는 데는 slack 만 있으면 되기 때문이다.
     per_corner_cut = {}
-    best_slack = {}   # 경로 -> 여러 코너 중 가장 나쁜(작은) slack. 문턱값 미리보기용
+    best_slack = {}   # 열쇠 -> 여러 코너 중 가장 나쁜(작은) slack
     corner_names = []
     total_drop = {"no_chain": 0, "no_slack": 0}
+    n_pin_seen = 0
+    n_path_seen = 0
     print("  %-34s %8s %8s %8s" % ("코너", "리포트", "사용", "제외"))
     print("  " + "-" * 62)
-    for corner, paths, stat in iter_parsed(files, jobs):
+    for corner, scan, stat in iter_parsed(files, jobs, _scan_one):
         corner_names.append(corner)
         total_drop["no_chain"] += stat["no_chain"]
         total_drop["no_slack"] += stat["no_slack"]
+        n_pin_seen += stat["npin"]
+        n_path_seen += len(scan)
 
         # --per-corner-max : 합치기 **전에** 코너별로 자른다.
         # 코너마다 자기 기준으로 자르므로, 그 코너 목록에서 밀려난 경로는
         # 다른 코너에서 위험했더라도 합집합에 못 들어온다. 그래서 기본은 끄고,
         # 리포트가 너무 커서 어쩔 수 없을 때만 쓴다.
-        n_corner_before = len(paths)
-        if args.per_corner_max is not None and len(paths) > args.per_corner_max:
-            paths = sorted(paths, key=lambda x: x["slack"])[:args.per_corner_max]
-            per_corner_cut[corner] = (n_corner_before, len(paths))
+        n_corner_before = len(scan)
+        if args.per_corner_max is not None and n_corner_before > args.per_corner_max:
+            scan = sorted(scan, key=lambda r: r[1])[:args.per_corner_max]
+            per_corner_cut[corner] = (n_corner_before, len(scan))
         kept = 0
-        for p in paths:
-            b = best_slack.get(p["sig"])
-            if b is None or p["slack"] < b:
-                best_slack[p["sig"]] = p["slack"]
-            if args.slack_max is not None and p["slack"] > args.slack_max:
-                continue
-            kept += 1
-            e = union.setdefault(p["sig"], {
-                "start": p["start"], "end": p["end"],
-                "n_through": len(p["pins"]) - 2,
-                "pins": p["pins"], "dirs": p["dirs"],
-                "slacks": {},
-            })
-            prev = e["slacks"].get(corner)
-            if prev is None or p["slack"] < prev:
-                e["slacks"][corner] = p["slack"]
-                # 가장 나쁜 코너의 방향을 쓴다(2회차에 그 엣지로 고정)
-                if p["slack"] == min(e["slacks"].values()):
-                    e["dirs"] = p["dirs"]
+        for k, sl in scan:
+            b = best_slack.get(k)
+            if b is None or sl < b:
+                best_slack[k] = sl
+            if args.slack_max is None or sl <= args.slack_max:
+                kept += 1
         dropped = stat["no_chain"] + stat["no_slack"]
         mark = ""
         if corner in per_corner_cut:
@@ -518,16 +623,81 @@ def main():
             tag = "  (전체)" if want == len(vals) else ""
             print("  %10d %12.4f %14s%s" % (want, th, est, tag))
         print("  " + "-" * 40)
+
+    # ---- 남길 경로를 **여기서** 정한다 ------------------------------
+    # 예전에는 다 담아 놓고 마지막에 잘랐다. 담는 도중에 메모리가 터졌다.
+    # 이제는 1차 결과(열쇠+slack)만 보고 자를 곳을 먼저 정하고, 2차에서
+    # 남길 것만 담는다. 그래서 메모리가 '리포트 전체'가 아니라 '남길 개수'에
+    # 비례한다.
+    keep_keys = [k for k, v in best_slack.items()
+                 if args.slack_max is None or v <= args.slack_max]
+    n_after_slack = len(keep_keys)
+
+    # --max-paths 는 문턱값으로 바꿔서 건다. 같은 slack 이 여러 개면 조금
+    # 넉넉히 남는데, 최종 개수 자르기는 아래 원래 자리에서 그대로 하므로
+    # 결과는 정확히 같다.
+    if args.max_paths is not None and n_after_slack > args.max_paths:
+        cut = sorted(best_slack[k] for k in keep_keys)[args.max_paths - 1]
+        keep_keys = [k for k in keep_keys if best_slack[k] <= cut]
+    keep = set(keep_keys)
+    del keep_keys
+
+    if best_slack:
         if args.slack_max is not None:
             print("  지금 --slack-max %.4f 로 %d개를 골랐습니다."
-                  % (args.slack_max, len(union)))
+                  % (args.slack_max, n_after_slack))
         else:
             print("  지금은 문턱값 없이 전부(%d개) 씁니다." % len(vals))
         print("  ** 문턱값을 좁혀도 1회차를 다시 돌릴 필요는 없습니다. **")
         print("     리포트는 그대로 두고 이 명령만 다시 돌리면 됩니다.")
 
+    if not keep:
+        print("")
+        # 문턱값 때문에 0개가 된 것과, 리포트를 아예 못 읽은 것은 원인이 다르다.
+        if best_slack and args.slack_max is not None:
+            code("E-THTIGHT",
+                 "[ 실패 ] --slack-max %.4f 로 걸러서 남은 경로가 0개입니다."
+                 % args.slack_max,
+                 "         리포트에는 경로가 %d개 있고, 그중 가장 나쁜 slack 은 "
+                 "%.4f 입니다." % (len(best_slack), min(best_slack.values())),
+                 "         --slack-max 를 그보다 크게 주세요. 위 표를 참고하세요.")
+        code("E-NOPATH",
+             "[ 실패 ] 쓸 수 있는 경로가 하나도 없습니다.",
+             "         report_timing 에 -input_pins 가 빠졌을 가능성이 큽니다.")
+
+    # ---- 2차 : 남길 경로의 핀만 담는다 -----------------------------
+    # 메모리가 얼마나 필요한지 먼저 알려 준다. 핀 하나가 대략 110 바이트다.
+    avg_pin = (n_pin_seen / float(n_path_seen)) if n_path_seen else 0.0
+    need_mb = len(keep) * avg_pin * 110 / 1048576.0
+    print("")
+    print("  2차 : 남길 %d경로의 핀만 다시 읽습니다 (예상 메모리 %.0f MB)"
+          % (len(keep), need_mb))
+    if need_mb > 4000:
+        print("")
+        print("  [ 주의 ] 예상 메모리가 %.1f GB 입니다." % (need_mb / 1024.0))
+        print("           경로가 %d개로 너무 많습니다. 위 표를 보고"
+              % len(keep))
+        print("           --max-paths 2000 처럼 개수를 줄여서 다시 돌리세요.")
+        print("           (2회차 측정 시간도 경로 수에 그대로 비례합니다)")
+
+    union = {}
+    for corner, recs in iter_parsed(files, jobs, _collect_one, _init_collect,
+                                    (keep, args.slack_max, args.per_corner_max)):
+        for k, p_start, p_end, p_pins, p_dirs, sl in recs:
+            u = union.setdefault(k, {
+                "start": p_start, "end": p_end,
+                "n_through": len(p_pins) - 2,
+                "pins": p_pins, "dirs": p_dirs,
+                "slacks": {},
+            })
+            prev = u["slacks"].get(corner)
+            if prev is None or sl < prev:
+                u["slacks"][corner] = sl
+                # 가장 나쁜 코너의 방향을 쓴다(2회차에 그 엣지로 고정)
+                if sl == min(u["slacks"].values()):
+                    u["dirs"] = p_dirs
+
     # 버려진 비율이 크면 형식 문제일 가능성이 높다. 눈에 띄게 알린다.
-    total_seen = sum(1 for _ in [1]) and 0
     dropped_all = total_drop["no_chain"] + total_drop["no_slack"]
     if union and dropped_all > 0:
         used = len(union)
@@ -541,14 +711,6 @@ def main():
 
     if not union:
         print("")
-        # 문턱값 때문에 0개가 된 것과, 리포트를 아예 못 읽은 것은 원인이 다르다.
-        if best_slack and args.slack_max is not None:
-            code("E-THTIGHT",
-                 "[ 실패 ] --slack-max %.4f 로 걸러서 남은 경로가 0개입니다."
-                 % args.slack_max,
-                 "         리포트에는 경로가 %d개 있고, 그중 가장 나쁜 slack 은 "
-                 "%.4f 입니다." % (len(best_slack), min(best_slack.values())),
-                 "         --slack-max 를 그보다 크게 주세요. 위 표를 참고하세요.")
         code("E-NOPATH",
              "[ 실패 ] 쓸 수 있는 경로가 하나도 없습니다.",
              "         report_timing 에 -input_pins 가 빠졌을 가능성이 큽니다.")
