@@ -229,6 +229,10 @@ def main():
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
                     help="setup(-delay_type max) / hold(min). **1회차 리포트를 "
                          "뽑을 때 쓴 것과 같아야 한다.** 2회차 tcl 에 그대로 들어간다")
+    ap.add_argument("--per-corner-max", type=int, default=None,
+                    help="**합치기 전에** 코너마다 이 개수만 남긴다. 리포트가 "
+                         "너무 커서 코너별로 먼저 줄여야 할 때. 각 코너의 "
+                         "worst slack 부터 남는다")
     ap.add_argument("--max-paths", type=int, default=None,
                     help="합집합 결과를 이 개수만 남긴다. **가장 나쁜 slack 부터** "
                          "고른다. 문턱값을 계산할 필요 없이 개수로 바로 정할 때. "
@@ -263,6 +267,7 @@ def main():
     print("")
 
     union = {}
+    per_corner_cut = {}
     best_slack = {}   # 경로 -> 여러 코너 중 가장 나쁜(작은) slack. 문턱값 미리보기용
     corner_names = []
     total_drop = {"no_chain": 0, "no_slack": 0}
@@ -274,6 +279,15 @@ def main():
         paths, stat = parse_report(fp)
         total_drop["no_chain"] += stat["no_chain"]
         total_drop["no_slack"] += stat["no_slack"]
+
+        # --per-corner-max : 합치기 **전에** 코너별로 자른다.
+        # 코너마다 자기 기준으로 자르므로, 그 코너 목록에서 밀려난 경로는
+        # 다른 코너에서 위험했더라도 합집합에 못 들어온다. 그래서 기본은 끄고,
+        # 리포트가 너무 커서 어쩔 수 없을 때만 쓴다.
+        n_corner_before = len(paths)
+        if args.per_corner_max is not None and len(paths) > args.per_corner_max:
+            paths = sorted(paths, key=lambda x: x["slack"])[:args.per_corner_max]
+            per_corner_cut[corner] = (n_corner_before, len(paths))
         kept = 0
         for p in paths:
             b = best_slack.get(p["sig"])
@@ -295,7 +309,11 @@ def main():
                 if p["slack"] == min(e["slacks"].values()):
                     e["dirs"] = p["dirs"]
         dropped = stat["no_chain"] + stat["no_slack"]
-        print("  %-34s %8d %8d %8d" % (corner, stat["startpoint"], kept, dropped))
+        mark = ""
+        if corner in per_corner_cut:
+            mark = "   <- %d개에서 자름" % per_corner_cut[corner][0]
+        print("  %-34s %8d %8d %8d%s"
+              % (corner, stat["startpoint"], kept, dropped, mark))
 
     if total_drop["no_chain"] or total_drop["no_slack"]:
         print("")
@@ -484,6 +502,13 @@ def main():
                  if all(d in ("r", "f") for d in r["dirs"]) and len(r["dirs"]) == len(r["pins"]))
     print("")
     print("-" * 68)
+    if per_corner_cut:
+        print("  --per-corner-max %d 로 **합치기 전에** 코너별로 잘랐습니다."
+              % args.per_corner_max)
+        print("    잘린 코너 %d개. 그 코너에서 밀려난 경로는 다른 코너에서"
+              % len(per_corner_cut))
+        print("    위험했더라도 합집합에 들어오지 않습니다.")
+        print("")
     if cut_at is not None:
         print("  --max-paths %d 로 %d개 중 %d개만 남겼습니다."
               % (args.max_paths, n_before_cut, len(rows)))
