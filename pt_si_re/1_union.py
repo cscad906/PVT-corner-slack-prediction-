@@ -26,6 +26,7 @@
 """
 import argparse
 import glob
+import multiprocessing
 import os
 import re
 import sys
@@ -135,9 +136,13 @@ def parse_report(path):
                 cur["slack"] = float(m.group(2))
                 pd = data_pin_chain(buf, cur["start"], cur["end"])
                 if pd:
-                    cur["pins"] = [p for p, _ in pd]
-                    cur["dirs"] = [d for _, d in pd]
-                    cur["sig"] = (cur["start"], cur["end"], tuple(cur["pins"]))
+                    # 튜플로 만들고 sig 안에 **같은 객체**를 넣는다. --jobs 로
+                    # 프로세스를 나누면 결과가 부모로 pickle 되어 넘어오는데,
+                    # pickle 은 같은 객체를 한 번만 보낸다. 핀 목록이 이 결과의
+                    # 대부분이라, 이것만으로 넘기는 양이 절반이 된다.
+                    cur["pins"] = tuple(p for p, _ in pd)
+                    cur["dirs"] = tuple(d for _, d in pd)
+                    cur["sig"] = (cur["start"], cur["end"], cur["pins"])
                     out.append(cur)
                 else:
                     stat["no_chain"] += 1
@@ -149,6 +154,74 @@ def parse_report(path):
         stat["no_slack"] += 1
     return out, stat
 
+
+
+# ---- 코너별로 나눠 읽기 (--jobs) --------------------------------------
+# 코너 하나를 읽는 일은 다른 코너와 아무 상관이 없다. 현업 리포트는 코너당
+# 수백 MB~GB 라 한 줄씩 정규식으로 훑는 시간이 그대로 전체 시간이 된다.
+# 코너 수만큼 프로세스로 나누면 그만큼 줄어든다.
+#
+# 스레드가 아니라 프로세스인 이유: 여기서 하는 일은 순수 파이썬 정규식이라
+# GIL 을 놓지 않는다. 스레드로는 하나도 안 빨라진다.
+
+def _parse_one(fp):
+    """워커 프로세스가 리포트 하나를 읽는다. -> (코너, 경로들, 통계)"""
+    corner = os.path.splitext(os.path.basename(fp))[0]
+    paths, stat = parse_report(fp)
+    return corner, paths, stat
+
+
+def resolve_jobs(want, n_files):
+    """실제로 쓸 프로세스 수를 정한다.
+
+    코너 수보다 많이 띄워 봐야 노는 프로세스만 생긴다. 그래서 항상 코너 수로
+    자른다. want 가 0 이면 자동인데, 공용 서버라 자동일 때는 8 에서 멈춘다.
+    더 쓰고 싶으면 --jobs 로 직접 준다(상한 없음).
+    """
+    if n_files <= 1:
+        return 1
+    if want and want > 0:
+        return min(want, n_files)
+    try:
+        ncpu = multiprocessing.cpu_count()
+    except NotImplementedError:
+        ncpu = 1
+    return max(1, min(ncpu, n_files, 8))
+
+
+def iter_parsed(files, jobs):
+    """리포트를 (코너, 경로들, 통계) 로 하나씩 내놓는다. **파일 순서를 지킨다.**
+
+    순서를 지키는 이유: 화면의 코너 표와 TSV 의 slack__<코너> 열 순서가 파일
+    이름 순이어야 예전 결과와 그대로 비교된다. 그래서 imap 을 쓴다(순서 보장).
+    결과는 --jobs 를 뭘 주든 완전히 같다.
+
+    프로세스를 못 띄우는 서버가 있다(/dev/shm 이 막혀 sem_open 실패 등).
+    그럴 때는 조용히 1개로 되돌아간다. 멈추지 않는다.
+    """
+    if jobs <= 1:
+        for fp in files:
+            yield _parse_one(fp)
+        return
+
+    try:
+        pool = multiprocessing.Pool(processes=jobs)
+    except Exception as e:
+        print("  [ 알림 ] 프로세스를 못 띄워 1개로 돌립니다 (%s)" % e)
+        print("           결과는 같습니다. 시간만 더 걸립니다.")
+        for fp in files:
+            yield _parse_one(fp)
+        return
+
+    try:
+        # chunksize=1 : 리포트 하나가 크고 코너마다 크기가 제각각이라,
+        # 미리 뭉텅이로 나눠 주면 큰 것만 몰린 프로세스 하나를 다 같이 기다리게 된다.
+        for r in pool.imap(_parse_one, files, 1):
+            yield r
+        pool.close()
+    finally:
+        pool.terminate()
+        pool.join()
 
 
 # ---- 결과 코드 -------------------------------------------------------
@@ -241,6 +314,11 @@ def main():
                     help="이 값보다 slack 이 큰 경로는 제외. 생략하면 리포트에 있는 것 전부.")
     ap.add_argument("--no-edge", action="store_true",
                     help="rise/fall 고정을 끈다. 기본은 켜짐(코너마다 엣지가 뒤바뀌는 것을 막는다).")
+    ap.add_argument("--jobs", "-j", type=int, default=0, metavar="N",
+                    help="리포트를 **코너 단위로** 동시에 읽을 프로세스 수. "
+                         "0=자동(코어 수와 코너 수 중 작은 쪽, 최대 8). "
+                         "1=예전처럼 하나씩. 코너 수보다 크게 줘도 코너 수로 "
+                         "잘린다. 결과는 몇을 주든 완전히 같다")
     args = ap.parse_args()
 
     d = args.dir
@@ -260,10 +338,18 @@ def main():
              "         코너마다 report_timing 결과를 이 폴더에 모아 주세요.",
              "         파일 이름이 그대로 코너 이름이 됩니다.")
 
+    jobs = resolve_jobs(args.jobs, len(files))
+    total_mb = sum(os.path.getsize(f) for f in files) / (1024.0 * 1024.0)
+
     print("  폴더 : %s" % d)
-    print("  코너 : %d개" % len(files))
+    print("  코너 : %d개  (리포트 합계 %.0f MB)" % (len(files), total_mb))
     print("  분석 : %s  (2회차는 -delay_type %s 로 측정)"
           % (args.mode, "min" if args.mode == "hold" else "max"))
+    if jobs > 1:
+        print("  동시 : %d개씩 읽음  (--jobs %d)" % (jobs, jobs))
+    elif len(files) > 1:
+        print("  동시 : 1개씩 읽음.  --jobs %d 을 주면 코너를 나눠 읽습니다"
+              % min(len(files), 8))
     print("")
 
     union = {}
@@ -273,10 +359,8 @@ def main():
     total_drop = {"no_chain": 0, "no_slack": 0}
     print("  %-34s %8s %8s %8s" % ("코너", "리포트", "사용", "제외"))
     print("  " + "-" * 62)
-    for fp in files:
-        corner = os.path.splitext(os.path.basename(fp))[0]
+    for corner, paths, stat in iter_parsed(files, jobs):
         corner_names.append(corner)
-        paths, stat = parse_report(fp)
         total_drop["no_chain"] += stat["no_chain"]
         total_drop["no_slack"] += stat["no_slack"]
 

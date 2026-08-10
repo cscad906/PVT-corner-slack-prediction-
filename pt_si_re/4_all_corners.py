@@ -52,8 +52,6 @@ PHASES = {
     ],
     "2": [
         ("5b pairs",    "5b_pairs.py",    False, "xtalk/active_features.tsv"),
-    ],
-    "3": [
         ("5c report",   "5c_report.py",   False, "xtalk/compact_flat.tsv"),
     ],
 }
@@ -61,8 +59,10 @@ PHASES = {
 # 묶음이 끝나면 pt_shell 에서 그대로 source 할 tcl 을 만들어 준다.
 # 경로를 손으로 고칠 일이 없고, 세션에 값이 남아 엉뚱한 폴더를 도는 일도 없다.
 PT_WRAPPER = {
-    "1": ("run_pt1_xtalk_calc.tcl", "all_xtalk_calc.tcl"),
-    "2": ("run_pt2_xtalk_windows.tcl", "all_xtalk_windows.tcl"),
+    # 묶음 1 뒤에 PT 를 **한 번만** 다녀오면 된다.
+    # (예전에는 PT 1차 -> 파이썬 -> PT 2차 로 두 번이었다. 지금은 tcl 이
+    #  자기가 받은 출력에서 aggressor 이름을 직접 긁어 이어서 처리한다.)
+    "1": ("run_pt_xtalk.tcl", "all_xtalk_one.tcl"),
 }
 
 
@@ -82,15 +82,11 @@ def write_pt_wrapper(phase, root, mode):
 
 
 NEXT_HINT = {
-    "1": ("pt_shell 에서 PT 1차를 돌리세요 (디자인 로드된 상태로):",
+    "1": ("pt_shell 에서 crosstalk 계산을 돌리세요 (디자인 로드된 상태로):",
           "    source %(wrap)s",
-          "그다음 다시 셸에서:",
+          "그다음 다시 셸에서 -- 이걸로 끝입니다:",
           "    %(py)s 4_all_corners.py --root %(root)s --phase 2"),
-    "2": ("pt_shell 에서 PT 2차를 돌리세요:",
-          "    source %(wrap)s",
-          "그다음 다시 셸에서:",
-          "    %(py)s 4_all_corners.py --root %(root)s --phase 3"),
-    "3": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
+    "2": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
           "    <코너>_fixed_annotated.txt",
           "    <코너>.path_context_si_compact.by_path.rpt",
           ""),
@@ -164,8 +160,8 @@ def main():
     ap.add_argument("--spef", default=None,
                     help="모든 코너가 함께 쓸 SPEF. 코너 폴더에 design.spef 가 "
                          "있으면 그쪽이 우선한다")
-    ap.add_argument("--phase", default="1", choices=["1", "2", "3"],
-                    help="1=2a~5a(기본), 2=5b, 3=5c. 사이사이 pt_shell 로 갔다 온다")
+    ap.add_argument("--phase", default="1", choices=["1", "2"],
+                    help="1=2a~5a(기본), 2=5b~5c. 사이에 pt_shell 을 한 번 다녀온다")
     ap.add_argument("--only", default=None,
                     help="그 묶음 안에서 일부만. 쉼표로 (예: 2a,2b)")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
