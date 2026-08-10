@@ -2,7 +2,22 @@
 # -*- coding: utf-8 -*-
 """1 - 코너별 리포트를 합쳐 '측정할 경로 목록' 을 만든다.  (1회차 -> 2회차)
 
-    python3 1_union.py --dir round1/corners
+    python3 1_union.py --dir round1/corners --max-paths 2000 --jobs 16
+
+가장 많이 쓰는 옵션 두 개
+    --max-paths N   합친 뒤 **가장 나쁜 slack 부터** N개만 남긴다. 개수로 바로
+                    자르는 것이라 문턱값을 계산할 필요가 없다.
+                    2회차가 경로당 약 0.1초/코너라 **N이 그대로 시간이 된다.**
+                    (2000개면 코너당 약 3분)
+                    화면에 "몇 개로 줄일까" 표가 나오니 그걸 보고 정하면 되고,
+                    바꿔 가며 여러 번 돌려도 **1회차를 다시 뽑을 필요는 없다.**
+
+    --jobs N        리포트를 **코너 단위로** N개씩 동시에 읽는다. 코너끼리는
+                    서로 독립이라 몇으로 나누든 결과 파일은 완전히 같다.
+                    현업 리포트(코너당 수백 MB)에서 읽는 시간이 통째로 줄어든다.
+                    실측: 279MB 16코너 -> -j 1 은 6.3초, -j 16 은 0.8초.
+
+    둘 다 생략해도 된다. 생략하면 경로는 전부 쓰고, 병렬은 자동(최대 8)이다.
 
 무엇을 왜 하나
     코너마다 위반하는 경로가 다르다. 0.8V 에서만 위반인 경로와 0.6V 에서만
@@ -16,8 +31,51 @@
 
 출력
     union_paths.tsv  합집합 경로 목록. 어느 코너에서 위반이었는지까지 들어 있다.
+    union_summary.txt  같은 내용을 폭 맞춰 정렬한 것. vi 로 그냥 열어 보면 된다.
     fixed_paths.tcl  2회차에 pt_shell 에서 source 할 파일.
                      경로마다 report_timing 을 걸어 같은 경로를 다시 뽑는다.
+
+옵션
+  꼭 봐야 하는 것
+    --dir <폴더>        코너별 .rpt 가 들어 있는 폴더. (기본 round1/corners)
+    --mode setup|hold   **1회차 리포트를 뽑을 때 쓴 것과 같아야 한다.**
+                        2회차 tcl 의 -delay_type 에 그대로 들어간다.
+                        setup -> max, hold -> min. (기본 setup)
+
+  경로가 너무 많을 때 줄이는 세 가지 (전부 생략 가능)
+    화면에 "몇 개로 줄일까" 표가 나온다. 그걸 보고 고르면 되고, 어느 것을
+    쓰든 **1회차를 다시 돌릴 필요는 없다.** 리포트는 그대로 두고 이 명령만
+    다시 돌리면 된다.
+
+    --slack-max <값>    slack 이 이 값보다 큰(=여유 있는) 경로는 뺀다.
+                        예: --slack-max 0.1 -> slack 0.1ns 이하만.
+    --max-paths <N>     합친 뒤 **가장 나쁜 slack 부터** N개만 남긴다.
+                        문턱값을 계산할 필요 없이 개수로 바로 정할 때.
+                        --slack-max 와 같이 주면 둘 다 걸린다.
+    --per-corner-max <N>  **합치기 전에** 코너마다 N개로 먼저 자른다.
+                        주의: 그 코너에서 밀려난 경로는 다른 코너에서
+                        위험했더라도 합집합에 못 들어온다. 리포트가 너무 커서
+                        읽는 것 자체가 부담일 때만 쓴다.
+
+  속도
+    --jobs N  (-j N)    리포트를 **코너 단위로** 동시에 읽을 프로세스 수.
+                        코너끼리는 독립이라 나눠도 결과가 완전히 같다.
+                        0=자동(코어 수와 코너 수 중 작은 쪽, 최대 8), 1=하나씩.
+                        코너 수보다 크게 줘도 코너 수로 잘린다.
+                        예: 코너 16개 279MB 를 -j 1 은 6.3초, -j 16 은 0.8초.
+
+  나머지
+    --no-edge           rise/fall 고정을 끈다. 기본은 켜짐.
+                        켜져 있으면 2회차에서 -rise_from/-fall_through 로
+                        엣지까지 못박아, 코너가 바뀌어도 같은 엣지로 측정된다.
+    --out-tsv / --out-tcl / --out-txt   출력 파일 위치를 직접 정한다.
+                        생략하면 --dir 안에 위 이름으로 만든다.
+
+자주 쓰는 형태
+    python3 1_union.py --dir round1/corners                    # 전부, 자동 병렬
+    python3 1_union.py --dir round1/corners -j 16              # 코너 많을 때
+    python3 1_union.py --dir round1/corners --max-paths 2000   # 2회차가 오래 걸릴 때
+    python3 1_union.py --dir round1/corners --mode hold        # 홀드 분석
 
 경로를 같다고 보는 기준
     (시작 FF, 끝 FF, 그 사이를 지나는 핀 전부).
@@ -350,6 +408,30 @@ def main():
     elif len(files) > 1:
         print("  동시 : 1개씩 읽음.  --jobs %d 을 주면 코너를 나눠 읽습니다"
               % min(len(files), 8))
+
+    # 자르기 설정은 **시작할 때** 보여 준다. 예전에는 다 끝난 뒤에야 몇 개
+    # 남겼는지 나와서, 옵션을 빠뜨린 채 전부 돌려 놓고 한참 뒤에 알게 됐다.
+    cuts = []
+    if args.max_paths is not None:
+        cuts.append("--max-paths %d  (가장 나쁜 slack 부터 %d개)"
+                    % (args.max_paths, args.max_paths))
+    if args.slack_max is not None:
+        cuts.append("--slack-max %g  (slack 이 %g 이하인 것만)"
+                    % (args.slack_max, args.slack_max))
+    if args.per_corner_max is not None:
+        cuts.append("--per-corner-max %d  (합치기 **전에** 코너마다 %d개)"
+                    % (args.per_corner_max, args.per_corner_max))
+    if cuts:
+        print("  자르기 : %s" % cuts[0])
+        for c in cuts[1:]:
+            print("           %s" % c)
+        if args.max_paths is not None:
+            print("           -> 2회차 예상 %d분/코너 (경로당 0.1초)"
+                  % max(1, int(args.max_paths * 0.1 / 60)))
+    else:
+        print("  자르기 : 없음 (리포트에 있는 경로 전부)")
+        print("           많으면 --max-paths 2000 처럼 개수로 자릅니다."
+              " 아래 표 참고")
     print("")
 
     union = {}
