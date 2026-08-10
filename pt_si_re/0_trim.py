@@ -177,10 +177,73 @@ def write_trimmed(src, dst, cut, n_keep):
     return written
 
 
+def trim_streaming(src, dst, n_keep):
+    """한 번만 읽고 자른다. -> (전체 개수, 남긴 개수)  또는 안 되면 None.
+
+    report_timing 을 -sort_by slack 으로 뽑으면 리포트가 **이미 나쁜 것부터**
+    정렬돼 있다. 그러면 앞에서 N개를 그대로 쓰면 끝이고, slack 을 모아 정렬할
+    필요도 파일을 두 번 읽을 필요도 없다.
+
+    다만 정렬돼 있다고 믿어 버리면 안 된다. -sort_by 를 안 준 리포트도 있고,
+    path group 별로 따로 정렬돼 붙은 리포트도 있다. 그런 파일에서 앞 N개만
+    집으면 뒤에 있는 더 나쁜 경로를 놓친다.
+
+    그래서 N개를 쓴 뒤에도 **끝까지 slack 만 훑어보며** 확인한다.
+      - 뒤에 더 나쁜(작은) slack 이 하나도 없다  -> 앞 N개가 정말 최악 N개다
+      - 하나라도 있다                           -> None. 부르는 쪽이 두 번
+                                                   읽기 방식으로 다시 한다
+    뒤쪽 훑기는 블록을 모으지 않고 문자열 검사만 하므로 거의 공짜다.
+    덤으로 전체 경로 개수도 정확히 세어진다.
+    """
+    written = 0
+    n_total = 0
+    worst_kept = None      # 남긴 것 중 가장 나쁘지 않은(가장 큰) slack
+    buf = []
+    in_block = False
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
+        for line in fi:
+            if written < n_keep:
+                if b"Startpoint:" in line and START_B_RE.match(line):
+                    if not in_block:
+                        fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
+                    in_block = True
+                    buf = [line]
+                    continue
+                buf.append(line)
+                if not in_block:
+                    continue
+            if b"slack" not in line:
+                continue
+            m = SLACK_B_RE.match(line)
+            if not m:
+                continue
+            sl = float(m.group(1))
+            n_total += 1
+            if written < n_keep:
+                if worst_kept is None or sl > worst_kept:
+                    worst_kept = sl
+                fo.write(b"".join(buf))
+                fo.write(b"\n\n")
+                written += 1
+                buf = []
+            elif sl < worst_kept:
+                return None            # 뒤에 더 나쁜 것이 있다. 정렬 아님
+    return n_total, written
+
+
 def _trim_one(job):
-    """코너 하나를 줄인다. -> (코너, 원래 개수, 남긴 개수, 결과 파일 크기)"""
+    """코너 하나를 줄인다. -> (코너, 원래 개수, 남긴 개수, 파일 크기, 비고)"""
     src, dst, n_keep = job
     corner = os.path.splitext(os.path.basename(src))[0]
+
+    r = trim_streaming(src, dst, n_keep)
+    if r is not None:
+        n_total, written = r
+        if not n_total:
+            return corner, 0, 0, 0, "경로 없음"
+        return corner, n_total, written, os.path.getsize(dst), ""
+
+    # 정렬돼 있지 않았다. slack 을 다 모아 문턱값을 구한 뒤 다시 쓴다.
     vals, n_start = scan_slacks(src)
     if not vals:
         return corner, n_start, 0, 0, "경로 없음"
@@ -189,7 +252,7 @@ def _trim_one(job):
     else:
         cut = sorted(vals)[n_keep - 1]
     written = write_trimmed(src, dst, cut, n_keep)
-    return corner, len(vals), written, os.path.getsize(dst), ""
+    return corner, len(vals), written, os.path.getsize(dst), "정렬 안 됨"
 
 
 def resolve_jobs(want, n_files):
