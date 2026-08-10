@@ -549,6 +549,7 @@ pt/xtalk_windows.tcl        crosstalk PT 2차 — 코너 하나 (디버깅)
 
 ```
 README.md          이 파일. 현장 실행 안내
+담당자요청.md      PT 담당자께 드릴 한 장 (무엇을 source 하고 세션에 뭘 하는지)
 UNION_설명.md      union 이 하는 일과 결과 읽는 법
 코드표.md          에러 코드 44개 전체
 원격문의.md        화면 읽는 법, 원격으로 물어볼 때
