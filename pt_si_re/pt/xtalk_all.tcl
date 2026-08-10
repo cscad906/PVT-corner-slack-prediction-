@@ -206,35 +206,19 @@ if {![file exists $CTX]} {
         puts "  fixed_paths.tcl 이 방금 만든 리포트를 씁니다 : $RPT"
     }
 
-    # (2) 아니면 폴더에서 찾는다. 여러 개면 어느 것인지 알 수 없으므로 멈춘다.
-    if {$RPT eq ""} {
-        set cands {}
-        foreach f [lsort [glob -nocomplain *.rpt]] {
-            if {[string first ".path_context_si_compact." $f] >= 0} continue
-            lappend cands $f
-        }
-        if {[llength $cands] == 1} {
-            set RPT [lindex $cands 0]
-        } elseif {[llength $cands] > 1} {
-            puts "=================================================================="
-            puts "  문제 발생"
-            puts "    무엇이   : 이 폴더에 .rpt 가 [llength $cands] 개라 어느 것인지 모르겠습니다."
-            puts "               $cands"
-            puts "    하실 일  : 고정 경로 리포트 하나만 두거나, 이 파일을 source 하기 전에"
-            puts "               set OUT \"<그 리포트>\"  로 직접 지정하세요."
-            puts "               (fixed_paths.tcl 을 같은 세션에서 돌렸다면 자동으로 잡힙니다)"
-            puts ""
-            puts "    에러 코드: E-RPTMANY"
-            puts "=================================================================="
-            return
-        }
-    }
-
+    # 확실하지 않으면 추측하지 않고 멈춘다.
+    # 예전에는 폴더의 .rpt 를 훑어 첫 번째를 조용히 집었는데, 1회차 리포트나
+    # 다른 코너 리포트를 잡으면 넷이 전부 PIN_NOT_FOUND 로 나면서
+    # (E-XCALC0) 원인을 찾기 어려웠다.
     if {$RPT eq ""} {
         puts "=================================================================="
         puts "  문제 발생"
-        puts "    무엇이   : 이 폴더에 리포트(.rpt)가 없습니다."
-        puts "    하실 일  : 먼저 fixed_paths.tcl 을 돌려 2회차 리포트를 만드세요."
+        puts "    무엇이   : 읽을 리포트가 정해지지 않았습니다."
+        puts "    하실 일  : 둘 중 하나를 하세요."
+        puts "               (1) 이 파일 위쪽 RPT_FILE 에 리포트 경로를 적는다"
+        puts "                     set RPT_FILE \"/data/round2/<코너>/<코너>.rpt\""
+        puts "               (2) 같은 세션에서 fixed_paths.tcl 을 먼저 돌린다"
+        puts "                     (그러면 그 결과를 자동으로 물려받습니다)"
         puts ""
         puts "    에러 코드: E-NORPTFILE"
         puts "=================================================================="
