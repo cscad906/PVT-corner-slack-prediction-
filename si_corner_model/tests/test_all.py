@@ -30,7 +30,7 @@ FLAT_RE = (r'report\.(?P<proc>[A-Za-z]+)_(?P<v>0p\d+)_(?P<temp>m?\d+)c'
 def tree(tmp_path):
     """회사 배치: <root>/<회로>/ 밑에 코너가 파일명에 다 들어있는 리포트들."""
     for design in ("cpu", "gpu"):
-        d = tmp_path / design / "reports"
+        d = tmp_path / design / "setup"          # 배포 배치: <회로>/setup/
         d.mkdir(parents=True)
         for v in ("0p5000", "0p5400", "0p6000", "0p6850"):
             for lv in ("rcmax", "cmax"):
@@ -80,7 +80,9 @@ def test_shipped_config_defaults_to_the_deployed_layout():
     with open(os.path.join(REPO_ROOT, "config.yaml")) as f:
         raw = yaml.safe_load(f)
     assert raw["root"] == "auto", "기본 root 는 auto 여야 한다 (repo 의 부모 = 회로들이 있는 곳)"
-    assert raw["designs"] == "auto"
+    # designs 는 명시 목록이어야 한다: root 에 회로가 아닌 폴더(pr_si, spice)가
+    # 같이 있어서 auto 로 두면 그것들까지 회로로 잡힌다.
+    assert isinstance(raw["designs"], list) and raw["designs"]
     # auto 는 이 checkout 의 부모 디렉토리로 풀린다
     p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
     assert p["root"] == os.path.dirname(REPO_ROOT)
@@ -141,12 +143,16 @@ def test_expand_min_seen_is_full_grid(project):
     assert by["cpu/m25"] == 3 * 3      # 리포트가 빠지면 여기서 에러가 난다
 
 
-def test_expand_si_off_unless_crosstalk_declared(project):
-    assert "crosstalk_dir" not in expand(project)[0]["cfg"]["data"]
-    project["files"]["crosstalk_subdir"] = "xtalk"
+def test_expand_si_on_when_crosstalk_declared(project):
     cfg = expand(project)[0]["cfg"]
-    assert cfg["data"]["crosstalk_dir"].endswith("xtalk")
+    assert cfg["data"]["crosstalk_dir"].endswith(os.path.join("setup", "xtalk"))
     assert "crosstalk_regex" in cfg["data"]["patterns"]
+
+
+def test_expand_si_off_when_crosstalk_subdir_is_null(project):
+    """위치를 모를 땐 null 로 두고 SI 없이 먼저 돌릴 수 있어야 한다."""
+    project["files"]["crosstalk_subdir"] = None
+    assert "crosstalk_dir" not in expand(project)[0]["cfg"]["data"]
 
 
 def test_expand_rejects_bad_anchor(project):
@@ -586,8 +592,8 @@ def real_tree(tmp_path):
     """배포 배치 그대로: <root>/{si_corner_model, boomcore} + 파싱 가능한 리포트."""
     (tmp_path / os.path.basename(REPO_ROOT)).mkdir()
     lev = {"rcmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
-    d = tmp_path / "boomcore"
-    d.mkdir()
+    d = tmp_path / "boomcore" / "setup"
+    d.mkdir(parents=True)
     for temp, levels in (("125", ["rcmax", "cmax"]),
                          ("m25", ["rcmax", "cmax", "rcmin"])):
         for lv in levels:
@@ -610,6 +616,8 @@ def test_end_to_end_build_and_base(real_tree, tmp_path, monkeypatch):
     monkeypatch.setenv("SI_ROOT", str(real_tree))
     monkeypatch.chdir(tmp_path)                       # cache 는 여기 아래로
     p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    p["designs"] = ["boomcore"]                     # 픽스처의 회로 이름
+    p["files"]["crosstalk_subdir"] = None           # 이 픽스처는 SI 없이 검증
     models = select(expand(p), design="boomcore")
     assert [m["name"] for m in models] == ["boomcore/125", "boomcore/m25"]
 
@@ -652,6 +660,8 @@ def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):
     monkeypatch.setenv("SI_ROOT", str(real_tree))
     monkeypatch.chdir(tmp_path)
     p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    p["designs"] = ["boomcore"]                     # 픽스처의 회로 이름
+    p["files"]["crosstalk_subdir"] = None           # 이 픽스처는 SI 없이 검증
     m = select(expand(p), design="boomcore", temp="m25")[0]
     build(m["cfg"])
     ds = dict(np.load(m["cfg"]["data"]["cache"]))
