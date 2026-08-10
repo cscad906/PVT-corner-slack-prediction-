@@ -30,6 +30,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 XTALK = os.path.join(HERE, "_engine", "xtalk")
 
 CODE_INFO = {
+    "E-NOENGINE": ("패키지 파일(_engine/xtalk/)이 없습니다",
+                   "pt_si_re 폴더를 통째로 옮기세요. _engine/ 이 빠지면 "
+                   "crosstalk 단계가 돌지 않습니다."),
     "E-NOINPUT":  ("앞 단계 결과가 없습니다",
                    "5a -> xtalk_calc.tcl -> 5b -> xtalk_windows.tcl 순서로 "
                    "먼저 돌려 주세요."),
@@ -73,6 +76,20 @@ def code(c, *msg):
     sys.exit(1 if c.startswith("E-") else 0)
 
 
+
+def need_parser(name):
+    """_engine/xtalk/ 의 파서가 있는지 먼저 본다.
+
+    없으면 '리포트 생성 실패' 같은 엉뚱한 안내가 나와 엉뚱한 데를 뒤지게 된다.
+    패키지를 옮길 때 _engine/ 을 빠뜨리면 실제로 이렇게 된다.
+    """
+    p = os.path.join(XTALK, name)
+    if not os.path.isfile(p):
+        code("E-NOENGINE",
+             "[ 실패 ] 패키지 파일이 없습니다: %s" % p,
+             "         _engine/xtalk/ 폴더가 통째로 필요합니다.",
+             "         패키지를 옮길 때 _engine/ 을 빠뜨리지 않았는지 보세요.")
+
 def main():
     ap = argparse.ArgumentParser(
         description="crosstalk 쌍 리포트 마지막 단계 - 14열 리포트를 만든다.")
@@ -82,6 +99,9 @@ def main():
                     help="결과 파일 이름에 쓸 코너 이름. 안 주면 폴더 이름")
     ap.add_argument("--out", default=None, help="결과 파일 경로를 직접 줄 때")
     args = ap.parse_args()
+
+    for _p in ['make_compact_path_context_report.py']:
+        need_parser(_p)
 
     d = args.dir
     work = os.path.join(d, "xtalk")

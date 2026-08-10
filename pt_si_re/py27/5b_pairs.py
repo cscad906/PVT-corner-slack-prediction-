@@ -30,6 +30,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 XTALK = os.path.join(HERE, "_engine", "xtalk")
 
 CODE_INFO = {
+    "E-NOENGINE": ("패키지 파일(_engine/xtalk/)이 없습니다",
+                   "pt_si_re 폴더를 통째로 옮기세요. _engine/ 이 빠지면 "
+                   "crosstalk 단계가 돌지 않습니다."),
     "E-NORAW":    ("PT 출력(context_raw.rpt)이 없습니다",
                    "pt_shell 에서 pt/xtalk_calc.tcl 을 먼저 돌려 주세요."),
     "E-PARSE":    ("PT 출력을 읽다가 실패했습니다",
@@ -98,6 +101,20 @@ def count_lines(path):
         return sum(1 for _ in f)
 
 
+
+def need_parser(name):
+    """_engine/xtalk/ 의 파서가 있는지 먼저 본다.
+
+    없으면 '리포트 생성 실패' 같은 엉뚱한 안내가 나와 엉뚱한 데를 뒤지게 된다.
+    패키지를 옮길 때 _engine/ 을 빠뜨리면 실제로 이렇게 된다.
+    """
+    p = os.path.join(XTALK, name)
+    if not os.path.isfile(p):
+        code("E-NOENGINE",
+             "[ 실패 ] 패키지 파일이 없습니다: %s" % p,
+             "         _engine/xtalk/ 폴더가 통째로 필요합니다.",
+             "         패키지를 옮길 때 _engine/ 을 빠뜨리지 않았는지 보세요.")
+
 def main():
     ap = argparse.ArgumentParser(
         description="crosstalk 쌍 리포트 3단계 - PT 출력에서 쌍을 뽑는다.")
@@ -108,6 +125,9 @@ def main():
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
                     help="setup(max) / hold(min). xtalk_calc.tcl 과 같아야 한다")
     args = ap.parse_args()
+
+    for _p in ['parse_path_context_delay_calculation.py', 'prepare_compact_timing_window_requests.py']:
+        need_parser(_p)
 
     d = args.dir
     work = os.path.join(d, "xtalk")

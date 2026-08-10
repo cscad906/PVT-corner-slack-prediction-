@@ -32,6 +32,9 @@ XTALK = os.path.join(HERE, "_engine", "xtalk")
 from names import find_annotated
 
 CODE_INFO = {
+    "E-NOENGINE": ("패키지 파일(_engine/xtalk/)이 없습니다",
+                   "pt_si_re 폴더를 통째로 옮기세요. _engine/ 이 빠지면 "
+                   "crosstalk 단계가 돌지 않습니다."),
     "E-NOANNOT":  ("읽을 리포트가 없습니다",
                    "2회차 리포트(.rpt)나 *_fixed_annotated.txt 가 그 폴더에 "
                    "있어야 합니다."),
@@ -79,6 +82,20 @@ def count_rows(path):
         return max(0, sum(1 for _ in f) - 1)
 
 
+
+def need_parser(name):
+    """_engine/xtalk/ 의 파서가 있는지 먼저 본다.
+
+    없으면 '리포트 생성 실패' 같은 엉뚱한 안내가 나와 엉뚱한 데를 뒤지게 된다.
+    패키지를 옮길 때 _engine/ 을 빠뜨리면 실제로 이렇게 된다.
+    """
+    p = os.path.join(XTALK, name)
+    if not os.path.isfile(p):
+        code("E-NOENGINE",
+             "[ 실패 ] 패키지 파일이 없습니다: %s" % p,
+             "         _engine/xtalk/ 폴더가 통째로 필요합니다.",
+             "         패키지를 옮길 때 _engine/ 을 빠뜨리지 않았는지 보세요.")
+
 def main():
     ap = argparse.ArgumentParser(
         description="crosstalk 쌍 리포트 1단계 - PT 에 물어볼 넷 목록을 만든다.")
@@ -86,6 +103,9 @@ def main():
                     help="**코너 폴더 하나** (annotated.txt 이 있는 폴더)")
     ap.add_argument("--annotated", default=None, help="annotated.txt 경로를 직접 줄 때")
     args = ap.parse_args()
+
+    for _p in ['parse_annotated_with_clock_segments.py', 'make_unique_path_arc_contexts.py']:
+        need_parser(_p)
 
     d = args.dir
     ann = args.annotated
