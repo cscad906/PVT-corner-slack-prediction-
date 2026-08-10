@@ -176,11 +176,41 @@ proc xt_build_contexts {rpt} {
 # --- 넷 목록이 없으면 리포트에서 직접 만든다 --------------------------
 if {![file exists $CTX]} {
     set RPT ""
-    foreach f [lsort [glob -nocomplain *.rpt]] {
-        if {[string first ".path_context_si_compact." $f] >= 0} continue
-        set RPT $f
-        break
+
+    # (1) 같은 세션에서 fixed_paths.tcl 을 방금 돌렸으면 그 파일을 그대로 쓴다.
+    #     OUT 은 fixed_paths.tcl 이 "$CORNER.rpt" 로 잡아 둔 것이다. 이게 제일
+    #     확실하다 -- 폴더를 뒤질 필요가 없다.
+    #     코너를 바꿔 cd 했는데 fixed_paths 를 안 돌렸다면 그 이름의 파일이
+    #     없으므로 아래 (2) 로 넘어간다(앞 코너 값을 잘못 쓰지 않는다).
+    if {[info exists OUT] && [file exists $OUT]} {
+        set RPT $OUT
+        puts "  fixed_paths.tcl 이 방금 만든 리포트를 씁니다 : $RPT"
     }
+
+    # (2) 아니면 폴더에서 찾는다. 여러 개면 어느 것인지 알 수 없으므로 멈춘다.
+    if {$RPT eq ""} {
+        set cands {}
+        foreach f [lsort [glob -nocomplain *.rpt]] {
+            if {[string first ".path_context_si_compact." $f] >= 0} continue
+            lappend cands $f
+        }
+        if {[llength $cands] == 1} {
+            set RPT [lindex $cands 0]
+        } elseif {[llength $cands] > 1} {
+            puts "=================================================================="
+            puts "  문제 발생"
+            puts "    무엇이   : 이 폴더에 .rpt 가 [llength $cands] 개라 어느 것인지 모르겠습니다."
+            puts "               $cands"
+            puts "    하실 일  : 고정 경로 리포트 하나만 두거나, 이 파일을 source 하기 전에"
+            puts "               set OUT \"<그 리포트>\"  로 직접 지정하세요."
+            puts "               (fixed_paths.tcl 을 같은 세션에서 돌렸다면 자동으로 잡힙니다)"
+            puts ""
+            puts "    에러 코드: E-RPTMANY"
+            puts "=================================================================="
+            return
+        }
+    }
+
     if {$RPT eq ""} {
         puts "=================================================================="
         puts "  문제 발생"

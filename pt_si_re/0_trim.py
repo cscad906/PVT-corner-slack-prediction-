@@ -67,6 +67,12 @@ force_utf8()
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 SLACK_RE = re.compile(r"^\s*slack\s*\(([^)]+)\)\s+(-?[\d.]+)")
 
+# 바이트용 같은 정규식. 이 스크립트는 리포트에서 숫자만 꺼내고 나머지는
+# 그대로 복사하므로, 문자열로 디코딩했다가 다시 인코딩할 이유가 없다.
+# 디코딩을 안 하면 빠르기도 하고, 이상한 문자가 섞여 있어도 원본이 그대로 나온다.
+START_B_RE = re.compile(rb"^[ \t]*Startpoint:")
+SLACK_B_RE = re.compile(rb"^[ \t]*slack\s*\([^)]*\)\s+(-?[\d.]+)")
+
 
 # ---- 결과 코드 -------------------------------------------------------
 CODE_INFO = {
@@ -110,17 +116,27 @@ def code(c, *msg):
 # 메모리를 먹는다. 두 번 읽는 편이 훨씬 싸다(디스크는 순차 읽기라 빠르다).
 
 def scan_slacks(path):
-    """1번째 읽기 : slack 값만 모은다. -> (slack 목록, Startpoint 개수)"""
+    """1번째 읽기 : slack 값만 모은다. -> (slack 목록, Startpoint 개수)
+
+    줄 단위로 돈다. 리포트의 99% 는 핀 줄이고 그 줄들은 어차피 아무것도 안
+    걸리므로, 정규식을 걸기 전에 문자열 검사로 먼저 쳐낸다. `in` 은 정규식보다
+    훨씬 싸다.
+
+    (덩어리로 읽어 한 번에 훑는 방법도 해 봤는데, 덩어리를 이어 붙이는 복사와
+     findall 이 만드는 목록 때문에 오히려 느리고 메모리도 7배였다. 파이썬의
+     줄 단위 읽기가 이미 C 로 최적화돼 있어 이 편이 낫다.)
+    """
     vals = []
     n_start = 0
-    with open(path, "r", errors="ignore") as f:
+    with open(path, "rb") as f:
         for line in f:
-            if START_RE.match(line):
+            if b"slack" in line:
+                m = SLACK_B_RE.match(line)
+                if m:
+                    vals.append(float(m.group(1)))
+                    continue
+            if b"Startpoint:" in line and START_B_RE.match(line):
                 n_start += 1
-                continue
-            m = SLACK_RE.match(line)
-            if m:
-                vals.append(float(m.group(2)))
     return vals, n_start
 
 
@@ -134,23 +150,28 @@ def write_trimmed(src, dst, cut, n_keep):
     written = 0
     buf = []
     in_block = False
-    with open(src, "r", errors="ignore") as fi, open(dst, "w") as fo:
+    # 바이트 그대로 옮긴다. 원본 리포트를 한 글자도 안 바꾸기 위해서다
+    # (디코딩했다가 다시 인코딩하면 이상한 문자가 있을 때 내용이 달라진다).
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
         for line in fi:
-            if START_RE.match(line):
+            # 정규식은 후보 줄에만 건다. 리포트의 99% 는 핀 줄이라
+            # 아래 두 문자열 검사에서 바로 걸러진다.
+            if b"Startpoint:" in line and START_B_RE.match(line):
                 if not in_block:
-                    fo.writelines(buf)      # 첫 블록 앞 = 머리말
+                    fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
                 in_block = True
                 buf = [line]
                 continue
-            if not in_block:
-                buf.append(line)            # 아직 머리말 구간
-                continue
             buf.append(line)
-            m = SLACK_RE.match(line)
+            if not in_block:
+                continue                      # 아직 머리말 구간
+            if b"slack" not in line:
+                continue
+            m = SLACK_B_RE.match(line)
             if m:
-                if written < n_keep and float(m.group(2)) <= cut:
-                    fo.writelines(buf)
-                    fo.write("\n\n")   # 블록 사이 빈 줄. 원본처럼 보이게 한다
+                if written < n_keep and float(m.group(1)) <= cut:
+                    fo.write(b"".join(buf))
+                    fo.write(b"\n\n")  # 블록 사이 빈 줄. 원본처럼 보이게 한다
                     written += 1
                 buf = []
     return written
