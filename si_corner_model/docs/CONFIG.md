@@ -73,22 +73,22 @@ SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
 ### 앵커(`ref_*`) 규칙 — 어기면 에러
 
 - 반드시 **SEEN** 이어야 한다 (숨긴 전압/레벨이면 안 됨).
-- **모든 온도에 존재하는 레벨**이어야 한다. 이번 데이터에서 125C 는 `cmin` 이
-  없으므로 `ref_level: cmin` 은 불가 → `cmax` 를 쓴다.
+- **모든 온도에 존재하는 레벨**이어야 한다. 이번 데이터에서 125C 는 `rcmin` 이
+  없으므로 `ref_level: rcmin` 은 불가 → `cmax` 를 쓴다.
 - 최고전압 × 중앙레벨을 권장한다. 다항식 오차는 원점에서 가장 작고, 외삽보다
   내삽이 안전하기 때문.
 
 ### `level_values` — 절대값이 아니라 **간격**이 의미 있다
 
 ```yaml
-level_values: {cmin: -1, cmax: 0, rcmax: 1}
+level_values: {rcmin: -1, cmax: 0, rcmax: 1}
 ```
 
 `ref_level` 값을 빼서 쓰므로 `{0,1,2}` 나 `{-1,0,1}` 이나 결과가 같다.
 바뀌는 건 **간격**뿐이다. 예를 들어 `rcmax` 가 `cmax` 보다 훨씬 심한 코너라면:
 
 ```yaml
-level_values: {cmin: -1, cmax: 0, rcmax: 3}   # rcmax 를 멀리 -> 그 사이 기울기가 완만해짐
+level_values: {rcmin: -1, cmax: 0, rcmax: 3}   # rcmax 를 멀리 -> 그 사이 기울기가 완만해짐
 ```
 
 회사 코너 정의(실제 파라시틱 배율)를 보고 정하는 게 가장 좋다. 모르면 등간격으로
@@ -103,7 +103,7 @@ level_values: {cmin: -1, cmax: 0, rcmax: 3}   # rcmax 를 멀리 -> 그 사이 �
 corners:
   hidden_voltages: [0.54]                   # ① 이 전압의 모든 레벨 (행 통째)
   seen_voltages: []                         # ②  반대: 이것만 seen, 나머지 전압은 전부 hidden
-  hidden_levels: [cmin]                     # ③ 이 레벨의 모든 전압 (열 통째)
+  hidden_levels: [rcmin]                     # ③ 이 레벨의 모든 전압 (열 통째)
   hidden_corners: [[0.6, rcmax]]            # ④ 콕 집어 한 칸씩
   query_corners: [[0.57, cmax]]             # ⑤ 측정 자체가 없는 코너 (항상 hidden)
 ```
