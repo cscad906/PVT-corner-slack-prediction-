@@ -20,8 +20,10 @@
 # =====================================================================
 
 
-### 여기 두 줄만 고치면 된다 ###########################################
-set XTALK_DIR  "xtalk"    ;# 지금 폴더 아래의 xtalk/ (코너 폴더로 cd 해 두면 그대로)
+### 여기 세 줄만 고치면 된다 ###########################################
+set RPT_FILE   ""         ;# 읽을 리포트. **절대경로로 박아도 된다.**
+                           # 비워 두면 자동으로 찾는다(아래 순서).
+set XTALK_DIR  "xtalk"    ;# 결과를 쓸 폴더. 지금 폴더 아래의 xtalk/
 set DELAY_TYPE "max"      ;# setup=max, hold=min
 #######################################################################
 if {[info exists XT_DELAY]} { set DELAY_TYPE $XT_DELAY }  ;# 루프가 준 값이 있으면 그것
@@ -177,12 +179,29 @@ proc xt_build_contexts {rpt} {
 if {![file exists $CTX]} {
     set RPT ""
 
+    # (0) 맨 위에서 직접 박았으면 그것. 제일 우선한다.
+    if {$RPT_FILE ne ""} {
+        if {![file exists $RPT_FILE]} {
+            puts "=================================================================="
+            puts "  문제 발생"
+            puts "    무엇이   : 위에서 지정한 리포트가 없습니다."
+            puts "               $RPT_FILE"
+            puts "    하실 일  : RPT_FILE 줄의 경로를 확인하세요."
+            puts ""
+            puts "    에러 코드: E-NORPTFILE"
+            puts "=================================================================="
+            return
+        }
+        set RPT $RPT_FILE
+        puts "  지정한 리포트를 씁니다 : $RPT"
+    }
+
     # (1) 같은 세션에서 fixed_paths.tcl 을 방금 돌렸으면 그 파일을 그대로 쓴다.
     #     OUT 은 fixed_paths.tcl 이 "$CORNER.rpt" 로 잡아 둔 것이다. 이게 제일
     #     확실하다 -- 폴더를 뒤질 필요가 없다.
     #     코너를 바꿔 cd 했는데 fixed_paths 를 안 돌렸다면 그 이름의 파일이
     #     없으므로 아래 (2) 로 넘어간다(앞 코너 값을 잘못 쓰지 않는다).
-    if {[info exists OUT] && [file exists $OUT]} {
+    if {$RPT eq "" && [info exists OUT] && [file exists $OUT]} {
         set RPT $OUT
         puts "  fixed_paths.tcl 이 방금 만든 리포트를 씁니다 : $RPT"
     }
