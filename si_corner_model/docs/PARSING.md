@@ -44,7 +44,7 @@ report.SSPG_0P5000_125C_RCMAX.rpt      전부 대문자
 report.sspg_0.5400_125c_rcmax.rpt      전압이 0.5400 형식
 sspg-0p5000-125c-rcmax.rpt             하이픈 구분자
 RCMAX.125.SSPG.0p5000.rpt              순서 완전히 뒤죽박죽
-report.sspg_0p5000_-25c_cmin.rpt       온도가 -25 (= m25)
+report.sspg_0p5000_-25c_rcmin.rpt       온도가 -25 (= m25)
 ```
 
 구분 규칙은 두 가지뿐이다:

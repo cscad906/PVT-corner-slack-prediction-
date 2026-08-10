@@ -35,7 +35,7 @@ def tree(tmp_path):
         for v in ("0p5000", "0p5400", "0p6000", "0p6850"):
             for lv in ("rcmax", "cmax"):
                 (d / f"report.sspg_{v}_125c_{lv}.rpt").touch()
-            for lv in ("rcmax", "cmax", "cmin"):
+            for lv in ("rcmax", "cmax", "rcmin"):
                 (d / f"report.sspg_{v}_m25c_{lv}.rpt").touch()
     return tmp_path
 
@@ -119,7 +119,7 @@ def test_expand_makes_design_x_temp_matrix(project):
     assert [m["name"] for m in models] == ["cpu/125", "cpu/m25", "gpu/125", "gpu/m25"]
     m = models[0]
     assert m["cfg"]["data"]["rc_corners"] == ["rcmax", "cmax"]        # 125C 는 2레벨
-    assert models[1]["cfg"]["data"]["rc_corners"] == ["rcmax", "cmax", "cmin"]
+    assert models[1]["cfg"]["data"]["rc_corners"] == ["rcmax", "cmax", "rcmin"]
     assert m["cfg"]["data"]["ref_corner"] == "SSPG_0p685V_cmax"
     assert m["cfg"]["data"]["cache"].endswith(os.path.join("cpu", "125", "dataset.npz"))
     assert m["cfg"]["train"]["out_dir"].endswith(os.path.join("cpu", "125"))
@@ -214,19 +214,19 @@ def test_holdout_can_differ_per_temperature(project):
     하나로는 쓸 수 없고, temps[] 안에서 온도별로 적을 수 있어야 한다."""
     project["corners"]["hidden_voltages"] = []
     project["temps"][0]["hidden_corners"] = [[0.5, "rcmax"], [0.6, "cmax"]]
-    project["temps"][1]["hidden_corners"] = [[0.54, "cmin"], [0.685, "rcmax"]]
+    project["temps"][1]["hidden_corners"] = [[0.54, "rcmin"], [0.685, "rcmax"]]
     by = {m["temp"]: m["cfg"]["split"] for m in expand(project) if m["design"] == "cpu"}
     assert by["125"]["hidden_corners"] == [[0.5, "rcmax"], [0.6, "cmax"]]
-    assert by["m25"]["hidden_corners"] == [[0.54, "cmin"], [0.685, "rcmax"]]
+    assert by["m25"]["hidden_corners"] == [[0.54, "rcmin"], [0.685, "rcmax"]]
     # min_seen 도 온도별 홀드아웃을 반영해야 한다 (4V x 2레벨 - 2 = 6)
     assert by["125"]["min_seen"] == 4 * 2 - 2
     assert by["m25"]["min_seen"] == 4 * 3 - 2
 
 
 def test_holdout_level_must_exist_at_that_temperature(project):
-    """125C 에 없는 cmin 을 125C 홀드아웃에 적으면 조용히 무시되지 않고 에러."""
+    """125C 에 없는 rcmin 을 125C 홀드아웃에 적으면 조용히 무시되지 않고 에러."""
     project["corners"]["hidden_voltages"] = []
-    project["temps"][0]["hidden_corners"] = [[0.5, "cmin"]]      # 125C 엔 cmin 없음
+    project["temps"][0]["hidden_corners"] = [[0.5, "rcmin"]]      # 125C 엔 rcmin 없음
     with pytest.raises(AssertionError, match="hidden_corners"):
         expand(project)
 
@@ -269,7 +269,7 @@ def _hidden_labels(project, corners_over):
     q = {**project, "corners": {**project["corners"], **corners_over},
          "designs": ["cpu"],
          "temps": [{"tag": "m25", "token": "m25",
-                    "levels": ["rcmax", "cmax", "cmin"]}]}
+                    "levels": ["rcmax", "cmax", "rcmin"]}]}
     cfg = expand(q)[0]["cfg"]
     lv = cfg["base"]["axes"][1]["levels"]
     labels = [corner_label(v, l, "SSPG")
@@ -282,7 +282,7 @@ def _hidden_labels(project, corners_over):
 
 def test_hidden_voltages_hides_whole_row(project):
     assert _hidden_labels(project, {"hidden_voltages": [0.54]}) == {
-        "SSPG_0p54V_rcmax", "SSPG_0p54V_cmax", "SSPG_0p54V_cmin"}
+        "SSPG_0p54V_rcmax", "SSPG_0p54V_cmax", "SSPG_0p54V_rcmin"}
 
 
 def test_hidden_voltages_survive_float32_roundtrip():
@@ -294,7 +294,7 @@ def test_hidden_voltages_survive_float32_roundtrip():
     """
     from si_model.parsing.keys import corner_label, parse_corner
     from si_model.training.loo import make_split
-    lv = {"cmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
+    lv = {"rcmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
     labels = [corner_label(v, l, "SSPG")
               for v in (0.5, 0.54, 0.6, 0.685) for l in ("rcmax", "cmax")]
     vt64 = np.asarray([parse_corner(c, lv, "SSPG") for c in labels])
@@ -309,28 +309,28 @@ def test_hidden_voltages_survive_float32_roundtrip():
 
 
 def test_hidden_levels_hides_whole_column(project):
-    """커스텀 레벨 이름(cmin/cmax/rcmax)으로도 동작해야 한다 -- 예전엔 내장
+    """커스텀 레벨 이름(rcmin/cmax/rcmax)으로도 동작해야 한다 -- 예전엔 내장
     Cmin/Cnom/Cmax 만 되고 나머지는 float() 변환 에러로 죽었다."""
-    got = _hidden_labels(project, {"hidden_voltages": [], "hidden_levels": ["cmin"]})
-    assert got == {f"SSPG_{v}V_cmin" for v in ("0p5", "0p54", "0p6", "0p685")}
+    got = _hidden_labels(project, {"hidden_voltages": [], "hidden_levels": ["rcmin"]})
+    assert got == {f"SSPG_{v}V_rcmin" for v in ("0p5", "0p54", "0p6", "0p685")}
 
 
 def test_hidden_corners_picks_single_cells(project):
     got = _hidden_labels(project, {"hidden_voltages": [],
-                                   "hidden_corners": [[0.6, "rcmax"], [0.5, "cmin"]]})
-    assert got == {"SSPG_0p6V_rcmax", "SSPG_0p5V_cmin"}
+                                   "hidden_corners": [[0.6, "rcmax"], [0.5, "rcmin"]]})
+    assert got == {"SSPG_0p6V_rcmax", "SSPG_0p5V_rcmin"}
 
 
 def test_seen_voltages_inverts_the_rule(project):
     got = _hidden_labels(project, {"hidden_voltages": [], "seen_voltages": [0.5, 0.685]})
     assert got == {f"SSPG_{v}V_{l}" for v in ("0p54", "0p6")
-                   for l in ("rcmax", "cmax", "cmin")}
+                   for l in ("rcmax", "cmax", "rcmin")}
 
 
 def test_holdout_rules_combine(project):
-    got = _hidden_labels(project, {"hidden_voltages": [0.54], "hidden_levels": ["cmin"],
+    got = _hidden_labels(project, {"hidden_voltages": [0.54], "hidden_levels": ["rcmin"],
                                    "hidden_corners": [[0.6, "rcmax"]]})
-    assert "SSPG_0p685V_cmin" in got and "SSPG_0p6V_rcmax" in got
+    assert "SSPG_0p685V_rcmin" in got and "SSPG_0p6V_rcmax" in got
     assert "SSPG_0p685V_cmax" not in got
 
 
@@ -348,7 +348,7 @@ def test_anchor_may_not_be_hidden(project):
 
 
 def test_anchor_must_exist_at_every_temp(project):
-    project["corners"]["ref_level"] = "cmin"           # 125C 에는 cmin 이 없다
+    project["corners"]["ref_level"] = "rcmin"           # 125C 에는 rcmin 이 없다
     with pytest.raises(AssertionError, match="levels"):
         expand(project)
 
@@ -408,13 +408,13 @@ def _cfg(root, temp, levels):
                      "patterns": {"layout": "flat", "annotated_regex": FLAT_RE}},
             "base": {"axes": [{"name": "v", "ref": 0.685, "order": 2},
                               {"name": "rc", "ref": 0, "order": 2,
-                               "levels": {"cmin": -1, "cmax": 0, "rcmax": 1}}]}}
+                               "levels": {"rcmin": -1, "cmax": 0, "rcmax": 1}}]}}
 
 
 def test_discovery_filters_by_temp_and_level(tree):
     c125 = discover_annotated(_cfg(tree / "cpu", 125, ["rcmax", "cmax"]))
     assert len(c125) == 8                           # 4V x 2레벨, m25 파일은 무시
-    cm25 = discover_annotated(_cfg(tree / "cpu", "m25", ["rcmax", "cmax", "cmin"]))
+    cm25 = discover_annotated(_cfg(tree / "cpu", "m25", ["rcmax", "cmax", "rcmin"]))
     assert len(cm25) == 12
     assert set(c125).issubset(set(cm25))            # 온도는 라벨에 안 들어감(분리 차원)
 
@@ -443,9 +443,9 @@ def test_discovery_label_and_sort(tree):
     # 구분자가 하이픈 -> 앞의 '-' 는 음수부호가 아니다
     ("sspg-0p5000-125c-rcmax.rpt", "125", (0.5, "rcmax")),
     # 음수 온도: m25 / M25 / -25
-    ("report.sspg_0p5000_m25c_cmin.rpt", "m25", (0.5, "cmin")),
-    ("report.SSPG_0P5000_M25_CMIN.rpt", "m25", (0.5, "cmin")),
-    ("report.sspg_0p5000_-25c_cmin.rpt", "m25", (0.5, "cmin")),
+    ("report.sspg_0p5000_m25c_rcmin.rpt", "m25", (0.5, "rcmin")),
+    ("report.SSPG_0P5000_M25_RCMIN.rpt", "m25", (0.5, "rcmin")),
+    ("report.sspg_0p5000_-25c_rcmin.rpt", "m25", (0.5, "rcmin")),
     # cmax 가 rcmax 안에서 잘못 잡히면 안 된다
     ("report.sspg_0p6850_125c_cmax.rpt", "125", (0.685, "cmax")),
     # --- 걸러져야 하는 것들 ---
@@ -463,7 +463,7 @@ def test_filename_matching_is_order_and_case_free(fname, temp, want):
     유일한 근거이므로, 그 경계(‘.125.’ 를 0.125 로 읽지 않기)까지 여기서 못박는다.
     """
     from si_model.parsing.discovery import _match_tokens
-    got = _match_tokens(fname, {"data": {}}, ["rcmax", "cmax", "cmin"], "SSPG", temp)
+    got = _match_tokens(fname, {"data": {}}, ["rcmax", "cmax", "rcmin"], "SSPG", temp)
     if want is None:
         assert got is None
     else:
@@ -585,11 +585,11 @@ def _fake_report(v: float, lvv: float, n_paths: int = 12) -> str:
 def real_tree(tmp_path):
     """배포 배치 그대로: <root>/{si_corner_model, boomcore} + 파싱 가능한 리포트."""
     (tmp_path / os.path.basename(REPO_ROOT)).mkdir()
-    lev = {"cmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
+    lev = {"rcmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
     d = tmp_path / "boomcore"
     d.mkdir()
     for temp, levels in (("125", ["rcmax", "cmax"]),
-                         ("m25", ["rcmax", "cmax", "cmin"])):
+                         ("m25", ["rcmax", "cmax", "rcmin"])):
         for lv in levels:
             for vf, vtok in ((0.5, "0p5000"), (0.54, "0p5400"),
                              (0.6, "0p6000"), (0.685, "0p6850")):
@@ -745,7 +745,7 @@ def test_path_key_normalization():
 
 
 def test_corner_label_roundtrip():
-    lv = {"cmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
+    lv = {"rcmin": -1.0, "cmax": 0.0, "rcmax": 1.0}
     assert corner_label(0.685, "cmax", prefix="SSPG") == "SSPG_0p685V_cmax"
     assert parse_corner("SSPG_0p685V_cmax", lv, prefix="SSPG") == (0.685, 0.0)
     assert parse_corner("SSPG_0p5V_rcmax", lv, prefix="SSPG") == (0.5, 1.0)

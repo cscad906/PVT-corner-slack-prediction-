@@ -181,15 +181,15 @@ temps:
     hidden_corners: [[0.5, rcmax], [0.6, cmax]]        # 이 온도만의 홀드아웃
   - tag: m25
     token: m25
-    levels: [rcmax, cmax, cmin]         # m25C 는 3개
-    hidden_corners: [[0.54, cmin], [0.685, rcmax]]
+    levels: [rcmax, cmax, rcmin]         # m25C 는 3개
+    hidden_corners: [[0.54, rcmin], [0.685, rcmax]]
 
 corners:
   process: SSPG
   voltages: [0.5, 0.54, 0.6, 0.685]
   ref_voltage: 0.685                    # 앵커. 반드시 seen
   ref_level: cmax                       #   모든 온도에 존재하는 레벨이어야 함
-  level_values: {cmin: -1, cmax: 0, rcmax: 1}
+  level_values: {rcmin: -1, cmax: 0, rcmax: 1}
 
 files:
   layout: flat
@@ -218,7 +218,7 @@ runs/_all/predictions_hidden.csv   ← 결과는 design,temp 열이 붙어 한 �
 ### 3-2. 숨길 코너 — 온도마다 따로 (★ 여기가 헷갈리는 지점)
 
 125C 는 8코너(4V × 2레벨), m25C 는 12코너(4V × 3레벨)로 **레벨 수가 다르다**.
-그래서 "이 코너를 숨겨라" 를 전역 목록 하나로 쓸 수 없다 — `cmin` 은 m25C 에만
+그래서 "이 코너를 숨겨라" 를 전역 목록 하나로 쓸 수 없다 — `rcmin` 은 m25C 에만
 있기 때문. 반드시 `temps[]` 안에 적는다.
 
 **코너가 적을 땐 전압 행을 통째로 빼지 말 것.** 그 전압의 앵커가 전부 사라진다.
@@ -259,7 +259,7 @@ designs:
     temps:                                     # 홀드아웃도 이 회로만 따로
       - {tag: "125", token: 125, levels: [rcmax, cmax],
          hidden_corners: [[0.5, rcmax]]}
-      - {tag: m25, token: m25, levels: [rcmax, cmax, cmin],
+      - {tag: m25, token: m25, levels: [rcmax, cmax, rcmin],
          hidden_per_voltage: 1}
 ```
 
@@ -300,7 +300,7 @@ bash scripts/run.sh list
 ```
 root    : /user/s5e9665p5/academyXXXX
 task    : slack    models: 4    process: SSPG
-voltages: [0.5, 0.54, 0.6, 0.685]    levels: {'cmin': -1, 'cmax': 0, 'rcmax': 1}
+voltages: [0.5, 0.54, 0.6, 0.685]    levels: {'rcmin': -1, 'cmax': 0, 'rcmax': 1}
 holdout : hidden_v=[0.54]  seen_v=-  hidden_levels=-  hidden_corners=-  query=-
 
   ── cpu/125  [SI:off]
@@ -384,7 +384,7 @@ runs/<회로>/<온도>/                  개별 (best.pt, summary.json, predicti
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps
 cpu,125,A->B,SSPG_0p54V_cmax,12.000,12.500,0.500
-cpu,m25,A->B,SSPG_0p54V_cmin,20.000,19.100,-0.900
+cpu,m25,A->B,SSPG_0p54V_rcmin,20.000,19.100,-0.900
 ```
 
 `model_ps` 가 최종 예측값이다. **base 수치는 여기 안 나온다** — 모델 수치와

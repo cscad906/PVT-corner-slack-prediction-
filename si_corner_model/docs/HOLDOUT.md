@@ -12,10 +12,10 @@
 
 ```
 125C :  4 전압 x {rcmax, cmax}          =  8 코너
-m25C :  4 전압 x {rcmax, cmax, cmin}    = 12 코너
+m25C :  4 전압 x {rcmax, cmax, rcmin}    = 12 코너
 ```
 
-`cmin` 은 m25C 에만 있다. 그래서 "`[0.54, cmin]` 을 숨겨라" 를 **전역에 한 번**
+`rcmin` 은 m25C 에만 있다. 그래서 "`[0.54, rcmin]` 을 숨겨라" 를 **전역에 한 번**
 적으면 125C 에서는 존재하지도 않는 코너를 가리키게 된다. 홀드아웃은 `temps[]`
 안에 온도별로 적는다:
 
@@ -27,8 +27,8 @@ temps:
     hidden_corners: [[0.5, rcmax], [0.6, cmax]]        # 125C 만의 홀드아웃
   - tag: m25
     token: m25
-    levels: [rcmax, cmax, cmin]
-    hidden_corners: [[0.54, cmin], [0.685, rcmax]]     # m25C 만의 홀드아웃
+    levels: [rcmax, cmax, rcmin]
+    hidden_corners: [[0.54, rcmin], [0.685, rcmax]]     # m25C 만의 홀드아웃
 ```
 
 `corners:` 아래에 적으면 **모든 온도 공통**, `temps[]` 안에 적으면 **그 온도만**
@@ -38,7 +38,7 @@ temps:
 없는 레벨을 적으면 조용히 무시하지 않고 에러난다:
 
 ```
-temp 125: hidden_corners 의 레벨 'cmin' 이 이 온도의 levels ['rcmax','cmax'] 에 없다
+temp 125: hidden_corners 의 레벨 'rcmin' 이 이 온도의 levels ['rcmax','cmax'] 에 없다
   -- 온도마다 레벨이 다르므로 holdout 도 temps[] 안에서 따로 적어야 한다
 ```
 
@@ -110,7 +110,7 @@ temps:
     levels: [rcmax, cmax]
     hidden_corners: [[0.5, rcmax], [0.6, cmax]]    # 2칸
   - tag: m25
-    levels: [rcmax, cmax, cmin]
+    levels: [rcmax, cmax, rcmin]
     hidden_per_voltage: 1                          # 4칸 (전압마다 하나)
 ```
 
@@ -124,7 +124,7 @@ temps:
 
 - **앵커 코너(`ref_voltage` × `ref_level`)는 숨길 수 없다.** 다항식 원점이자 경로
   선택 기준이라 반드시 seen 이어야 한다.
-- `ref_level` 은 **모든 온도에 존재하는 레벨**이어야 한다. 이번엔 125C 에 `cmin`
+- `ref_level` 은 **모든 온도에 존재하는 레벨**이어야 한다. 이번엔 125C 에 `rcmin`
   이 없으므로 `cmax` 를 쓴다.
 - `seen_voltages` 와 `hidden_voltages` 는 **동시 사용 불가** (서로 모순).
 - `hidden_per_voltage` 와 `hidden_corners` 는 **동시 사용 불가** (한 온도 안에서).

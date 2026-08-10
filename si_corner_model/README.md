@@ -69,7 +69,7 @@ runs/<회로>/<온도>/                  개별 (best.pt, summary.json, predicti
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps
 cpu,125,A->B,SSPG_0p54V_cmax,12.000,12.500,0.500
-cpu,m25,A->B,SSPG_0p54V_cmin,20.000,19.100,-0.900
+cpu,m25,A->B,SSPG_0p54V_rcmin,20.000,19.100,-0.900
 ```
 
 `model_ps` 가 최종 예측값. 측정값 없는 코너(`query_corners`)는 `truth_ps` 빈칸.
@@ -102,7 +102,7 @@ cpu,m25,A->B,SSPG_0p54V_cmin,20.000,19.100,-0.900
 
 ### ③ BEOL 좌표는 "간격"만 의미 있다
 
-`level_values: {cmin: -1, cmax: 0, rcmax: 1}` 는 등간격 가정. 회사 코너 정의상
+`level_values: {rcmin: -1, cmax: 0, rcmax: 1}` 는 등간격 가정. 회사 코너 정의상
 순서나 간격이 다르면 이 숫자만 고친다 (절대값은 무의미, ref 를 빼기 때문).
 
 ---
