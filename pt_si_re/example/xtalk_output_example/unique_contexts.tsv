@@ -1,0 +1,4 @@
+context_id	victim_net	victim_driver_pin	victim_load_pin	first_path_id	first_arc_idx	occurrence_count
+1	clock	ZCTSBUF_824211_22831/A	ZCTSBUF_824211_22831/Y			
+2	ZCTSNET_6904	ZCTSBUF_824211_22831/Y	ZCTSINV_497954_21676/A			
+3	ZCTSNET_6160	ZCTSINV_497954_21676/Y	ccd_setup_inst_30328/A			

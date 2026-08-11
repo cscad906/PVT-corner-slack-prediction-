@@ -1,0 +1,206 @@
+### PATH_CONTEXT_BEGIN
+### context_id=2
+### victim_net=ZCTSNET_6904
+### victim_driver_pin=ZCTSBUF_824211_22831/Y
+### victim_load_pin=ZCTSINV_497954_21676/A
+### status=OK
+### message=
+****************************************
+Report : delay_calculation
+Design : BoomCore
+Version: V-2023.12-SP4
+Date   : Tue Aug 11 11:53:05 2026
+****************************************
+
+From pin: ZCTSBUF_824211_22831/Y
+To pin:   ZCTSINV_497954_21676/A
+Main Library Units:  1ns  1pF  1kOhm
+
+arc sense: unate
+arc type:  net
+Annotated max rise net delta delay: 0 arc delay: 0.00454129
+Annotated max fall net delta delay: 0 arc delay: 0.00422671
+
+   RC network on pin 'ZCTSBUF_824211_22831/Y' :
+   ------------------------------------------------------
+   Number of elements = 43 Capacitances + 52 Resistances
+   Total capacitance  = 0.023539 pF
+   Total capacitance  = 0.023539 (in library unit)
+   Total resistance   = 38.685826 Kohm
+
+                                Rise        Fall
+   ------------------------------------------------------------------
+   Net delay                = 0.004541    0.004227  (in library unit)
+   Transition time          = 0.030642    0.025634  (in library unit)
+   From_pin transition time = 0.025104    0.019021  (in library unit)
+   To_pin transition time   = 0.030642    0.025634  (in library unit)
+   Net slew degradation     = 0.005538    0.006613  (in library unit)
+
+Annotated max rise delta transition: 0 pin transition: 0.030642
+Annotated max fall delta transition: 0 pin transition: 0.0256342
+
+Reporting for Crosstalk:
+Victim net name:                                   ZCTSNET_6904
+Number of aggressors:                              392
+Number of effective (non-filtered) aggressors:     1
+Net is reselected:                                 true
+Victim driver rail voltage(VDD):                   0.600000
+si_xtalk_delay_analysis_mode:                      all_paths
+si_analysis_logical_correlation_mode:              true
+Crosstalk composite aggressor mode:                disabled
+
+Attributes:
+  A - aggressor is Active
+  C - aggressor is a composite aggressor
+  E - aggressor is screened due to user Exclusion
+  I - aggressor has Infinite arrival with respect to the victim
+  L - aggressor is screened due to Logical correlation
+  N - aggressor does Not overlap for the worst case alignment
+  P - aggressor is an ideal Port aggressor
+  S - aggressor is screened for Small bumps
+  U - aggressor/victim RC calculation is skipped
+  X - aggressor is screened due to aggressor eXclusion
+
+Victim is rising: 
+     Victim            Coupling    Driver          Clocks
+      Net                Cap       Lib Cell         
+  --------------      ---------   ------------    ---------------
+  ZCTSNET_6904        0.000240    gt3_6t_buf_x12_rvt 
+                                                   myCLK
+
+   Aggressor           Coupling    Driver          Clocks                Attributes    Switching Bump
+      Net                Cap       Lib Cell                                            (ratio of VDD) 
+  --------------      ---------   -----------     -------------         ------------  ----------------
+  ZCTSNET_6903        0.000240    gt3_6t_inv_x12_rvt 
+                                                   myCLK                 S               -
+
+Victim is falling: 
+     Victim            Coupling    Driver          Clocks
+      Net                Cap       Lib Cell         
+  --------------      ---------   ------------    ---------------
+  ZCTSNET_6904        0.000240    gt3_6t_buf_x12_rvt 
+                                                   myCLK
+
+   Aggressor           Coupling    Driver          Clocks                Attributes    Switching Bump
+      Net                Cap       Lib Cell                                            (ratio of VDD) 
+  --------------      ---------   -----------     -------------         ------------  ----------------
+  ZCTSNET_6903        0.000240    gt3_6t_inv_x12_rvt 
+                                                   myCLK                 S               -
+
+
+1
+
+### PATH_CONTEXT_END
+### PATH_CONTEXT_BEGIN
+### context_id=3
+### victim_net=ZCTSNET_6160
+### victim_driver_pin=ZCTSINV_497954_21676/Y
+### victim_load_pin=ccd_setup_inst_30328/A
+### status=OK
+### message=
+****************************************
+Report : delay_calculation
+Design : BoomCore
+Version: V-2023.12-SP4
+Date   : Tue Aug 11 11:53:05 2026
+****************************************
+
+From pin: ZCTSINV_497954_21676/Y
+To pin:   ccd_setup_inst_30328/A
+Main Library Units:  1ns  1pF  1kOhm
+
+arc sense: unate
+arc type:  net
+Annotated max rise net delta delay: 0.00460122 arc delay: 0.00956172
+Annotated max fall net delta delay: 0.000486225 arc delay: 0.00540103
+
+   RC network on pin 'ZCTSINV_497954_21676/Y' :
+   ------------------------------------------------------
+   Number of elements = 15 Capacitances + 15 Resistances
+   Total capacitance  = 0.005031 pF
+   Total capacitance  = 0.005031 (in library unit)
+   Total resistance   = 2.864918 Kohm
+
+                                Rise        Fall
+   ------------------------------------------------------------------
+   Net delay                = 0.004960    0.004915  (in library unit)
+   Transition time          = 0.054718    0.041342  (in library unit)
+   From_pin transition time = 0.054016    0.040461  (in library unit)
+   To_pin transition time   = 0.054718    0.041342  (in library unit)
+   Net slew degradation     = 0.000702    0.000881  (in library unit)
+
+Annotated max rise delta transition: 0.00762747 pin transition: 0.0547181
+Annotated max fall delta transition: 0.000811443 pin transition: 0.0413419
+
+Reporting for Crosstalk:
+Victim net name:                                   ZCTSNET_6160
+Number of aggressors:                              96
+Number of effective (non-filtered) aggressors:     5
+Net is reselected:                                 true
+Victim driver rail voltage(VDD):                   0.600000
+si_xtalk_delay_analysis_mode:                      all_paths
+si_analysis_logical_correlation_mode:              true
+Crosstalk composite aggressor mode:                disabled
+
+Attributes:
+  A - aggressor is Active
+  C - aggressor is a composite aggressor
+  E - aggressor is screened due to user Exclusion
+  I - aggressor has Infinite arrival with respect to the victim
+  L - aggressor is screened due to Logical correlation
+  N - aggressor does Not overlap for the worst case alignment
+  P - aggressor is an ideal Port aggressor
+  S - aggressor is screened for Small bumps
+  U - aggressor/victim RC calculation is skipped
+  X - aggressor is screened due to aggressor eXclusion
+
+Victim is rising: 
+     Victim            Coupling    Driver          Clocks
+      Net                Cap       Lib Cell         
+  --------------      ---------   ------------    ---------------
+  ZCTSNET_6160        0.001431    gt3_6t_inv_x1_rvt 
+                                                   myCLK
+
+   Aggressor           Coupling    Driver          Clocks                Attributes    Switching Bump
+      Net                Cap       Lib Cell                                            (ratio of VDD) 
+  --------------      ---------   -----------     -------------         ------------  ----------------
+  io_lsu_fp_stdata_bits_data[28]
+                      0.000787    gt3_6t_nand2_x1_rvt 
+                                                   myCLK                 A            0.037141
+  io_lsu_fp_stdata_bits_data[46]
+                      0.000343    gt3_6t_nand2_x2_rvt 
+                                                   myCLK                 A            0.021867
+  ZCTSNET_6395        0.000090    gt3_6t_buf_x12_rvt 
+                                                   myCLK                 S               -
+  ZCTSNET_6377        0.000095    gt3_6t_buf_x6_rvt 
+                                                   myCLK                 S               -
+  ZCTSNET_6376        0.000116    gt3_6t_buf_x6_rvt 
+                                                   myCLK                 S               -
+
+Victim is falling: 
+     Victim            Coupling    Driver          Clocks
+      Net                Cap       Lib Cell         
+  --------------      ---------   ------------    ---------------
+  ZCTSNET_6160        0.001431    gt3_6t_inv_x1_rvt 
+                                                   myCLK
+
+   Aggressor           Coupling    Driver          Clocks                Attributes    Switching Bump
+      Net                Cap       Lib Cell                                            (ratio of VDD) 
+  --------------      ---------   -----------     -------------         ------------  ----------------
+  io_lsu_fp_stdata_bits_data[28]
+                      0.000787    gt3_6t_nand2_x1_rvt 
+                                                   myCLK                 A            0.034577
+  ZCTSNET_6395        0.000090    gt3_6t_buf_x12_rvt 
+                                                   myCLK                 S               -
+  io_lsu_fp_stdata_bits_data[46]
+                      0.000343    gt3_6t_nand2_x2_rvt 
+                                                   myCLK                 N               -
+  ZCTSNET_6377        0.000095    gt3_6t_buf_x6_rvt 
+                                                   myCLK                 S               -
+  ZCTSNET_6376        0.000116    gt3_6t_buf_x6_rvt 
+                                                   myCLK                 S               -
+
+
+1
+
+### PATH_CONTEXT_END

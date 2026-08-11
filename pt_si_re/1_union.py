@@ -805,8 +805,8 @@ def main():
         fh.write('#   set CORNER "내가정한이름"\n')
         fh.write("# 조건 없이 set 한다(일부러). if {![info exists CORNER]} 로 두면\n")
         fh.write("# 두 번째 코너부터 앞 코너 이름이 그대로 남아 덮어써 버린다.\n\n")
-        fh.write('puts "  이번 코너 : $CORNER   ->  $CORNER.rpt"\n')
-        fh.write('puts "  (위 이름이 방금 로드한 db 와 다르면 지금 멈출 것)"\n\n')
+        fh.write('puts "  this corner : $CORNER   ->  $CORNER.rpt"\n')
+        fh.write('puts "  (if that name does not match the db you just loaded, stop now)"\n\n')
         fh.write('set OUT "$CORNER.rpt"\n')
         fh.write('set DTYPE "%s"      ;# setup=max, hold=min\n'
                  % ("min" if args.mode == "hold" else "max"))
@@ -871,13 +871,13 @@ TCL_LOOP = r"""
 if {[sizeof_collection [get_designs -quiet *]] == 0} {
     puts ""
     puts "=================================================================="
-    puts "  문제 발생"
-    puts "    무엇이   : PT 에 디자인이 안 올라와 있습니다."
-    puts "               넷리스트/라이브러리를 먼저 읽어야 합니다."
-    puts "    하실 일  : read_verilog + link_design + read_sdc + read_parasitics"
-    puts "               예제라면 :  source example/00_setup.tcl"
+    puts "  PROBLEM"
+    puts "    what   : no design is loaded in PrimeTime."
+    puts "             the netlist / library must be read first."
+    puts "    action : read_verilog + link_design + read_sdc + read_parasitics"
+    puts "             for the example :  source example/00_setup.tcl"
     puts ""
-    puts "    에러 코드: E-NODESIGN"
+    puts "    code   : E-NODESIGN"
     puts "=================================================================="
     return
 }
@@ -941,24 +941,25 @@ proc count_measured {f} {
 
 set NGOT [count_measured $OUT]
 puts ""
-puts "  요청한 경로   : $idx"
-puts "  측정된 경로   : $NGOT"
-puts "  결과 파일     : $OUT"
+puts "  paths requested : $idx"
+puts "  paths measured  : $NGOT"
+puts "  output file     : $OUT"
 if {$NGOT == 0} {
     puts ""
     puts "=================================================================="
-    puts "  문제 발생"
-    puts "    무엇이   : 경로가 하나도 안 잡혔습니다. 리포트가 에러로만 차 있습니다."
-    puts "    하실 일  : $OUT 을 열어 첫 몇 줄의 Error 메시지를 보세요."
-    puts "               'Current design is not defined' 이면 디자인이 안 올라온 것,"
-    puts "               'get_pins' 관련이면 이 코너의 넷리스트가 1회차와 다른 것입니다."
+    puts "  PROBLEM"
+    puts "    what   : not one path was captured.  the report holds only errors."
+    puts "    action : open $OUT and read the first few Error lines."
+    puts "             'Current design is not defined' means no design is loaded."
+    puts "             an error about 'get_pins' means this corner's netlist is"
+    puts "             not the one used in round 1."
     puts ""
-    puts "    에러 코드: E-NOMEASURED"
+    puts "    code   : E-NOMEASURED"
     puts "=================================================================="
 } elseif {$NGOT < $idx} {
-    puts "  주의: [expr {$idx - $NGOT}] 개가 안 잡혔습니다."
-    puts "        코너가 달라 경로가 없어진 경우도 있어 조금 줄어드는 것은 정상입니다."
-    puts "        많이 줄었으면 $OUT 에서 Error 줄을 확인하세요."
+    puts "  WARNING: [expr {$idx - $NGOT}] paths were not captured."
+    puts "           a small drop is normal -- a path can disappear in another"
+    puts "           corner.  if the drop is large, check the Error lines in $OUT."
 }
 """
 
