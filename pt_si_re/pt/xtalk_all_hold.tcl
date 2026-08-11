@@ -202,12 +202,23 @@ proc xt_scrape_aggressors {text} {
 #   예외 : 앞이 핀이 아니면(포트/클럭 입구) 뒤의 두 핀을 driver/load 로
 # 파이썬 5a 와 같은 결과가 나오는 것을 확인했다(788/788 일치).
 # 이 덕에 fixed_paths.tcl 을 돌린 그 세션에서 파이썬 없이 바로 이어갈 수 있다.
+#
+# 지나가는 김에 경로 개수도 센다(어차피 파일을 한 번 다 읽으므로 공짜다).
+#   XT_NPATH  "### FIXED_PATH" 줄 수      = 리포트에 담긴 경로 수
+#   XT_NSLACK "slack (" 줄 수             = 끝까지 온전히 적힌 경로 수
+# 리포트가 도중에 잘리면 마지막 블록에 slack 줄이 없어 둘이 어긋난다.
 proc xt_build_contexts {rpt} {
+    global XT_NPATH XT_NSLACK
+    set XT_NPATH 0
+    set XT_NSLACK 0
     set out {}
     set fh [open $rpt r]
     set prev_pin ""
     set pend {}
     while {[gets $fh line] >= 0} {
+        # 세는 것부터. 아래 regexp 에 안 걸리는 줄들이라 여기서 처리한다.
+        if {[string match "### FIXED_PATH*" $line]} { incr XT_NPATH ; continue }
+        if {[string match "  slack (*" $line]}      { incr XT_NSLACK }
         if {![regexp {^  (\S+) \(([^)]+)\)} $line -> nm tag]} continue
         if {$tag eq "net"} {
             lappend pend [list $nm $prev_pin]
@@ -355,7 +366,32 @@ if {![file exists $CTX]} {
     set i 0
     foreach r $rows { incr i ; puts $f "$i\t$r\t\t\t" }
     close $f
-    puts "  net list built : [llength $rows] rows  ->  $CTX"
+    puts "  paths in report : $XT_NPATH"
+    puts "  net list built  : [llength $rows] rows  ->  $CTX"
+
+    # 리포트가 도중에 잘렸는지 본다. 잘린 채로 넘어가면 그 뒤 경로의 넷이
+    # 통째로 빠지는데, 남은 것만으로도 계산은 멀쩡히 돌아 OK 로 끝난다.
+    # 그래서 여기서 잡지 않으면 학습 데이터가 조용히 반쪽이 된다.
+    if {$XT_NPATH == 0} {
+        puts ""
+        puts "  WARNING: this report has no '### FIXED_PATH' line at all."
+        puts "           it may not be a fixed_paths.tcl output."
+        puts "           code: W-NOPATHS"
+        puts ""
+    } elseif {$XT_NSLACK < $XT_NPATH} {
+        puts ""
+        puts "  WARNING: the report looks cut short."
+        puts "             paths started  : $XT_NPATH"
+        puts "             paths finished : $XT_NSLACK   <- fewer"
+        puts "           the last [expr {$XT_NPATH - $XT_NSLACK}] path(s) have no 'slack' line,"
+        puts "           so their nets are missing from the list above."
+        puts "           this run will still finish and print OK, but the data"
+        puts "           will be incomplete."
+        puts "           re-run fixed_paths.tcl and check it reached the end"
+        puts "           (it prints 'requested / measured' when it finishes)."
+        puts "           code: W-RPTCUT"
+        puts ""
+    }
 }
 
 puts "--------------------------------------------------------------------"
