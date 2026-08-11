@@ -26,7 +26,9 @@
 ### 여기 세 줄만 고치면 된다 ###########################################
 set RPT_FILE   ""         ;# 읽을 리포트. **절대경로로 박아도 된다.**
                            # 비워 두면 자동으로 찾는다(아래 순서).
-set XTALK_DIR  "xtalk"    ;# 결과를 쓸 폴더. 지금 폴더 아래의 xtalk/
+set XTALK_DIR  ""         ;# 결과를 쓸 폴더. 비워 두면 **로드된 db 이름**으로
+                           # 코너별 폴더를 만든다:  <db이름>/xtalk/
+                           # db 를 못 알아내면 그냥 xtalk/ 에 쓴다.
 set DELAY_TYPE "max"      ;# setup=max, hold=min
 #######################################################################
 if {[info exists XT_DELAY]} { set DELAY_TYPE $XT_DELAY }  ;# 루프가 준 값이 있으면 그것
@@ -34,12 +36,6 @@ if {[info exists XT_RPT]}   { set RPT_FILE   $XT_RPT   }  ;# 위 RPT_FILE 을 �
 if {[info exists XT_DIR]}   { set XTALK_DIR  $XT_DIR   }  ;# 밖에서 넘기고 싶을 때 쓴다
                                                           #   set XT_RPT "/data/.../<코너>.rpt"
                                                           #   source .../xtalk_all.tcl
-
-
-set CTX  "$XTALK_DIR/unique_contexts.tsv"
-set RAW  "$XTALK_DIR/context_raw.rpt"
-set VOUT "$XTALK_DIR/victim_windows.tsv"
-set AOUT "$XTALK_DIR/aggressor_windows.tsv"
 
 if {[sizeof_collection [get_designs -quiet *]] == 0} {
     puts "=================================================================="
@@ -57,6 +53,38 @@ if {[sizeof_collection [get_designs -quiet *]] == 0} {
 if {![get_app_var si_enable_analysis]} {
     puts "  WARNING: si_enable_analysis is OFF. all crosstalk values will be 0."
 }
+
+
+# --- 결과를 코너별 폴더에 쓴다 ----------------------------------------
+# 한 폴더에서 코너를 여러 개 돌려도 서로 안 덮어쓰게 해야 한다.
+# PT 가 코너를 알려주는 통로는 link_path 뿐이다 -- lib 이름은 op_cond_all 처럼
+# 코너와 무관하고 nom_voltage/file_name 은 비어 있다(실측 확인).
+#   link_path : * /.../db/TT_0p6V_25C_op_cond_all.db   ->  TT_0p6V_25C_op_cond_all
+# 이 이름으로 폴더를 만들면 파이썬이 그대로 --dir 로 받는다.
+set XT_DBSTEM ""
+if {![catch {set XT_LP [get_app_var link_path]}]} {
+    foreach e $XT_LP {
+        if {[string match "*.db" $e] || [string match "*.lib" $e]} {
+            set XT_DBSTEM [file rootname [file tail $e]]
+        }
+    }
+}
+if {$XTALK_DIR eq ""} {
+    if {$XT_DBSTEM ne ""} {
+        set XTALK_DIR "$XT_DBSTEM/xtalk"
+    } else {
+        set XTALK_DIR "xtalk"
+        puts "  NOTE: could not tell which db is loaded (link_path has no .db/.lib),"
+        puts "        so results go to ./xtalk .  if you run more than one corner"
+        puts "        in this directory they would overwrite each other -- give"
+        puts "        each corner its own directory, or set XTALK_DIR at the top."
+    }
+}
+
+set CTX  "$XTALK_DIR/unique_contexts.tsv"
+set RAW  "$XTALK_DIR/context_raw.rpt"
+set VOUT "$XTALK_DIR/victim_windows.tsv"
+set AOUT "$XTALK_DIR/aggressor_windows.tsv"
 
 
 # --- 잔일 (안 봐도 된다) ----------------------------------------------
@@ -183,8 +211,9 @@ proc xt_build_contexts {rpt} {
 
 
 # --- 넷 목록이 없으면 리포트에서 직접 만든다 --------------------------
+# 이미 있으면 리포트를 안 읽으므로 RPT 는 빈 채로 남는다(맨 아래 안내에서 씀).
+set RPT ""
 if {![file exists $CTX]} {
-    set RPT ""
 
     # (0) 맨 위에서 직접 박았으면 그것. 제일 우선한다.
     if {$RPT_FILE ne ""} {
@@ -213,23 +242,87 @@ if {![file exists $CTX]} {
         puts "  using report just made by fixed_paths.tcl : $RPT"
     }
 
-    # 확실하지 않으면 추측하지 않고 멈춘다.
-    # 예전에는 폴더의 .rpt 를 훑어 첫 번째를 조용히 집었는데, 1회차 리포트나
-    # 다른 코너 리포트를 잡으면 넷이 전부 PIN_NOT_FOUND 로 나면서
-    # (E-XCALC0) 원인을 찾기 어려웠다.
+    # (2) 이 폴더에서 fixed_paths.tcl 산출물을 **내용으로** 찾는다.
+    #     이름으로 찾지 않는다 -- 폴더 이름과 리포트 이름이 다를 수 있고,
+    #     pt_shell 을 새로 띄웠으면 위 OUT 도 없기 때문이다.
+    #
+    #     구분 기준 : fixed_paths.tcl 이 만든 리포트는 **첫 줄이
+    #     "### FIXED_PATH" 로 시작**한다. 1회차 report_timing 리포트에는
+    #     이 표시가 없으므로 절대 잘못 집히지 않는다.
+    #     우리 최종 산출물(*by_path.rpt)도 같은 표시로 시작하므로 이름으로 뺀다.
+    #
+    #     후보가 둘 이상이면 고르지 않고 멈춘다(엉뚱한 코너를 집으면
+    #     넷이 전부 PIN_NOT_FOUND 로 나면서 원인을 찾기 어려워진다).
+    set XT_CAND {}
+    if {$RPT eq ""} {
+        foreach f [lsort [glob -nocomplain -directory [pwd] -tails *.rpt]] {
+            if {[string match "*by_path.rpt" $f]} continue      ;# 우리 출력
+            if {[catch {set fh [open $f r]}]} continue
+            gets $fh first
+            close $fh
+            if {[string match "### FIXED_PATH*" $first]} { lappend XT_CAND $f }
+        }
+        # 후보가 여럿이어도 멈추지 않는다. **어느 코너의 리포트를 읽든 결과가
+        # 같기 때문이다.** 여기서 리포트에서 뽑는 것은 경로와 넷 구조뿐이고,
+        # 그건 고정 경로라 코너가 달라도 동일하다(4개 코너로 확인 -- 리포트
+        # 파일은 slack 이 달라 서로 다르지만, 뽑힌 넷 목록은 byte 단위로 같았다).
+        # crosstalk 숫자는 리포트가 아니라 지금 로드된 디자인에서 나온다.
+        #
+        # 그래도 지금 코너의 것을 우선 고른다 -- 화면에 찍히는 이름이
+        # 로드된 db 와 맞아야 사람이 덜 헷갈린다.
+        if {[llength $XT_CAND] > 1 && $XT_DBSTEM ne ""} {
+            foreach f $XT_CAND {
+                if {[string first [file rootname $f] $XT_DBSTEM] >= 0} {
+                    set XT_CAND [list $f]
+                    puts "  matched the loaded db : $XT_DBSTEM"
+                    break
+                }
+            }
+        }
+        if {[llength $XT_CAND] > 1} {
+            puts "  [llength $XT_CAND] fixed-path reports are here; using the first."
+            puts "  (any of them gives the same net list -- only the numbers"
+            puts "   differ between corners, and those are not used here.)"
+            foreach f $XT_CAND { puts "     $f" }
+        }
+        if {[llength $XT_CAND] >= 1} {
+            set RPT [lindex $XT_CAND 0]
+            puts "  found the fixed-path report : $RPT"
+        }
+    }
+
+    # 그래도 없으면 멈춘다. 추측하지 않는다.
     if {$RPT eq ""} {
         puts "=================================================================="
         puts "  PROBLEM"
-        puts "    what   : no report was selected to read."
-        puts "    action : do one of the two."
-        puts "             (1) set RPT_FILE at the top of this file"
-        puts "                   set RPT_FILE \"/data/round2/<corner>/<corner>.rpt\""
-        puts "             (2) run fixed_paths.tcl first in the same session"
-        puts "                   (its output is then picked up automatically)"
+        puts "    what   : no fixed-path report was found."
+        puts "             looked in : [pwd]"
+        puts "             a fixed-path report is a .rpt file whose first line"
+        puts "             starts with '### FIXED_PATH' (made by fixed_paths.tcl)."
+        set XT_ANY [glob -nocomplain -directory [pwd] -tails *.rpt]
+        if {[llength $XT_ANY] == 0} {
+            puts "             there is no .rpt file here at all."
+            puts "    action : cd to the corner directory that holds the report,"
+            puts "             then source this file again."
+        } else {
+            puts "             .rpt files that are here (none of them qualify):"
+            foreach f $XT_ANY { puts "               $f" }
+            puts "    action : if one of the above IS the fixed-path report,"
+            puts "             name it at the top of this file:"
+            puts "               set RPT_FILE \"<name>\""
+            puts "             a round-1 report will not work -- it has no"
+            puts "             '### FIXED_PATH' lines, so paths cannot be matched."
+        }
         puts ""
         puts "    code   : E-NORPTFILE"
         puts "=================================================================="
         return
+    }
+    # 로드된 db 를 같이 찍어 둔다. 리포트 이름과 달라도 문제가 아니다
+    # (넷 목록은 코너와 무관하다). 나중에 로그만 보고도 어느 db 로 계산했는지
+    # 알 수 있게 남기는 것이다.
+    if {$XT_DBSTEM ne ""} {
+        puts "  loaded db   : $XT_DBSTEM   <- crosstalk is computed with this db"
     }
     puts "  no net list found -- building it from the report : $RPT"
     file mkdir $XTALK_DIR
@@ -419,7 +512,16 @@ if {$bad == 0} {
 }
 puts "===================================================================="
 puts ""
+# 파이썬은 <dir>/xtalk/ 를 본다. 우리가 <db이름>/xtalk/ 에 썼으므로
+# --dir 은 그 한 단계 위, 즉 xtalk 의 부모를 준다.
+set XT_PYDIR [file normalize [file dirname $XTALK_DIR]]
+puts "results are in : [file normalize $XTALK_DIR]"
+puts ""
 puts "next, in the shell (PrimeTime is no longer needed):"
-puts "    python3 5a_contexts.py --dir [pwd]"
-puts "    python3 5b_pairs.py    --dir [pwd]"
-puts "    python3 5c_report.py   --dir [pwd]"
+if {$RPT ne ""} {
+    puts "    python3 5a_contexts.py --dir $XT_PYDIR --annotated [file normalize $RPT]"
+} else {
+    puts "    python3 5a_contexts.py --dir $XT_PYDIR --annotated <the fixed-path report>"
+}
+puts "    python3 5b_pairs.py    --dir $XT_PYDIR"
+puts "    python3 5c_report.py   --dir $XT_PYDIR"
