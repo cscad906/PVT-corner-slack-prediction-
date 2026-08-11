@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """xtalk_all.tcl -> xtalk_all_hold.tcl 을 다시 만든다.
 
-    python3 pt/make_hold.py
+    python3 dev/make_hold.py
 
 두 파일은 DELAY_TYPE 한 줄만 다르다. xtalk_all.tcl 을 고쳤으면 이걸 돌려
 hold 판을 맞춰 준다. 안 그러면 두 파일이 조용히 어긋난다.
@@ -12,8 +12,8 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "xtalk_all.tcl")
-DST = os.path.join(HERE, "xtalk_all_hold.tcl")
+SRC = os.path.join(HERE, os.pardir, "pt", "xtalk_all.tcl")
+DST = os.path.join(HERE, os.pardir, "pt", "xtalk_all_hold.tcl")
 
 OLD = 'set DELAY_TYPE "max"      ;# setup=max, hold=min'
 NEW = 'set DELAY_TYPE "min"      ;# ★ hold 판. setup 은 xtalk_all.tcl 을 쓴다'
@@ -21,7 +21,7 @@ HDR_OLD = "# xtalk_all.tcl  --  crosstalk PT 작업을 **한 번에** (PT 1차 +
 HDR_NEW = ("# xtalk_all_hold.tcl  --  crosstalk PT 작업을 **한 번에** (hold 판)\n"
            "#\n"
            "# xtalk_all.tcl 과 딱 한 줄(DELAY_TYPE)만 다른 사본이다.\n"
-           "# 고칠 일이 있으면 xtalk_all.tcl 을 고치고 pt/make_hold.py 로 다시 만든다.\n"
+           "# 고칠 일이 있으면 xtalk_all.tcl 을 고치고 dev/make_hold.py 로 다시 만든다.\n"
            "# 결과는 <db이름>_hold/xtalk/ 에 들어가므로 setup 과 안 섞인다.")
 
 

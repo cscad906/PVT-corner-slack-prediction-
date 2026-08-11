@@ -26,13 +26,13 @@ puts "        db   : [file tail $CI_DB]"
 puts "        spef : [file tail $CI_SPEF]"
 
 # --- 1) 디자인 로드 --------------------------------------------------
-source "$PKG/pt/load_corner.tcl"
+source "$PKG/dev/load_corner.tcl"
 
 # --- 2) + 3) 측정 ----------------------------------------------------
 file mkdir $R2_DIR
 cd         $R2_DIR
 source $FIXED        ;# -> <코너>.rpt
-source "$PKG/pt/dump_attr.tcl"   ;# -> pin_attr.txt, net_attr.txt
+source "$PKG/dev/dump_attr.tcl"   ;# -> pin_attr.txt, net_attr.txt
 cd $BASE
 
 # --- 4) 무엇으로 만들었는지 남긴다 -----------------------------------

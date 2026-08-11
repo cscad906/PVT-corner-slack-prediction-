@@ -2,7 +2,7 @@
 # xtalk_all_hold.tcl  --  crosstalk PT 작업을 **한 번에** (hold 판)
 #
 # xtalk_all.tcl 과 딱 한 줄(DELAY_TYPE)만 다른 사본이다.
-# 고칠 일이 있으면 xtalk_all.tcl 을 고치고 pt/make_hold.py 로 다시 만든다.
+# 고칠 일이 있으면 xtalk_all.tcl 을 고치고 dev/make_hold.py 로 다시 만든다.
 # 결과는 <db이름>_hold/xtalk/ 에 들어가므로 setup 과 안 섞인다.
 #
 #   pt_shell> cd <코너폴더>

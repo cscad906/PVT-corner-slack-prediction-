@@ -79,7 +79,7 @@ def write_pt_wrapper(phase, root, mode):
         fh.write("#     pt_shell> source %s\n\n" % os.path.abspath(path))
         fh.write('set XTALK_ROOT "%s"\n' % os.path.abspath(root))
         fh.write('set DELAY_TYPE "%s"\n' % ("min" if mode == "hold" else "max"))
-        fh.write('source "%s"\n' % os.path.join(HERE, "pt", target))
+        fh.write('source "%s"\n' % os.path.join(HERE, "dev", target))
     return path
 
 

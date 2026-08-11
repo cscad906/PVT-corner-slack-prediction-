@@ -533,10 +533,21 @@ pt/xtalk_all.tcl            crosstalk PT — 코너 하나, setup(-max)
 pt/xtalk_all_hold.tcl       같은 것의 hold(-min) 판
 ```
 
-`pt/` 의 나머지(`load_corner.tcl`, `round2_one.tcl`, `dump_attr.tcl`,
-`all_xtalk_one.tcl`, `make_hold.py`)는 **직접 열 일이 없다.** 위 파일들이나
-`4_all_corners.py` 가 알아서 부른다. (`make_hold.py` 는 `xtalk_all.tcl` 을 고쳤을
-때 `xtalk_all_hold.tcl` 을 다시 만들어 주는 것이다.)
+**`pt/` 에는 이 두 개만 있다.** 현장 담당자에게 드릴 파일이 그 둘뿐이라
+일부러 갈라 뒀다. 그 외 tcl 은 전부 `dev/` 에 있고 **우리가 직접 돌릴 때만**
+쓴다 -- 현장에 나가지 않는다.
+
+```
+dev/round2_one.tcl          2회차 한 코너 (example/02_round2*.tcl 이 부름)
+dev/load_corner.tcl         코너 하나를 PT 에 올리는 부품 (remove_design 부터)
+dev/dump_attr.tcl           pin_attr.txt / net_attr.txt 덤프 (Cpin)
+dev/all_xtalk_one.tcl       xtalk_all.tcl 을 코너 폴더 전부에 (4_all_corners.py)
+dev/make_hold.py            xtalk_all.tcl -> xtalk_all_hold.tcl 재생성
+```
+
+`dev/` 는 **직접 열 일이 없다.** `example/*.tcl` 과 `4_all_corners.py` 가
+알아서 부른다. 다만 `xtalk_all.tcl` 을 고쳤으면 `python3 dev/make_hold.py` 로
+hold 판을 맞춰 줘야 두 파일이 어긋나지 않는다.
 
 ### 문서
 

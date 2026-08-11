@@ -92,7 +92,7 @@ foreach R2_ITEM $CORNERS {
         continue
     }
 
-    source "$PKG/pt/round2_one.tcl"
+    source "$PKG/dev/round2_one.tcl"
 
     if {[file exists "$OUTTOP/$CORNER/corner_info.tcl"]} {
         lappend R2_RESULT [list $CORNER "OK"]

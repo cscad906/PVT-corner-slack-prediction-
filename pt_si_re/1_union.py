@@ -860,7 +860,7 @@ def main():
          % ("주의" if warn else "정상", len(rows)))
     print("           set CORNER \"<코너이름>\"      (결과는 <코너이름>.rpt 로 저장)")
     print("           source %s" % out_tcl)
-    print("           source pt/dump_attr.tcl")
+    print("           source dev/dump_attr.tcl")
     print("")
 
 

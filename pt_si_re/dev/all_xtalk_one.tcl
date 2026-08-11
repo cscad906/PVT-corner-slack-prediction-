@@ -2,7 +2,7 @@
 # all_xtalk_one.tcl  --  crosstalk PT 를 코너 폴더 전부에 (한 번에 끝)
 #
 #   pt_shell> set XTALK_ROOT "<round2 폴더>"
-#   pt_shell> source <패키지>/pt/all_xtalk_one.tcl
+#   pt_shell> source <패키지>/dev/all_xtalk_one.tcl
 #
 # xtalk_all.tcl 을 코너마다 부르는 것뿐이다. 새로 하는 일은 없다.
 # 한 코너가 실패해도 멈추지 않고 끝까지 돈 뒤, 맨 아래 표로 알려 준다.
@@ -107,7 +107,7 @@ foreach d $XT_LIST {
     source "$XT_PKG/load_corner.tcl"
 
     cd $d
-    source "$XT_PKG/xtalk_all.tcl"
+    source "[file dirname $XT_PKG]/pt/xtalk_all.tcl"
     cd $XT_BASE
     if {[file exists "$d/xtalk/aggressor_windows.tsv"]} {
         lappend XT_DONE [list [file tail $d] "OK"]
@@ -131,7 +131,7 @@ puts ""
 if {$XT_BAD > 0} {
     puts "  $XT_BAD failed.  to run just that corner:"
     puts "      cd <that corner directory>"
-    puts "      source $XT_PKG/xtalk_all.tcl"
+    puts "      source [file dirname $XT_PKG]/pt/xtalk_all.tcl"
 } else {
     puts "  all OK.  next, in the shell:"
     puts "      python3 4_all_corners.py --root $XTALK_ROOT --phase 2"

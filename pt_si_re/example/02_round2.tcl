@@ -71,7 +71,7 @@ puts "--------------------------------------------------------------------"
 puts "$CORNER"
 puts "--------------------------------------------------------------------"
 
-source "$PKG/pt/round2_one.tcl"
+source "$PKG/dev/round2_one.tcl"
 
 puts ""
 puts "round 2 done: $OUTTOP/$CORNER/"
