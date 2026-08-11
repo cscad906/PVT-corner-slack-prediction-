@@ -69,7 +69,14 @@ if {[llength $XT_LIST] == 0} {
 
 # 앞서 코너 하나를 직접 돌리며 XT_RPT 를 줬다면 그 값이 세션에 남아 있다.
 # 여기서는 코너마다 5a 가 만든 목록을 쓰므로 남은 값이 끼어들지 않게 지운다.
-unset -nocomplain XT_RPT XT_DIR
+unset -nocomplain XT_RPT
+
+# 결과를 코너 폴더 바로 아래 xtalk/ 에 쓰게 한다.
+# xtalk_all.tcl 을 혼자 돌리면 <db이름>/xtalk/ 로 가른다 -- 한 폴더에서 코너를
+# 여러 개 돌려도 안 섞이게 하려는 것이다. 그런데 이 루프는 이미 코너마다
+# 폴더가 따로라 가를 이유가 없고, 가르면 4_all_corners.py --phase 2 가
+# <코너폴더>/xtalk/ 를 보므로 서로 어긋난다.
+set XT_DIR "xtalk"
 
 set XT_DELAY $DELAY_TYPE   ;# 코너별 tcl 에 전달. 루프가 끝나면 지운다
 puts "running [llength $XT_LIST] corners.  (delay_type=$DELAY_TYPE)"
@@ -110,7 +117,7 @@ foreach d $XT_LIST {
     puts ""
 }
 
-unset -nocomplain XT_DELAY   ;# 다음에 코너 하나만 직접 돌릴 때 영향 없게
+unset -nocomplain XT_DELAY XT_DIR   ;# 다음에 코너 하나만 직접 돌릴 때 영향 없게
 
 puts "===================================================================="
 puts "  RESULT   by corner  (crosstalk PT)"

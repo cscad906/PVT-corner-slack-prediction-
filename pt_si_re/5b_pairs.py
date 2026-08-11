@@ -4,7 +4,7 @@
 
     python3 5b_pairs.py --dir <코너폴더>
 
-넣는 것   xtalk/context_raw.rpt   (xtalk_calc.tcl 이 만든 PT 원문)
+넣는 것   xtalk/context_raw.rpt   (xtalk_all.tcl 이 만든 PT 원문)
 나오는 것 xtalk/active_features.tsv         쌍 하나가 한 줄
           xtalk/victim_load_pins.txt        다음 PT 단계에서 물어볼 핀
           xtalk/aggressor_nets.txt          다음 PT 단계에서 물어볼 넷
@@ -32,7 +32,8 @@ CODE_INFO = {
                    "pt_si_re 폴더를 통째로 옮기세요. _engine/ 이 빠지면 "
                    "crosstalk 단계가 돌지 않습니다."),
     "E-NORAW":    ("PT 출력(context_raw.rpt)이 없습니다",
-                   "pt_shell 에서 pt/xtalk_calc.tcl 을 먼저 돌려 주세요."),
+                   "pt_shell 에서 pt/xtalk_all.tcl (hold 면 xtalk_all_hold.tcl) 을 "
+                   "먼저 돌려 주세요."),
     "E-PARSE":    ("PT 출력을 읽다가 실패했습니다",
                    "xtalk/context_raw.rpt 을 열어 앞부분이 정상인지 보세요."),
     "E-NOPAIR":   ("victim-aggressor 쌍이 하나도 안 나왔습니다",
@@ -110,7 +111,7 @@ def main():
     ap.add_argument("--corner", default=None,
                     help="코너 이름. 안 주면 폴더 이름을 쓴다")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
-                    help="setup(max) / hold(min). xtalk_calc.tcl 과 같아야 한다")
+                    help="setup(max) / hold(min). xtalk_all.tcl 쪽과 같아야 한다")
     ap.add_argument("--xtalk", default=None,
                     help="xtalk 폴더 절대경로를 직접 줄 때. "
                          "주면 --dir 아래 xtalk/ 를 찾지 않는다")
@@ -183,10 +184,10 @@ def main():
                  ("--xtalk %s" % os.path.abspath(work)) if args.xtalk
                  else ("--dir %s" % os.path.abspath(d))))
     else:
-        print("[ 정상 ] 쌍 %d줄. 다음은 pt_shell 에서:" % n_row)
-        print("           cd %s" % os.path.abspath(d))
-        print("           source %s" % os.path.join(HERE, "pt", "xtalk_windows.tcl"))
-        print("         (xtalk_all.tcl 로 한 번에 돌렸다면 이 단계는 이미 끝난 것입니다)")
+        print("[ 주의 ] 쌍 %d줄. 그런데 도착시각 파일이 없습니다." % n_row)
+        print("         xtalk/victim_windows.tsv 와 aggressor_windows.tsv 가")
+        print("         있어야 5c 가 돕니다. xtalk_all.tcl 이 끝까지 돌았는지")
+        print("         (화면에 [ OK-XTALK ]) 확인해 주세요.")
     code("OK-XPAIR")
 
 

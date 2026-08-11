@@ -42,6 +42,10 @@
     --out <폴더>     결과를 쓸 폴더. 생략하면 <dir>_top<N>
     --mode setup|hold  setup 은 slack 이 작은 것이 나쁘다. hold 도 같다.
                      (지금은 둘 다 '작은 것부터'. 표시용으로만 쓴다)
+    --verify         정렬돼 있는지 끝까지 확인한다. 리포트를 -sort_by slack
+                     없이 뽑았을 가능성이 있을 때만 쓴다. 기본은 확인하지 않고
+                     **앞에서 N개만 읽고 멈춘다**(그래서 '원래' 개수는 ? 로 뜬다).
+
     --jobs N (-j N)  코너를 동시에 몇 개 처리할지. **기본 1(하나씩)**.
                      이 단계는 경로를 쌓아 두지 않아 몇 개로 나눠도 메모리가
                      거의 안 늘어난다(코너 12개 기준 34MB). 코너가 많으면
@@ -66,6 +70,12 @@ force_utf8()
 
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 SLACK_RE = re.compile(r"^\s*slack\s*\(([^)]+)\)\s+(-?[\d.]+)")
+
+# 바이트용 같은 정규식. 이 스크립트는 리포트에서 숫자만 꺼내고 나머지는
+# 그대로 복사하므로, 문자열로 디코딩했다가 다시 인코딩할 이유가 없다.
+# 디코딩을 안 하면 빠르기도 하고, 이상한 문자가 섞여 있어도 원본이 그대로 나온다.
+START_B_RE = re.compile(rb"^[ \t]*Startpoint:")
+SLACK_B_RE = re.compile(rb"^[ \t]*slack\s*\([^)]*\)\s+(-?[\d.]+)")
 
 
 # ---- 결과 코드 -------------------------------------------------------
@@ -110,17 +120,27 @@ def code(c, *msg):
 # 메모리를 먹는다. 두 번 읽는 편이 훨씬 싸다(디스크는 순차 읽기라 빠르다).
 
 def scan_slacks(path):
-    """1번째 읽기 : slack 값만 모은다. -> (slack 목록, Startpoint 개수)"""
+    """1번째 읽기 : slack 값만 모은다. -> (slack 목록, Startpoint 개수)
+
+    줄 단위로 돈다. 리포트의 99% 는 핀 줄이고 그 줄들은 어차피 아무것도 안
+    걸리므로, 정규식을 걸기 전에 문자열 검사로 먼저 쳐낸다. `in` 은 정규식보다
+    훨씬 싸다.
+
+    (덩어리로 읽어 한 번에 훑는 방법도 해 봤는데, 덩어리를 이어 붙이는 복사와
+     findall 이 만드는 목록 때문에 오히려 느리고 메모리도 7배였다. 파이썬의
+     줄 단위 읽기가 이미 C 로 최적화돼 있어 이 편이 낫다.)
+    """
     vals = []
     n_start = 0
-    with open(path, "r", errors="ignore") as f:
+    with open(path, "rb") as f:
         for line in f:
-            if START_RE.match(line):
+            if b"slack" in line:
+                m = SLACK_B_RE.match(line)
+                if m:
+                    vals.append(float(m.group(1)))
+                    continue
+            if b"Startpoint:" in line and START_B_RE.match(line):
                 n_start += 1
-                continue
-            m = SLACK_RE.match(line)
-            if m:
-                vals.append(float(m.group(2)))
     return vals, n_start
 
 
@@ -134,32 +154,148 @@ def write_trimmed(src, dst, cut, n_keep):
     written = 0
     buf = []
     in_block = False
-    with open(src, "r", errors="ignore") as fi, open(dst, "w") as fo:
+    # 바이트 그대로 옮긴다. 원본 리포트를 한 글자도 안 바꾸기 위해서다
+    # (디코딩했다가 다시 인코딩하면 이상한 문자가 있을 때 내용이 달라진다).
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
         for line in fi:
-            if START_RE.match(line):
+            # 정규식은 후보 줄에만 건다. 리포트의 99% 는 핀 줄이라
+            # 아래 두 문자열 검사에서 바로 걸러진다.
+            if b"Startpoint:" in line and START_B_RE.match(line):
                 if not in_block:
-                    fo.writelines(buf)      # 첫 블록 앞 = 머리말
+                    fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
                 in_block = True
                 buf = [line]
                 continue
-            if not in_block:
-                buf.append(line)            # 아직 머리말 구간
-                continue
             buf.append(line)
-            m = SLACK_RE.match(line)
+            if not in_block:
+                continue                      # 아직 머리말 구간
+            if b"slack" not in line:
+                continue
+            m = SLACK_B_RE.match(line)
             if m:
-                if written < n_keep and float(m.group(2)) <= cut:
-                    fo.writelines(buf)
-                    fo.write("\n\n")   # 블록 사이 빈 줄. 원본처럼 보이게 한다
+                if written < n_keep and float(m.group(1)) <= cut:
+                    fo.write(b"".join(buf))
+                    fo.write(b"\n\n")  # 블록 사이 빈 줄. 원본처럼 보이게 한다
                     written += 1
                 buf = []
     return written
 
 
+VERIFY = [False]      # --verify 여부. 하위 프로세스에도 보이게 리스트로 둔다
+
+
+def trim_head(src, dst, n_keep):
+    """맨 앞 N개만 쓰고 **거기서 읽기를 멈춘다.** -> (전체 개수 or None, 남긴 개수)
+
+    report_timing 은 -sort_by slack 이 기본이라 리포트가 이미 나쁜 것부터
+    정렬돼 있다. 그러면 앞에서 N개가 곧 최악 N개다.
+
+    N개를 채우면 **파일 나머지는 아예 읽지 않는다.** 수 GB 짜리에서 앞부분만
+    읽고 끝나므로 크기와 상관없이 빠르다. 대신 전체 경로가 몇 개인지는
+    알 수 없어 None 으로 돌려준다(화면에 '?' 로 표시된다).
+
+    정렬을 못 믿겠으면 --verify 를 준다. 그러면 trim_verify() 가 끝까지
+    훑어 확인하고, 정렬이 아니면 두 번 읽기로 되돌아간다.
+    """
+    written = 0
+    buf = []
+    in_block = False
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
+        for line in fi:
+            if b"Startpoint:" in line and START_B_RE.match(line):
+                if not in_block:
+                    fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
+                in_block = True
+                buf = [line]
+                continue
+            buf.append(line)
+            if not in_block:
+                continue
+            if b"slack" not in line:
+                continue
+            if not SLACK_B_RE.match(line):
+                continue
+            fo.write(b"".join(buf))
+            fo.write(b"\n\n")
+            written += 1
+            buf = []
+            if written >= n_keep:
+                break                      # 나머지는 읽지 않는다
+    return None, written
+
+
+def trim_verify(src, dst, n_keep):
+    """한 번만 읽고 자르되, 정렬이 맞는지 끝까지 확인한다. (--verify)
+
+    -> (전체 개수, 남긴 개수)  또는 정렬이 아니면 None.
+
+    report_timing 을 -sort_by slack 으로 뽑으면 리포트가 **이미 나쁜 것부터**
+    정렬돼 있다. 그러면 앞에서 N개를 그대로 쓰면 끝이고, slack 을 모아 정렬할
+    필요도 파일을 두 번 읽을 필요도 없다.
+
+    다만 정렬돼 있다고 믿어 버리면 안 된다. -sort_by 를 안 준 리포트도 있고,
+    path group 별로 따로 정렬돼 붙은 리포트도 있다. 그런 파일에서 앞 N개만
+    집으면 뒤에 있는 더 나쁜 경로를 놓친다.
+
+    그래서 N개를 쓴 뒤에도 **끝까지 slack 만 훑어보며** 확인한다.
+      - 뒤에 더 나쁜(작은) slack 이 하나도 없다  -> 앞 N개가 정말 최악 N개다
+      - 하나라도 있다                           -> None. 부르는 쪽이 두 번
+                                                   읽기 방식으로 다시 한다
+    뒤쪽 훑기는 블록을 모으지 않고 문자열 검사만 하므로 거의 공짜다.
+    덤으로 전체 경로 개수도 정확히 세어진다.
+    """
+    written = 0
+    n_total = 0
+    worst_kept = None      # 남긴 것 중 가장 나쁘지 않은(가장 큰) slack
+    buf = []
+    in_block = False
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
+        for line in fi:
+            if written < n_keep:
+                if b"Startpoint:" in line and START_B_RE.match(line):
+                    if not in_block:
+                        fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
+                    in_block = True
+                    buf = [line]
+                    continue
+                buf.append(line)
+                if not in_block:
+                    continue
+            if b"slack" not in line:
+                continue
+            m = SLACK_B_RE.match(line)
+            if not m:
+                continue
+            sl = float(m.group(1))
+            n_total += 1
+            if written < n_keep:
+                if worst_kept is None or sl > worst_kept:
+                    worst_kept = sl
+                fo.write(b"".join(buf))
+                fo.write(b"\n\n")
+                written += 1
+                buf = []
+            elif sl < worst_kept:
+                return None            # 뒤에 더 나쁜 것이 있다. 정렬 아님
+    return n_total, written
+
+
 def _trim_one(job):
-    """코너 하나를 줄인다. -> (코너, 원래 개수, 남긴 개수, 결과 파일 크기)"""
+    """코너 하나를 줄인다. -> (코너, 원래 개수, 남긴 개수, 파일 크기, 비고)"""
     src, dst, n_keep = job
     corner = os.path.splitext(os.path.basename(src))[0]
+
+    if VERIFY[0]:
+        r = trim_verify(src, dst, n_keep)
+    else:
+        r = trim_head(src, dst, n_keep)
+    if r is not None:
+        n_total, written = r
+        if not written:
+            return corner, 0, 0, 0, "경로 없음"
+        return corner, n_total, written, os.path.getsize(dst), ""
+
+    # 정렬돼 있지 않았다. slack 을 다 모아 문턱값을 구한 뒤 다시 쓴다.
     vals, n_start = scan_slacks(src)
     if not vals:
         return corner, n_start, 0, 0, "경로 없음"
@@ -168,7 +304,7 @@ def _trim_one(job):
     else:
         cut = sorted(vals)[n_keep - 1]
     written = write_trimmed(src, dst, cut, n_keep)
-    return corner, len(vals), written, os.path.getsize(dst), ""
+    return corner, len(vals), written, os.path.getsize(dst), "정렬 안 됨"
 
 
 def resolve_jobs(want, n_files):
@@ -219,9 +355,14 @@ def main():
     ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
                     help="코너를 동시에 몇 개 처리할지. **기본 1(하나씩)**. "
                          "0 을 주면 자동(코어 수와 코너 수 중 작은 쪽, 최대 8)")
+    ap.add_argument("--verify", action="store_true",
+                    help="정렬돼 있는지 끝까지 확인한다. 리포트를 -sort_by slack "
+                         "없이 뽑았을 가능성이 있을 때만. 기본은 확인 안 함 "
+                         "(정렬을 믿고 앞에서 N개만 읽고 멈춘다)")
     ap.add_argument("--force", action="store_true",
                     help="결과 폴더에 이미 .rpt 가 있어도 덮어쓴다")
     args = ap.parse_args()
+    VERIFY[0] = args.verify
 
     d = args.dir.rstrip("/")
     out = args.out or ("%s_top%d" % (d, args.keep))
@@ -269,27 +410,41 @@ def main():
     print("  " + "-" * 64)
     tot_before = tot_after = tot_bytes = 0
     n_uncut = 0
+    # n_before 가 None 이면 '원래 몇 개인지 안 셌다'는 뜻이다(기본 동작).
+    # 앞에서 N개만 읽고 멈추므로 전체 개수를 알 수가 없다. --verify 를 주면 센다.
+    unknown_total = False
     for corner, n_before, n_after, nbytes, note in run_jobs(jobs_list, jobs):
-        tot_before += n_before
+        if n_before is None:
+            unknown_total = True
+        else:
+            tot_before += n_before
+            if n_before and n_before <= args.keep:
+                n_uncut += 1
         tot_after += n_after
         tot_bytes += nbytes
-        if n_before and n_before <= args.keep:
-            n_uncut += 1
-        print("  %-30s %10d %10d %9.0fMB %s"
-              % (corner, n_before, n_after, nbytes / 1048576.0, note))
+        print("  %-30s %10s %10d %9.0fMB %s"
+              % (corner, "?" if n_before is None else n_before,
+                 n_after, nbytes / 1048576.0, note))
     print("  " + "-" * 64)
-    print("  %-30s %10d %10d %9.0fMB"
-          % ("합계", tot_before, tot_after, tot_bytes / 1048576.0))
+    print("  %-30s %10s %10d %9.0fMB"
+          % ("합계", "?" if unknown_total else tot_before,
+             tot_after, tot_bytes / 1048576.0))
+    if unknown_total:
+        print("")
+        print("  '원래' 가 ? 인 이유: 앞에서 N개만 읽고 멈추기 때문입니다.")
+        print("  리포트가 -sort_by slack 으로 정렬돼 있다고 보고 나머지는 안 읽습니다.")
+        print("  전체 개수까지 세고 정렬도 확인하려면 --verify 를 주세요.")
     print("")
 
-    if tot_before == 0:
+    if tot_after == 0:
         code("E-NOPATH",
              "[ 실패 ] 리포트에서 경로를 하나도 못 읽었습니다.")
 
     shrink = (1.0 - tot_bytes / (src_mb * 1048576.0)) * 100.0
     print("-" * 68)
-    print("  경로 %d개 -> %d개,  용량 %.0f MB -> %.0f MB  (%.0f%% 줄었습니다)"
-          % (tot_before, tot_after, src_mb, tot_bytes / 1048576.0, shrink))
+    print("  경로 %s -> %d개,  용량 %.0f MB -> %.0f MB  (%.0f%% 줄었습니다)"
+          % ("?" if unknown_total else "%d개" % tot_before,
+             tot_after, src_mb, tot_bytes / 1048576.0, shrink))
     print("")
     print("  다음:")
     print("      python3 1_union.py --dir %s" % out)

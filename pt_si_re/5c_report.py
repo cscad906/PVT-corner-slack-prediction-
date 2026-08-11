@@ -33,8 +33,7 @@ CODE_INFO = {
                    "pt_si_re 폴더를 통째로 옮기세요. _engine/ 이 빠지면 "
                    "crosstalk 단계가 돌지 않습니다."),
     "E-NOINPUT":  ("앞 단계 결과가 없습니다",
-                   "5a -> xtalk_calc.tcl -> 5b -> xtalk_windows.tcl 순서로 "
-                   "먼저 돌려 주세요."),
+                   "xtalk_all.tcl -> 5a -> 5b 순서로 먼저 돌려 주세요."),
     "E-BUILD":    ("리포트를 만들다가 실패했습니다",
                    "xtalk/ 안의 tsv 들이 정상인지 보세요. 앞 단계가 [ 정상 ] 로 "
                    "끝났는지 확인해 주세요."),

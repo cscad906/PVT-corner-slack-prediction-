@@ -3,7 +3,7 @@
 #
 # 이 파일을 직접 source 할 일은 없다. 아래 넷이 부른다.
 #     02_round2.tcl / 02_round2_all.tcl        (2회차)
-#     all_xtalk_calc.tcl / all_xtalk_windows.tcl (crosstalk PT 단계)
+#     all_xtalk_one.tcl                          (crosstalk PT 단계)
 #
 # 부르기 전에 CI_TOP / CI_VERILOG / CI_SDC / CI_DB / CI_SPEF 를 정해 둔다.
 #

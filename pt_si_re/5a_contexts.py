@@ -168,10 +168,11 @@ def main():
                  ("--xtalk %s" % os.path.abspath(work)) if args.xtalk
                  else ("--dir %s" % os.path.abspath(d))))
     else:
-        print("[ 정상 ] %d개 넷. 다음은 pt_shell 에서 (디자인 로드된 상태로):" % n_ctx)
+        print("[ 정상 ] %d개 넷. 다만 PT 출력(context_raw.rpt)이 아직 없습니다." % n_ctx)
+        print("         pt_shell 에서 (디자인 로드된 상태로):")
         print("           cd %s" % os.path.abspath(d))
-        print("           source %s" % os.path.join(HERE, "pt", "xtalk_calc.tcl"))
-        print("         (xtalk_all.tcl 로 한 번에 돌렸다면 이 단계는 이미 끝난 것입니다)")
+        print("           source %s" % os.path.join(HERE, "pt", "xtalk_all.tcl"))
+        print("         hold 면 xtalk_all_hold.tcl 을 씁니다.")
     code("OK-XCTX")
 
 

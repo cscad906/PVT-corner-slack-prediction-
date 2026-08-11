@@ -11,9 +11,8 @@
     2b_distres.py  --dir <코너폴더> [--spef ...]
     2c_merge.py    --dir <코너폴더>
     5a_contexts.py --dir <코너폴더>
-  [PT] all_xtalk_calc.tcl
+  [PT] all_xtalk_one.tcl
     5b_pairs.py    --dir <코너폴더>
-  [PT] all_xtalk_windows.tcl
     5c_report.py   --dir <코너폴더>
 
 코너 이름은 폴더 이름을 그대로 쓴다(2회차에서 리포트 이름과 같게 지어진다).
