@@ -102,6 +102,9 @@ def main():
     ap.add_argument("--dir", default=".",
                     help="**코너 폴더 하나** (annotated.txt 이 있는 폴더)")
     ap.add_argument("--annotated", default=None, help="annotated.txt 경로를 직접 줄 때")
+    ap.add_argument("--xtalk", default=None,
+                    help="xtalk 폴더 절대경로를 직접 줄 때. "
+                         "주면 --dir 아래 xtalk/ 를 찾지 않는다")
     args = ap.parse_args()
 
     for _p in ['parse_annotated_with_clock_segments.py', 'make_unique_path_arc_contexts.py']:
@@ -118,7 +121,7 @@ def main():
             ann, _e2, _c2 = find_rpt(d)
             if not ann:
                 code("E-NOANNOT", "[ 실패 ] 읽을 리포트가 없습니다: %s" % d)
-    work = os.path.join(d, "xtalk")
+    work = args.xtalk or os.path.join(d, "xtalk")
 
     print("=" * 68)
     print("5a - crosstalk 쌍 리포트 1단계 (PT 에 물어볼 목록 만들기)")
@@ -160,8 +163,10 @@ def main():
     if os.path.exists(os.path.join(work, "context_raw.rpt")):
         print("[ 정상 ] %d개 넷. PT 는 이미 끝나 있습니다(context_raw.rpt 확인)." % n_ctx)
         print("         다음은 셸에서:")
-        print("           python3 %s --dir %s"
-              % (os.path.join(HERE, "5b_pairs.py"), os.path.abspath(d)))
+        print("           python3 %s %s"
+              % (os.path.join(HERE, "5b_pairs.py"),
+                 ("--xtalk %s" % os.path.abspath(work)) if args.xtalk
+                 else ("--dir %s" % os.path.abspath(d))))
     else:
         print("[ 정상 ] %d개 넷. 다음은 pt_shell 에서 (디자인 로드된 상태로):" % n_ctx)
         print("           cd %s" % os.path.abspath(d))

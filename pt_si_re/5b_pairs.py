@@ -111,14 +111,20 @@ def main():
                     help="코너 이름. 안 주면 폴더 이름을 쓴다")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
                     help="setup(max) / hold(min). xtalk_calc.tcl 과 같아야 한다")
+    ap.add_argument("--xtalk", default=None,
+                    help="xtalk 폴더 절대경로를 직접 줄 때. "
+                         "주면 --dir 아래 xtalk/ 를 찾지 않는다")
     args = ap.parse_args()
 
     for _p in ['parse_path_context_delay_calculation.py', 'prepare_compact_timing_window_requests.py']:
         need_parser(_p)
 
     d = args.dir
-    work = os.path.join(d, "xtalk")
-    corner = args.corner or os.path.basename(os.path.abspath(d))
+    work = args.xtalk or os.path.join(d, "xtalk")
+    # --xtalk 로 폴더를 직접 줬으면 코너 이름은 그 폴더의 부모에서 뽑는다
+    # (xtalk/ 의 부모가 코너 폴더라는 규약은 그대로다).
+    _base = os.path.dirname(os.path.abspath(work)) if args.xtalk else os.path.abspath(d)
+    corner = args.corner or os.path.basename(_base)
 
     print("=" * 68)
     print("5b - crosstalk 쌍 뽑기")
@@ -172,8 +178,10 @@ def main():
     if os.path.exists(vw) and os.path.exists(aw):
         print("[ 정상 ] 쌍 %d줄. 도착시각 파일이 이미 있습니다 -- PT 는 끝났습니다." % n_row)
         print("         다음은 셸에서:")
-        print("           python3 %s --dir %s"
-              % (os.path.join(HERE, "5c_report.py"), os.path.abspath(d)))
+        print("           python3 %s %s"
+              % (os.path.join(HERE, "5c_report.py"),
+                 ("--xtalk %s" % os.path.abspath(work)) if args.xtalk
+                 else ("--dir %s" % os.path.abspath(d))))
     else:
         print("[ 정상 ] 쌍 %d줄. 다음은 pt_shell 에서:" % n_row)
         print("           cd %s" % os.path.abspath(d))
