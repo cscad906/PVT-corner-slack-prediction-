@@ -12,7 +12,20 @@ setup / hold 를 **자동으로 판별**한다(PT 원문의 Annotated max/min). 
 있다. 제일 흔한 것이 코너를 바꿔 놓고 db 를 안 갈아 끼운 경우로, 전 코너가
 같은 전압으로 계산된다. 그건 파일을 열어 봐야 안다.
 
-받은 폴더 아래에서 `xtalk` 폴더를 전부 찾아 코너마다 아래를 본다.
+받은 폴더 아래에서 **이름이 `xtalk` 인 폴더를 전부** 찾는다. 현장 구조를 몰라도
+되고 setup/hold 를 따로 줄 필요도 없다. 한 번에 다 검사한다.
+
+    /받은곳/
+        TT_0p6V_25C_op_cond_all/xtalk/          <- setup
+        TT_0p8V_25C_op_cond_all/xtalk/
+        TT_0p6V_25C_op_cond_all_hold/xtalk/     <- hold (_hold 가 붙는다)
+
+폴더 이름은 xtalk_all.tcl 이 로드된 db 이름으로 짓고, hold 는 뒤에 `_hold` 를
+붙인다. 다만 **이름을 믿지 않고** PT 원문에 찍힌 값으로 판정한다 -- 폴더 이름은
+사람이 바꿀 수 있지만 원문은 PT 가 쓴 것이라 바뀌지 않는다.
+코너 폴더 이름(= xtalk 의 부모)이 표의 '코너' 열로 나온다.
+
+코너마다 아래를 본다.
 
   파일 4개가 다 있고 비어 있지 않은가
   context 를 몇 개 물었고 몇 개가 실패했는가
@@ -22,11 +35,15 @@ setup / hold 를 **자동으로 판별**한다(PT 원문의 Annotated max/min). 
   setup 은 delta 가 양수, hold 는 음수로 나온다 -- 부호가 아니라 0 여부를 본다
   victim/aggressor 도착시각이 채워졌는가
 
-그리고 코너끼리 비교한다.
+그리고 코너끼리 비교한다. **setup 과 hold 는 각각 따로 묶어서** 본다 --
+둘은 원래 별개 2세트라 섞여 있는 것 자체는 문제가 아니다.
 
-  전압이 코너마다 다른가        같으면 db 를 안 갈아 끼운 것
-  넷 목록이 코너마다 같은가     달라지면 서로 다른 fixed_paths 로 돌린 것
-  setup/hold 가 섞여 있지 않은가
+  같은 분석 안에서 전압이 코너마다 다른가
+      같으면 db 를 안 갈아 끼운 것. 제일 잡기 어려운 실수다.
+      (setup 0.6V 와 hold 0.6V 가 같은 건 당연하므로 넘어간다)
+  같은 분석 안에서 넷 목록이 같은가
+      다르면 서로 다른 fixed_paths.tcl 로 돌린 것.
+      (setup 과 hold 는 클럭 구간이 달라 원래 다르므로 비교하지 않는다)
 
 읽기만 한다. 아무것도 고치거나 만들지 않는다.
 """
@@ -289,29 +306,32 @@ def main():
     good = [(n, v) for n, v, b in rows if v is not None]
     cross = []
     if len(good) > 1:
+        # VDD 는 **같은 분석(setup/hold) 안에서만** 겹치면 안 된다.
+        # 같은 코너의 setup 과 hold 가 같은 전압인 것은 당연하다.
         vdds = {}
         for n, v in good:
-            vdds.setdefault(v["vdd"], []).append(n)
-        dup = {k: ns for k, ns in vdds.items() if len(ns) > 1 and k != "?"}
+            vdds.setdefault((v["mode"], v["vdd"]), []).append(n)
+        dup = {k: ns for k, ns in vdds.items() if len(ns) > 1 and k[1] != "?"}
         if dup:
-            for k, ns in sorted(dup.items()):
-                cross.append("VDD %s 가 여러 코너에 겹칩니다: %s" % (k, ", ".join(ns)))
+            for (mode, k), ns in sorted(dup.items()):
+                cross.append("%s 에서 VDD %s 가 여러 코너에 겹칩니다: %s"
+                             % (mode, k, ", ".join(ns)))
             cross.append("  -> 코너를 바꾸면서 db 를 다시 안 읽었을 때 이렇게 됩니다.")
 
-        sigs = {}
-        for n, v in good:
-            sigs.setdefault(file_sig(v["ctxfile"]), []).append(n)
-        if len(sigs) > 1:
-            cross.append("넷 목록이 코너마다 다릅니다(%d 종류):" % len(sigs))
-            for s, ns in sigs.items():
-                cross.append("    %s : %s" % (s[:8], ", ".join(ns)))
-            cross.append("  -> 서로 다른 fixed_paths.tcl 로 돌렸거나 "
-                         "setup/hold 가 섞였을 때 이렇게 됩니다.")
-
-        modes = set(v["mode"] for _, v in good)
-        if len(modes) > 1:
-            cross.append("setup 과 hold 가 섞여 있습니다: %s" % ", ".join(sorted(modes)))
-            cross.append("  -> 별개 2세트입니다. 폴더를 나눠 주세요.")
+        # 넷 목록도 같은 분석 안에서만 같아야 한다. setup 과 hold 는
+        # -path_type full_clock_expanded 의 클럭 구간이 달라 원래 다르다.
+        for mode in sorted(set(v["mode"] for _, v in good)):
+            sigs = {}
+            for n, v in good:
+                if v["mode"] != mode:
+                    continue
+                sigs.setdefault(file_sig(v["ctxfile"]), []).append(n)
+            if len(sigs) > 1:
+                cross.append("%s 안에서 넷 목록이 코너마다 다릅니다(%d 종류):"
+                             % (mode, len(sigs)))
+                for sg, ns in sigs.items():
+                    cross.append("    %s : %s" % (sg[:8], ", ".join(ns)))
+                cross.append("  -> 서로 다른 fixed_paths.tcl 로 돌렸을 때 그렇습니다.")
 
     if cross:
         print("")
