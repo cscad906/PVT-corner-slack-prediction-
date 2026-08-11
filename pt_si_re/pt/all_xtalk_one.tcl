@@ -67,6 +67,10 @@ if {[llength $XT_LIST] == 0} {
     return
 }
 
+# 앞서 코너 하나를 직접 돌리며 XT_RPT 를 줬다면 그 값이 세션에 남아 있다.
+# 여기서는 코너마다 5a 가 만든 목록을 쓰므로 남은 값이 끼어들지 않게 지운다.
+unset -nocomplain XT_RPT XT_DIR
+
 set XT_DELAY $DELAY_TYPE   ;# 코너별 tcl 에 전달. 루프가 끝나면 지운다
 puts "running [llength $XT_LIST] corners.  (delay_type=$DELAY_TYPE)"
 puts ""
