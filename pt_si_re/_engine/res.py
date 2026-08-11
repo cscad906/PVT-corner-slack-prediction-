@@ -281,11 +281,12 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         in_name_map = False
         for line in f:
             line = line.strip()
-            if line.startswith('*NAME_MAP'):
+            is_star = line[:1] == '*'
+            if is_star and line.startswith('*NAME_MAP'):
                 in_name_map = True
                 continue
             if in_name_map:
-                if line.startswith('*'):
+                if is_star:
                     parts = line.split()
                     if len(parts) >= 2:
                         spef_id = parts[0]
@@ -314,6 +315,8 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         for raw in f:
             line = raw.strip()
             if not line:
+                continue
+            if line[0] != '*':          # 값 줄이 대부분이다. 먼저 걸러낸다
                 continue
             if line.startswith('*D_NET'):
                 parts = line.split()
@@ -911,8 +914,12 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         for line in f:
             line = line.strip()
             if not line: continue
+            # 첫 글자만 먼저 본다. '*' 로 시작하지 않는 줄이 대부분이라
+            # startswith 를 줄마다 다섯 번씩 부를 이유가 없다.
+            # (line 은 위에서 빈 줄을 걸렀으므로 line[0] 은 항상 있다)
+            is_star = line[0] == '*'
 
-            if line.startswith('*D_NET'):
+            if is_star and line.startswith('*D_NET'):
                 if in_target_net: process_collected_net_data()
                 net_id = line.split()[1]
                 if net_id in target_nets:
@@ -927,23 +934,23 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
 
             if in_target_net:
                 parts = line.split()
-                if (line.startswith('*I') or line.startswith('*P')) and '*L' in parts:
+                if is_star and line[1:2] in ('I', 'P') and '*L' in parts:
                     try:
                         node = parts[1]
                         lidx = parts.index('*L')
                         conn_caps[node] = float(parts[lidx + 1])
                     except (ValueError, IndexError):
                         pass
-                if line.startswith('*') and '*C' in parts:
+                if is_star and '*C' in parts:
                     try:
                         name = parts[1]
                         idx = parts.index('*C')
                         coords[name] = (float(parts[idx + 1]), float(parts[idx + 2]))
                     except (ValueError, IndexError):
                         pass
-                elif not line.startswith('*') and len(parts) >= 4 and parts[0].isdigit():
+                elif not is_star and len(parts) >= 4 and parts[0].isdigit():
                     res_lines.append(line)
-                    
+
         if in_target_net: process_collected_net_data()
 
     print("3-1. 1차 계산 후 남은 N/A net에 대해 exact CONN 2차 처리 중...")

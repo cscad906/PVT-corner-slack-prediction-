@@ -134,7 +134,10 @@ def data_pin_chain(lines, start_inst, end_inst):
     items = []          # (핀이름, 방향)
     for line in lines:
         low = line.strip().lower()
-        if any(low.startswith(p) for p in STOP):
+        # str.startswith 는 튜플을 그대로 받는다. any(...제너레이터) 로 돌리면
+        # 줄마다 파이썬 반복이 돌아 여기가 파싱 시간의 20% 를 먹었다.
+        # 결과는 완전히 같고 C 안에서 끝난다.
+        if low.startswith(STOP):
             break
         m = PIN_RE.match(line)
         if not m:
