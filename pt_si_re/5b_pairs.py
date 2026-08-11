@@ -2,9 +2,15 @@
 # -*- coding: utf-8 -*-
 """5b - crosstalk 쌍 리포트 3단계: PT 출력에서 victim-aggressor 쌍을 뽑는다.
 
-    python3 5b_pairs.py --dir <코너폴더>
+    python3 5b_pairs.py --dir <코너폴더>                  # setup
+    python3 5b_pairs.py --dir <코너폴더> --mode hold      # hold
 
-넣는 것   xtalk/context_raw.rpt   (xtalk_all.tcl 이 만든 PT 원문)
+**hold 데이터면 --mode hold 를 반드시 준다.** 이 값이 결과의 analysis_type
+열에 그대로 들어간다. 빼먹어도 에러가 안 나고 setup 으로 찍히기만 하므로,
+나중에 setup/hold 를 섞어 학습하게 된다. 어느 쪽인지 모르겠으면
+`6_check_xtalk.py` 가 PT 원문을 보고 알려 준다(원문의 Annotated max/min).
+
+넣는 것   xtalk/context_raw.rpt   (xtalk_all.tcl / xtalk_all_hold.tcl 의 PT 원문)
 나오는 것 xtalk/active_features.tsv         쌍 하나가 한 줄
           xtalk/victim_load_pins.txt        다음 PT 단계에서 물어볼 핀
           xtalk/aggressor_nets.txt          다음 PT 단계에서 물어볼 넷

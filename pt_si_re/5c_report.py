@@ -4,6 +4,9 @@
 
     python3 5c_report.py --dir <코너폴더>
 
+setup / hold 공통이다. mode 옵션이 없다 -- setup/hold 구분은 5b 가 붙여 준
+analysis_type 열에 이미 들어 있다.
+
 넣는 것   xtalk/active_features.tsv     쌍 (5b)
           xtalk/path_victim_nets.tsv    경로/구간 (5a)
           xtalk/victim_windows.tsv      victim 도착시각 (PT 2차)

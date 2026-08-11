@@ -4,6 +4,9 @@
 
     python3 5a_contexts.py --dir <코너폴더>
 
+setup / hold 공통이다. 이 단계는 경로 구조만 읽어 -delay_type 을 가리지 않으므로
+mode 옵션이 없다. (가리는 곳은 1_union.py 와 5b_pairs.py 두 곳뿐이다)
+
 넣는 것   <코너>_fixed_annotated.txt (2c_merge.py) 또는 원본 <코너>.rpt
           crosstalk 은 Dist/Res/Cpin 을 안 쓰므로 둘 중 아무거나 된다
 나오는 것 xtalk/path_victim_nets.tsv     경로별 victim 넷 + 구간(launch/data/capture)
