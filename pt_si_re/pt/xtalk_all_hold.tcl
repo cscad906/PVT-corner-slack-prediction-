@@ -1,5 +1,9 @@
 # =====================================================================
-# xtalk_all.tcl  --  crosstalk PT 작업을 **한 번에** (PT 1차 + 2차 합침)
+# xtalk_all_hold.tcl  --  crosstalk PT 작업을 **한 번에** (hold 판)
+#
+# xtalk_all.tcl 과 딱 한 줄(DELAY_TYPE)만 다른 사본이다.
+# 고칠 일이 있으면 xtalk_all.tcl 을 고치고 pt/make_hold.py 로 다시 만든다.
+# 결과는 <db이름>_hold/xtalk/ 에 들어가므로 setup 과 안 섞인다.
 #
 #   pt_shell> cd <코너폴더>
 #   pt_shell> source <패키지>/pt/xtalk_all.tcl
@@ -29,7 +33,7 @@ set RPT_FILE   ""         ;# 읽을 리포트. **절대경로로 박아도 된�
 set XTALK_DIR  ""         ;# 결과를 쓸 폴더. 비워 두면 **로드된 db 이름**으로
                            # 코너별 폴더를 만든다:  <db이름>/xtalk/
                            # db 를 못 알아내면 그냥 xtalk/ 에 쓴다.
-set DELAY_TYPE "max"      ;# setup=max, hold=min
+set DELAY_TYPE "min"      ;# ★ hold 판. setup 은 xtalk_all.tcl 을 쓴다
 #######################################################################
 if {[info exists XT_DELAY]} { set DELAY_TYPE $XT_DELAY }  ;# 루프가 준 값이 있으면 그것
 if {[info exists XT_RPT]}   { set RPT_FILE   $XT_RPT   }  ;# 위 RPT_FILE 을 안 고치고
