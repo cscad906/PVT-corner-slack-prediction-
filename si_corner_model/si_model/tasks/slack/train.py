@@ -502,10 +502,12 @@ class Trainer:
         summary["si_branch"] = bool(self.has_si)
         summary["enc_blocks"] = self.cfg["model"].get("enc_blocks", 3)
         summary["best_epoch"] = best_ep + 1
-        for name in ("train", "val", "test", "all"):
-            s = summary[name]
-            print(f"  [{name:5s}] model {s['hidden_mae_ps']:.2f} ps "
-                  f"(worst {s['hidden_worst_ps']:.2f})")
+        # 히든 코너 성적은 전체 경로 기준 하나만 찍는다. train/val/test 는 경로를
+        # 쪼갠 것일 뿐 히든 코너는 어차피 다 같아서, 네 줄을 늘어놓으면 "test 가
+        # 진짜 성적" 처럼 읽히기 쉽다. 네 값 모두 summary.json 에는 그대로 남는다.
+        s = summary["all"]
+        print(f"  [all paths] model {s['hidden_mae_ps']:.2f} ps "
+              f"(worst {s['hidden_worst_ps']:.2f})")
         with open(f"{out_dir}/summary.json", "w") as f:
             json.dump(summary, f, indent=2)
         # per-(path, corner) prediction dump: truth vs base vs model

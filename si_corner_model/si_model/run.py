@@ -201,6 +201,83 @@ def spread_hidden(volts, levels, n, ref_v, ref_lv) -> list:
     return out
 
 
+def select_basis(y, sp, coords, cfg, verbose=True):
+    """Pick the polynomial basis by SEEN-corner leave-one-out error.
+
+    The right order is data-dependent -- how sharply slack bends with voltage
+    differs by design and temperature -- so it is measured rather than assumed.
+    Candidates vary the voltage order and the cross-term budget; each is scored
+    by its LOO error on SEEN corners only, so hidden labels never influence the
+    choice (picking by hidden error would leak the very thing being held out).
+
+    Candidates with fewer than 1 degree of freedom are excluded: their fit
+    passes through every seen point, driving seen-LOO to ~0 and winning for the
+    wrong reason.
+
+    Verified on the real 14nm drop: this picks the hidden-optimal basis at both
+    temperatures (125C -> v^3 no-cross, m25C -> v^3 with cross), where a
+    hand-coded "shrink the order first" rule had picked a basis 20x worse.
+
+    Only the BASIS is chosen here; ``base.weighting`` stays whatever the config
+    says. That is deliberate -- choosing the weighting automatically was tried
+    and dropped:
+
+      * plain seen-LOO ranks the weighting BACKWARDS (it crowned `local`, 60%
+        worse on hidden corners), so it cannot be reused for this.
+      * masking the target's whole voltage row DOES rank it correctly, but only
+        at m25 -- at 125C too few corners survive the mask to fit at all. It
+        bought 11.20 -> 11.03 ps of hidden error while making seen-LOO 40% worse
+        as a diagnostic (18.8 -> 26.1 ps), and it was validated on exactly one
+        dataset.
+
+    A rule that fires on only half the models, gains 1.5%, and is tuned on a
+    single drop is not worth the risk of it being wrong on company data.
+    """
+    import copy
+
+    import numpy as np
+
+    from si_model.config import expand_terms
+    from si_model.model.base_ols import design_matrix
+    from si_model.training.loo import fit_field
+
+    S = sp.seen_idx
+    nv = len(np.unique(np.round(sp.vt[S, 0], 9)))
+    nlv = len(np.unique(np.round(sp.vt[S, 1], 9)))
+    v_cap = int(cfg["base"]["axes"][0]["order"])
+    best = None
+    tried = []
+    for vo in range(1, v_cap + 1):
+        for cross, cmd in ((False, 2), (True, 2), (True, 3)):
+            c = copy.deepcopy(cfg)
+            c["base"]["axes"][0]["order"] = vo
+            c["base"]["cross_terms"] = cross
+            c["base"]["cross_max_degree"] = cmd
+            exps, names, _ = expand_terms(c, [nv, nlv])
+            phi = design_matrix(coords, exps)
+            if len(S) - phi.shape[1] < 1:            # 자유도 0 -> seen-LOO 가 무의미
+                continue
+            loo, _ = fit_field(y, phi, sp, coords, c)
+            err = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
+            tried.append((err, vo, cross, cmd, len(names) + 1))
+            if best is None or err < best[0]:
+                best = (err, vo, cross, cmd, names)
+    assert best is not None, (
+        "쓸 수 있는 기저가 없다 -- seen 코너가 너무 적다. 홀드아웃을 줄이거나 "
+        "코너를 늘릴 것")
+    err, vo, cross, cmd, names = best
+    if verbose:
+        print(f"[BASIS] seen-LOO 로 선택: v^{vo} cross={cross}"
+              + (f"(deg{cmd})" if cross else "")
+              + f" -> {len(names) + 1} 파라미터, seen-LOO {err * 1000:.2f} ps", flush=True)
+        for e, v, cr, cd, k in sorted(tried):
+            print(f"          v^{v} cross={str(cr):5s} {k}파라미터  {e * 1000:8.2f} ps", flush=True)
+    cfg["base"]["axes"][0]["order"] = vo
+    cfg["base"]["cross_terms"] = cross
+    cfg["base"]["cross_max_degree"] = cmd
+    return cfg
+
+
 def _order(spec, n_levels: int, cap: int) -> int:
     """``auto`` -> the highest order those levels can identify, capped."""
     if spec is None or str(spec) == "auto":
@@ -354,19 +431,10 @@ def expand(p: dict) -> "list[dict]":
                 "adaptive_amp_ratio": b.get("adaptive_amp_ratio", 1.5),
                 "adaptive_clip_frac": b.get("adaptive_clip_frac", 0.3),
             }
-            # `auto` must also respect HOW MANY seen corners there are, not just
-            # how many distinct levels: a scattered holdout keeps every voltage
-            # seen (so dv3 looks identifiable) while leaving too few corners to
-            # fit it. Params >= seen corners means zero degrees of freedom -- the
-            # fit passes through every point and its leave-one-out error is
-            # meaningless. Step the voltage order down until it fits.
-            if str(b.get("v_order", "auto")) == "auto":
-                from si_model.config import expand_terms
-                while base["axes"][0]["order"] > 1:
-                    exps, _, _ = expand_terms({"base": base}, [len(seen_v), n_seen_lv])
-                    if len(exps) + 1 < n_expect:
-                        break
-                    base["axes"][0]["order"] -= 1
+            # `auto` fixes the basis SIZE here from what is identifiable; the
+            # actual choice among candidate bases is made in stage_base/compute
+            # by seen-LOO (see select_basis) because the right answer is
+            # data-dependent, not something to hard-code.
             if b.get("adaptive_grid"):
                 base["adaptive_grid"] = b["adaptive_grid"]
             if b.get("weighting") == "local":
@@ -447,8 +515,9 @@ def stage_list(models: list, p: dict) -> None:
             if len(seen) <= npar else ""
         print(f"     corners : 전체 {total} = seen {len(seen)} + hidden {total - len(seen)}"
               f"   (min_seen 가드 {s['min_seen']})")
-        print(f"     basis   : v^{ax[0]['order']} x level^{ax[1]['order']} "
-              f"-> {npar} 파라미터 {names}{flag}")
+        print(f"     basis   : v^{ax[0]['order']} x level^{ax[1]['order']} 까지 "
+              f"-> 최대 {npar} 파라미터 {names}{flag}")
+        print("               (최종 기저는 build 때 seen-LOO 로 선택된다 -- run.sh base 로 확인)")
         if dropped:
             print(f"               (레벨 부족으로 자동 제거: {dropped})")
         print(f"     base    : weighting={m['cfg']['base']['weighting']}"
@@ -606,7 +675,7 @@ def stage_base(m: dict) -> None:
     measured = (np.asarray(ds["measured"], bool) if "measured" in ds
                 else np.ones(ds["vt"].shape[0], bool))
     split = make_split(ds["corners"].tolist(), ds["vt"], cfg, measured=measured)
-    phi, coords, _, _ = build_design(cfg, split)
+    phi, coords, _, _ = build_design(cfg, split, y=y)
     loo, picks = fit_field(y, phi, split, coords, cfg)
     if picks:
         print("  [adaptive] " + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)))

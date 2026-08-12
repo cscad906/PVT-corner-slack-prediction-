@@ -159,15 +159,23 @@ class BaseArtifacts:
     si_smooth_hat: np.ndarray # [N, C] same treatment for the SI label
 
 
-def build_design(cfg: dict, split: Split):
+def build_design(cfg: dict, split: Split, y=None):
     """Return (phi, coords, exps, names): scaled coords + polynomial design
-    matrix, with rank-deficient terms auto-dropped and logged."""
+    matrix, with rank-deficient terms auto-dropped and logged.
+
+    When ``base.select`` is on (the default) and ``y`` is given, the basis is
+    CHOSEN by seen-corner LOO rather than assumed -- see ``run.select_basis``.
+    Every stage (base / train / predict) passes the same y, so they all land on
+    the same basis and the model matches the base it was trained against."""
     ref_vt = split.vt[split.ref_ci]
     scales = np.asarray(fit_scales(cfg))
     A = split.vt.shape[1]
     coords = np.stack([(split.vt[:, a] - ref_vt[a]) / scales[a] for a in range(A)], 1)
     seen_levels = [int(np.unique(np.round(split.vt[split.seen_idx, a], 9)).size)
                    for a in range(A)]
+    if y is not None and cfg["base"].get("select", True):
+        from si_model.run import select_basis
+        cfg = select_basis(y, split, coords, cfg)
     exps, names, dropped = expand_terms(cfg, seen_levels)
     if dropped:
         print(f"[BASIS] dropped rank-deficient terms {dropped} "
@@ -203,7 +211,7 @@ def fit_field(y, phi, split, coords, cfg):
 
 
 def compute_base(ds, split: Split, cfg: dict) -> BaseArtifacts:
-    phi, coords, exps, _ = build_design(cfg, split)
+    phi, coords, exps, _ = build_design(cfg, split, y=ds["slack"])
     slack_loo, picks = fit_field(ds["slack"], phi, split, coords, cfg)
     si_loo, _ = fit_field(ds["si_label"], phi, split, coords, cfg)
     if picks:

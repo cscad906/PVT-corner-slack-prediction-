@@ -634,14 +634,16 @@ def test_end_to_end_build_and_base(real_tree, tmp_path, monkeypatch):
         assert split.hidden.sum() == n_hidden
         assert not split.hidden[split.ref_ci]
 
-        phi, coords, exps, _ = build_design(m["cfg"], split)
+        # 실제 경로와 동일하게 y 를 넘긴다 -> 기저가 seen-LOO 로 선택된다
+        phi, coords, exps, _ = build_design(m["cfg"], split, y=ds["slack"])
         loo, _ = fit_field(ds["slack"], phi, split, coords, m["cfg"])
         assert np.isfinite(loo).all()
         # 합성 데이터는 매끄러우므로 base 가 hidden 코너를 잘 맞춰야 한다
         hid = split.hidden_idx
         mae_ps = np.abs(loo[:, hid] - ds["slack"][:, hid]).mean() * 1000
         assert mae_ps < 20, f"hidden base MAE 가 너무 크다: {mae_ps:.2f} ps"
-        assert phi.shape[1] < split.seen.sum(), "파라미터 수 < seen 코너 수"
+        assert phi.shape[1] < split.seen.sum(), (
+            "선택된 기저는 자유도를 최소 1 남겨야 한다 (seen-LOO 가 의미를 가지려면)")
 
 
 def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):

@@ -85,7 +85,7 @@ class Trainer:
 
     def _prep_base(self):
         sp = self.split
-        self.phi, self.coords, _, _ = build_design(self.cfg, sp)
+        self.phi, self.coords, _, _ = build_design(self.cfg, sp, y=self.ds["slew"])
         base, picks = fit_field(self.ds["slew"], self.phi, sp, self.coords, self.cfg)
         self.base_hat = base                                    # [N,C] ns (LOO/all-seen)
         if picks:
@@ -322,8 +322,8 @@ class Trainer:
                    for n, rr in rows.items()}
         summary["hidden_cap_fetch_mape"] = cap_mape
         summary["best_epoch"] = best_ep + 1
-        for n in ("train", "val", "test", "all"):
-            print(f"  [{n:5s}] SLEW model {summary[n]['hidden_slew_mape']:.2f}%")
+        # 히든 코너 성적은 전체 경로 기준 한 줄만 (train.py 와 같은 이유)
+        print(f"  [all paths] SLEW model {summary['all']['hidden_slew_mape']:.2f}%")
         print(f"  CAP (same-axis1 neighbour fetch) hidden MAPE = {cap_mape:.3f}%")
         with open(f"{out_dir}/summary.json", "w") as f:
             json.dump(summary, f, indent=2)

@@ -30,6 +30,9 @@ Cpin 은 핀마다 다르므로 핀 단위 값을 받아야 한다.
     값 열 : 2번째 (자동 선택, 넷 전체 cap 보다 작은 비율 100%)
         3번째 열은 12% -- 안 씀
 
+먼저 앞 300개만 보고, 열이 확연히 안 갈리면 전체로 다시 센다. 사이트
+데이터가 우리 예제처럼 깔끔하게 갈리지 않을 수 있어서다.
+
 --cpin-col 로 직접 지정할 수도 있다(이름 열이 1).
 
 담당자분께 부탁드릴 때 쓸 수 있는 두 가지 (PT 로 실측 확인):
@@ -155,7 +158,7 @@ def read_name_value_rows(path):
     return rows, ncol
 
 
-def load_cpin_map(path, rpt, col=None):
+def load_cpin_map(path, rpt, col=None, recv=None, netcap=None):
     """받은 표 -> {설계핀: 값}. (dict, 판별한 종류, 안내문들) 반환."""
     rows, ncol = read_name_value_rows(path)
     if not rows:
@@ -180,9 +183,11 @@ def load_cpin_map(path, rpt, col=None):
 
     # 리포트에 나오는 넷 이름도 모아 둔다. 받은 표가 넷 단위면
     # 그건 Cpin 이 아니라 넷의 wire cap 일 가능성이 크다.
-    nets = set()
-    for _i, net, _p in iter_net_receiver(rpt):
-        nets.add(net)
+    if recv is None:
+        recv = list(iter_net_receiver(rpt))
+    if netcap is None:
+        netcap = net_line_caps(rpt)
+    nets = set(net for _i, net, _p in recv)
 
     keys = [k for k, _ in rows]
     n = float(len(keys))
@@ -236,9 +241,6 @@ def load_cpin_map(path, rpt, col=None):
     # 리포트의 '(net)' 줄에 그 넷의 **전체 cap** 이 찍혀 있으므로, 그것보다
     # 작은 값이 나오는 열이 pin cap 이다. 열마다 그 비율을 재서 제일 높은
     # 열을 쓴다. --cpin-col 을 주면 그것을 그대로 따른다.
-    netcap = net_line_caps(rpt)
-    recv = list(iter_net_receiver(rpt))
-
     def expand(vi):
         """vi 번째 열로 {설계핀: 값} 을 만든다."""
         out = {}
@@ -259,20 +261,26 @@ def load_cpin_map(path, rpt, col=None):
                 res[pin] = v
         return res
 
-    def score(cand):
+    # 판정용 표본. 전부 볼 필요가 없다 -- wire cap 열과 pin cap 열은
+    # 12% 대 100% 로 확연히 갈려서 몇백 개만 봐도 결론이 같다.
+    # (전부 보면 리포트만큼 도는 루프가 열 개수만큼 반복된다)
+    SAMPLE = 300
+    allrows = [(i, p) for i, _n, p in recv if netcap.get(i)]
+    sample = allrows[:SAMPLE]
+
+    def score(cand, rows_):
         """넷 전체 cap 보다 작은 비율. Cpin 이면 1 에 가깝다."""
         ok = tot = 0
-        for idx, _net, pin in recv:
+        for idx, pin in rows_:
             v = cand.get(pin)
-            nc = netcap.get(idx)
-            if v is None or not nc:
+            if v is None:
                 continue
             try:
                 fv = float(v)
             except ValueError:
                 continue
             tot += 1
-            if 0 < fv < nc:
+            if 0 < fv < netcap[idx]:
                 ok += 1
         return (float(ok) / tot) if tot else 0.0
 
@@ -283,14 +291,23 @@ def load_cpin_map(path, rpt, col=None):
         caps = expand(vi)
         note.append("값 열 : %d번째 (직접 지정)" % (vi + 2))
     else:
-        cands = []
-        for vi in range(ncol):
-            c = expand(vi)
-            if c:
-                cands.append((score(c), -vi, vi, c))
-        if not cands:
+        cols = [(vi, expand(vi)) for vi in range(ncol)]
+        cols = [(vi, c) for vi, c in cols if c]
+        if not cols:
             return {}, kind, note + ["숫자 열을 하나도 못 읽었습니다."]
-        cands.sort(reverse=True)
+
+        # 먼저 표본으로만 본다. 열이 확연히 갈리면 그걸로 끝낸다.
+        cands = sorted(((score(c, sample), -vi, vi, c) for vi, c in cols),
+                       reverse=True)
+        top = cands[0][0]
+        second = cands[1][0] if len(cands) > 1 else 0.0
+        # 애매하면(1등이 낮거나 2등과 가깝거나) 전수로 다시 센다.
+        # 사이트 데이터가 우리처럼 깔끔하게 안 갈릴 수 있다.
+        if len(cands) > 1 and (top < 0.9 or top - second < 0.2):
+            note.append("표본 %d개로는 열이 안 갈려 전체로 다시 셌습니다."
+                        % len(sample))
+            cands = sorted(((score(c, allrows), -vi, vi, c) for vi, c in cols),
+                           reverse=True)
         sc, _, vi, caps = cands[0]
         if ncol > 1:
             note.append("값 열 : %d번째 (자동 선택, 넷 전체 cap 보다 작은 비율 %.0f%%)"
@@ -505,7 +522,11 @@ def main():
     if args.cpin_map:
         # 현장에서 받은 2열 표를 쓴다. 1열이 무엇인지는 알아서 판별한다.
         print("  Cpin 표   : %s" % args.cpin_map)
-        caps, kind, note = load_cpin_map(args.cpin_map, rpt, args.cpin_col)
+        # 리포트는 여기서 한 번만 훑고, 그 결과를 아래까지 돌려 쓴다.
+        _recv = list(iter_net_receiver(rpt))
+        _netcap = net_line_caps(rpt)
+        caps, kind, note = load_cpin_map(args.cpin_map, rpt, args.cpin_col,
+                                         _recv, _netcap)
         label = {"design_pin":   "설계 핀 (inst/pin)",
                  "cell_pin":     "셀의 핀 (cell/pin)",
                  "lib_cell_pin": "라이브러리 핀 (lib/cell/pin) -- get_lib_pins",
@@ -529,14 +550,15 @@ def main():
 
     # 받은 표를 쓸 때만: 고른 값이 넷 전체 cap 과 같지 않은지 본다.
     # 같으면 pin cap 이 아니라 wire cap 열을 집었을 가능성이 크다.
-    netcap = net_line_caps(rpt) if args.cpin_map else {}
+    netcap = _netcap if args.cpin_map else {}
     n_same = n_over = n_cmp = 0
 
     n = hit = 0
     miss_examples = []
     with wopen(out) as fh:
         fh.write("line_no\tnet\trecv_pin\tcpin\n")
-        for idx, net, pin in iter_net_receiver(rpt):
+        for idx, net, pin in (_recv if args.cpin_map
+                              else iter_net_receiver(rpt)):
             v = caps.get(pin, "")
             if v:
                 hit += 1
