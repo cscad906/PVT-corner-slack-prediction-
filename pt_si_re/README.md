@@ -486,8 +486,8 @@ aggressor_driver_slew_max  coupling_cap_ff
 
 ```bash
 python3 9_diagnose.py --dir <코너폴더>          # Dist/Res 가 빌 때 원인 분류
-python3 8_snapshot.py --dir <코너폴더>          # 상황 100줄 요약
-python3 8_snapshot.py --dir <코너폴더> --mask   # 설계 이름을 가리고
+# 막히면 화면 맨 아래 **코드**(예: W-CPIN)를 그대로 물어보면 된다.
+# 코드 목록과 조치는 코드표.md 에 있다.
 ```
 
 전체 코드 목록은 `코드표.md` (47개), 화면 읽는 법은 `원격문의.md`.
@@ -518,7 +518,6 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 5b_pairs.py        crosstalk 2단계 - 쌍 정리  (PT 를 다녀온 뒤)
 5c_report.py       crosstalk 3단계 -> 14열 리포트   ★
 4_all_corners.py   위를 코너 전부에 (--phase 1/2)
-8_snapshot.py      막혔을 때 상황 요약
 9_diagnose.py      Dist/Res N/A 원인 분류
 ```
 

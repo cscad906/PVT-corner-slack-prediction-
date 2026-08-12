@@ -1,26 +1,25 @@
 ========================================================================
-상황 요약  (이 화면 전체를 복사해서 보내세요)
+상황 요약   -> debug/snapshot.txt 에도 저장됩니다
+(복사도 사진도 안 되면:  python3 8_snapshot.py --dir <폴더> --brief)
 ========================================================================
 
 ========================================================================
 1. 환경
 ========================================================================
-  python  : /usr/bin/python2.7
-  version : 2.7.18
+  python  : /home/KNUEEhdd1/sogang1/hyunss/bin/python3
+  version : 3.6.8
   pt_shell: /usr/synopsys/pt/V-2023.12-SP4/bin/pt_shell
   cwd     : /home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_prediction/pt_si_re
 
 ========================================================================
-2. 폴더 안 파일  (/tmp/claude-5864/-home-KNUEEhdd1-sogang1-hyunss-PVT-PVT-prediction-pt-si/65c31757-0b62-406d-b117-d9cf39f94e6a/scratchpad/v/f/TT_0p6V_25C)
+2. 폴더 안 파일  (/home/KNUEEhdd1/sogang1/.claude/jobs/3ac22ce6/tmp/final_demo/TT_0p6V_25C)
 ========================================================================
   TT_0p6V_25C.path_context_si_compact.by_path.rpt     1.9MB  16,312줄
   TT_0p6V_25C.rpt                3.7MB  40,020줄
   TT_0p6V_25C_fixed_annotated.txt     4.2MB  40,020줄
-  corner_info.tcl               867.0B  10줄
   cpin.tsv                     412.9KB  8,931줄
+  cpin_map.txt                  60.8KB  788줄
   distres.tsv                  340.6KB  8,931줄
-  net_attr.txt                 691.1KB  8,399줄
-  pin_attr.txt                   1.2MB  17,999줄
   xtalk                      <폴더>
 
 ========================================================================
@@ -30,3 +29,21 @@
   핀 줄            : 18,154
   (net) 줄         : 8,930
 
+  헤더  :   Point                                                                                                Fanout   
+  핀 줄 :   clock (in)                                                                                                    
+  넷 줄 :   clock (net)                                                                                             1 0.00
+  slack :   slack (VIOLATED)                                                                                              
+  경로  :   Startpoint: FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_25_ (rising edge-triggered flip-flop clocked by m
+
+
+========================================================================
+4. 결과 파일 상태
+========================================================================
+  cpin.tsv       8,930줄, 값 없음 0줄
+  distres.tsv    8,930줄, 값 없음 0줄
+  annotated.txt  (net) 8,930줄, N/A 0줄
+  crosstalk.tsv  없음
+
+========================================================================
+끝
+========================================================================

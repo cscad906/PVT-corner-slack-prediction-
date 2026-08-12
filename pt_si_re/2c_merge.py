@@ -8,6 +8,10 @@
        cpin.tsv      1a 결과
        distres.tsv   1b 결과
 출력   <코너>_fixed_annotated.txt   '(net)' 줄 끝에 Dist / Res / Cpin 3열이 붙은 리포트
+
+N/A 가 남으면 **원인 진단(9_diagnose.py)이 자동으로 이어 붙는다.** 명령을 한 번
+더 칠 필요가 없다. --spef 를 같이 주면 SPEF 쪽 원인(A/B/C)까지 보고, 안 주면
+Cpin 쪽(원인 D)만 본다. --no-diagnose 로 끌 수 있다.
        (기존 운영 산출물과 같은 이름 규약. 코너 이름은 폴더 이름을 쓴다)
 
 계산은 하지 않는다. 줄 번호로 값을 찾아 붙이기만 하므로 즉시 끝난다.
@@ -15,6 +19,7 @@
 """
 import argparse
 import os
+import subprocess
 import re
 import sys
 
@@ -104,9 +109,10 @@ CODE_INFO = {
     "W-CPIN":     ("Cpin 이 비어 있는 줄이 많습니다",
                    "지금 리포트로 dump_attr.tcl 을 다시 돌려 보세요."),
     "W-RES":      ("Dist/Res 가 비어 있는 줄이 많습니다",
-                   "9_diagnose.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다."),
+                   "위에 붙은 [원인 A/B/C] 줄을 보세요. SPEF 쪽 문제입니다."),
     "W-NA":       ("결과에 N/A 가 남아 있습니다",
-                   "9_diagnose.py 를 돌리면 원인을 알려줍니다."),
+                   "위에 붙은 [원인 X] 줄을 보세요. 원인별 조치가 같이 적혀 "
+                   "있습니다. (진단은 자동으로 돌아갑니다)"),
 }
 
 
@@ -148,6 +154,11 @@ def main():
     ap.add_argument("--corner", default=None,
                     help="결과 파일 이름에 쓸 코너 이름. 안 주면 폴더 이름")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--spef", default=None,
+                    help="N/A 가 나면 이 SPEF 로 원인까지 진단한다. 없으면 "
+                         "Cpin 쪽(원인 D)만 본다")
+    ap.add_argument("--no-diagnose", action="store_true",
+                    help="N/A 가 나도 원인 진단을 돌리지 않는다")
     args = ap.parse_args()
 
     d = args.dir
@@ -234,9 +245,33 @@ def main():
              "[ 정상 ] 3열 %d/%d. 다음:  %s 5a_contexts.py --dir %s"
              % (n_full, n_net, sys.executable, d))
     else:
+        # N/A 가 나면 **여기서 바로 원인까지** 본다. 예전에는 화면에
+        # "9_diagnose.py 를 돌려 보세요" 라고만 하고 끝냈는데, 현장에서
+        # 명령을 한 번 더 치는 것 자체가 부담이라 자동으로 이어 붙였다.
+        # (SPEF 를 한 번 훑으므로 N/A 가 있을 때만 돈다)
+        if not args.no_diagnose:
+            print("")
+            print("-" * 68)
+            print("  N/A 가 있어 원인을 진단합니다 (9_diagnose.py)")
+            print("-" * 68)
+            cmd = [sys.executable, os.path.join(HERE, "9_diagnose.py"), "--dir", d]
+            if args.spef:
+                cmd += ["--spef", args.spef]
+            try:
+                pr = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT)
+                out = pr.communicate()[0].decode("utf-8", "replace")
+                # 진단기의 머리말은 빼고 본문만 이어 붙인다
+                for ln in out.splitlines():
+                    if ln.startswith("=") or ln.startswith("9 - "):
+                        continue
+                    print("  " + ln)
+            except Exception as e:
+                print("  (진단을 돌리지 못했습니다: %s)" % e)
+                print("  직접:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
         code("W-NA",
              "[ 주의 ] N/A 가 %d개 있습니다 (전체 %d)." % (n_net - n_full, n_net),
-             "         원인:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
+             "         위 [원인 X] 줄을 보세요.")
 
 
 if __name__ == "__main__":

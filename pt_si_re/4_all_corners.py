@@ -277,6 +277,10 @@ def main():
                 call += ["--spef", spef]
             if script == "2a_cpin.py" and cmap:
                 call += ["--cpin-map", cmap]
+            # 2c 는 SPEF 가 없어도 돌지만, N/A 가 나면 원인 진단에 쓴다.
+            # 있을 때만 넘긴다(없다고 건너뛰면 안 된다).
+            if script == "2c_merge.py" and spef and os.path.isfile(spef):
+                call += ["--spef", spef]
             if script in ("2c_merge.py", "5b_pairs.py", "5c_report.py"):
                 call += ["--corner", name]
             if script == "5b_pairs.py":

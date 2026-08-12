@@ -149,6 +149,74 @@ def test_expand_si_on_when_crosstalk_declared(project):
     assert "crosstalk_regex" in cfg["data"]["patterns"]
 
 
+def test_bundle_packs_every_temperature_into_one_file(project, tmp_path):
+    """회로 하나 = 파일 하나. 온도별로 갈라지면 안 된다.
+
+    torch 가 없는 환경(회사에서 학습 전 점검)에서는 건너뛴다."""
+    torch = pytest.importorskip("torch")
+    from si_model.run import bundle_path, stage_bundle
+
+    models = expand(project)
+    for m in models:                       # 학습된 것처럼 가짜 체크포인트를 깔아둔다
+        d = m["cfg"]["train"]["out_dir"] = str(tmp_path / m["design"] / str(m["temp"]))
+        os.makedirs(d, exist_ok=True)
+        torch.save({"model": {"w": torch.zeros(1)}, "enc": {"w": torch.zeros(1)},
+                    "cfg": m["cfg"], "epoch": 7}, os.path.join(d, "best.pt"))
+
+    stage_bundle(models)
+
+    for design in {m["design"] for m in models}:
+        ms = [m for m in models if m["design"] == design]
+        b = torch.load(bundle_path(ms[0]), map_location="cpu")
+        assert b["design"] == design
+        # 그 회로의 모든 온도가 한 파일 안에 있어야 한다
+        assert set(b["temps"]) == {str(m["temp"]) for m in ms}
+        assert all("model" in v and "enc" in v for v in b["temps"].values())
+
+
+def test_bundle_skips_untrained_temperatures_instead_of_failing(project, tmp_path):
+    """온도 하나만 학습해도 bundle 은 그 하나로 만들어져야 한다 -- 나머지를
+    기다리느라 통째로 실패하면 부분 재학습을 할 수가 없다."""
+    torch = pytest.importorskip("torch")
+    from si_model.run import bundle_path, stage_bundle
+
+    models = [m for m in expand(project) if m["design"] == expand(project)[0]["design"]]
+    for m in models:
+        m["cfg"]["train"]["out_dir"] = str(tmp_path / m["design"] / str(m["temp"]))
+    d = models[0]["cfg"]["train"]["out_dir"]
+    os.makedirs(d, exist_ok=True)
+    torch.save({"model": {}, "enc": {}, "cfg": models[0]["cfg"], "epoch": 1},
+               os.path.join(d, "best.pt"))
+
+    stage_bundle(models)
+    b = torch.load(bundle_path(models[0]), map_location="cpu")
+    assert set(b["temps"]) == {str(models[0]["temp"])}
+
+
+def test_mode_switches_every_path_at_once(project):
+    """`mode` 한 줄이 읽을 폴더와 쓸 폴더를 전부 갈라야 한다.
+
+    예전에는 files.subdir / files.crosstalk_subdir / out.cache / out.runs 를 각각
+    고쳐야 했고, subdir 만 hold 로 바꾸고 out 을 잊으면 hold 결과가 setup 캐시를
+    조용히 덮어썼다. 넷이 함께 움직이는지 여기서 못 박는다."""
+    project["mode"] = "hold"
+    m = expand(project)[0]
+    d = m["cfg"]["data"]
+    assert d["annotated_dir"].endswith(os.sep + "hold")
+    assert d["crosstalk_dir"].endswith(os.path.join("hold", "xtalk"))
+    assert d["cache"].startswith(os.path.join("cache", "hold") + os.sep)
+    assert m["cfg"]["train"]["out_dir"].startswith(os.path.join("runs", "hold") + os.sep)
+
+
+def test_mode_does_not_override_an_explicit_subdir(project):
+    """폴더명이 setup/hold 가 아닌 배치도 있어야 한다 -- auto 가 아닌 값은 그대로."""
+    project["mode"] = "hold"
+    project["files"]["subdir"] = "reports"
+    d = expand(project)[0]["cfg"]["data"]
+    assert d["annotated_dir"].endswith(os.sep + "reports")
+    assert d["cache"].startswith(os.path.join("cache", "hold") + os.sep)
+
+
 def test_expand_si_off_when_crosstalk_subdir_is_null(project):
     """위치를 모를 땐 null 로 두고 SI 없이 먼저 돌릴 수 있어야 한다."""
     project["files"]["crosstalk_subdir"] = None

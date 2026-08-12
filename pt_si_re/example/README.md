@@ -315,6 +315,6 @@ source 하면 됩니다(hold 는 `xtalk_all_hold.tcl`).
 그래도 안 풀리면:
 
 ```bash
-python3 8_snapshot.py --dir $D          # 상황 100줄 요약
+# 막히면 화면 맨 아래 코드(예: W-CPIN)를 코드표.md 에서 찾는다
 python3 9_diagnose.py --dir $D          # Dist/Res 가 빌 때 원인 분류
 ```
