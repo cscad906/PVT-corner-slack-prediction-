@@ -16,8 +16,11 @@
     inst/pin      U123/A                       설계 핀   -> 그대로
     cell/pin      gt3_6t_and2_x1_rvt/A         셀의 핀   -> 리포트로 펼침
     lib/cell/pin  op_cond_all/..._x1_rvt/A     get_lib_pins 출력 -> 앞을 떼고 펼침
-    cell          gt3_6t_and2_x1_rvt           셀만      -> 모든 핀에 같은 값
-    net           ZCTSNET_4157                 넷 이름   -> Cpin 이 아니므로 중단
+    cell          gt3_6t_and2_x1_rvt           셀만      -> 핀 구분 없음, 중단
+    net           ZCTSNET_4157                 넷 이름   -> Cpin 이 아님, 중단
+
+뒤의 둘은 **멈춘다.** 그대로 쓰면 조용히 틀린 값이 들어가기 때문이다.
+Cpin 은 핀마다 다르므로 핀 단위 값을 받아야 한다.
 
 **값 열도 알아서 고른다.** pin cap 과 wire cap 이 같이 있는 표여도,
 순서가 어느 쪽이어도 된다. 리포트의 '(net)' 줄에 그 넷의 전체 cap 이
@@ -199,6 +202,16 @@ def load_cpin_map(path, rpt, col=None):
     for c in cand[1:]:
         if c[0] > best[0]:
             best = c
+    if best[1] == "cell" and best[0] >= 0.05:
+        note.append("1열이 **셀 이름만** 입니다(핀 구분이 없습니다).")
+        note.append("  Cpin 은 핀마다 다릅니다. 한 셀 안에서도 A/B/CLK 이 다르고,")
+        note.append("  BoomCoreV3 로 재 보니 최악 146% 어긋났습니다.")
+        note.append("  그대로 쓰면 조용히 틀린 값으로 annotation 되므로 멈춥니다.")
+        note.append("  담당자분께 **핀 단위**로 부탁드려야 합니다:")
+        note.append("    get_attribute <pin> pin_capacitance_max        (설계 핀)")
+        note.append("    get_attribute <lib_pin> pin_capacitance        (라이브러리 핀)")
+        return {}, "cell", note
+
     if best[1] == "net" and best[0] >= 0.05:
         note.append("1열이 **넷 이름**입니다. Cpin(리시버 핀의 입력 capacitance)이")
         note.append("  아니라 넷 쪽 값(wire cap 등)으로 보입니다.")
@@ -288,14 +301,6 @@ def load_cpin_map(path, rpt, col=None):
         if sc < 0.5:
             note.append("어느 열도 Cpin 처럼 보이지 않습니다(제일 나은 것이 %.0f%%)." % (sc * 100))
             note.append("  wire cap 만 있는 표일 수 있습니다. 핀 cap 을 받아야 합니다.")
-    if kind == "cell":
-        note.append("셀 단위 값이라 **한 셀의 모든 핀에 같은 값**이 들어갑니다.")
-        note.append("  한 셀 안에서도 핀마다 Cpin 이 다릅니다. BoomCoreV3 로 재 보니")
-        note.append("  80%는 그대로였지만 상위 10%가 1.6%, 최악은 146% 어긋났습니다.")
-        note.append("  (FF 의 CLK 핀처럼 유독 큰 핀이 평균에 묻히면 크게 틀립니다)")
-        note.append("  핀별 값을 받을 수 있으면 그쪽이 정확합니다. 1열을")
-        note.append("  'inst/pin' 이나 'cell/pin' 으로 주시면 그대로 씁니다.")
-
     return caps, kind, note
 
 
