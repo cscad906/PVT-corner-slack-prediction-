@@ -842,11 +842,24 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
     print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
 
     summ = {"by_corner": _corner_table(out_fp), "by_model": {}}
+    stale = []
     for m in models:
-        sfp = os.path.join(m["cfg"]["train"]["out_dir"], "summary.json")
-        if os.path.exists(sfp):
-            with open(sfp) as f:
-                summ["by_model"][m["name"]] = json.load(f)
+        d = m["cfg"]["train"]["out_dir"]
+        sfp, ckpt = os.path.join(d, "summary.json"), os.path.join(d, "best.pt")
+        if not os.path.exists(sfp):
+            continue
+        # train 이 중간에 끊기면 best.pt 는 갱신되지만 summary.json 은 학습이
+        # 끝까지 갔을 때만 쓰인다. 그래서 이전 실행의 요약이 새 체크포인트 옆에
+        # 남아 조용히 섞일 수 있다. by_corner 는 방금 만든 예측에서 뽑으므로
+        # 항상 맞지만, by_model 은 그 옛 파일이라 짚어준다.
+        if os.path.exists(ckpt) and os.path.getmtime(sfp) < os.path.getmtime(ckpt):
+            stale.append(m["name"])
+        with open(sfp) as f:
+            summ["by_model"][m["name"]] = json.load(f)
+    if stale:
+        print(f"  (!) by_model 이 오래됨 (best.pt 보다 이전): {stale}\n"
+              f"      학습을 중간에 끊었으면 그 모델의 by_model 수치는 이전 실행 것이다. "
+              f"코너별 성적(by_corner)은 방금 예측에서 뽑은 값이라 정확하다.")
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summ, f, indent=2)
     print(f"  wrote {out_dir}/summary.json "

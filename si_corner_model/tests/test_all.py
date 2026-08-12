@@ -218,6 +218,29 @@ def test_corner_table_is_keyed_by_corner_not_by_model(tmp_path):
     assert q["n_paths"] == 1 and q["mae_ps"] is None and q["worst_ps"] is None
 
 
+def test_merge_flags_a_summary_older_than_its_checkpoint(project, tmp_path, capsys):
+    """학습을 중간에 끊으면 best.pt 만 갱신되고 summary.json 은 이전 실행 것이
+    남는다. 그게 조용히 by_model 로 실려 나가면 안 된다."""
+    import json as _json
+
+    from si_model.run import stage_merge
+
+    models = expand(project)[:1]
+    d = models[0]["cfg"]["train"]["out_dir"] = str(tmp_path / "m")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "predictions_hidden.csv"), "w") as f:
+        f.write("path_key,corner,truth_ps,model_ps,model_err_ps\n"
+                "A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n")
+    with open(os.path.join(d, "summary.json"), "w") as f:
+        _json.dump({"all": {"hidden_mae_ps": 1.0}}, f)
+    open(os.path.join(d, "best.pt"), "w").close()          # summary 보다 나중
+    os.utime(os.path.join(d, "summary.json"), (1, 1))
+
+    project["out"] = {"runs": str(tmp_path / "out"), "cache": str(tmp_path / "c")}
+    stage_merge(models, project, "hidden")
+    assert "오래됨" in capsys.readouterr().out
+
+
 def test_mode_switches_every_path_at_once(project):
     """`mode` 한 줄이 읽을 폴더와 쓸 폴더를 전부 갈라야 한다.
 
