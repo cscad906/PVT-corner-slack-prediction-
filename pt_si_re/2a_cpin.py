@@ -316,6 +316,29 @@ def iter_net_receiver(rpt):
 
 
 
+def net_line_caps(rpt):
+    """{줄번호: 넷 전체 cap}. '(net)' 줄 끝의 마지막 숫자가 그 넷의 cap 이다.
+
+        ZCTSNET_6904 (net)      12 0.023539
+                                ^^ fanout  ^^^^^^^^ cap
+
+    Cpin(리시버 한 개의 입력 capacitance)은 이 값보다 작아야 한다.
+    받은 표에서 엉뚱한 열(wire cap 등)을 집었는지 확인하는 데 쓴다.
+    """
+    out = {}
+    for idx, line in enumerate(open(rpt, "r", errors="ignore")):
+        m = OBJ_RE.match(line)
+        if not m or m.group(2).lower() != "net":
+            continue
+        nums = re.findall(r"[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?",
+                          line[m.end():])
+        if nums:
+            try:
+                out[idx] = float(nums[-1])
+            except ValueError:
+                pass
+    return out
+
 # ---- 결과 코드 -------------------------------------------------------
 # 마지막에 "무슨 문제인지 + 어떻게 하면 되는지 + 코드" 를 함께 찍는다.
 # 현장에서 화면을 복사하기 어려우므로, 읽고 바로 이해할 수 있어야 하고
@@ -347,6 +370,9 @@ CODE_INFO = {
     "W-DROP":     ("합집합에서 버린 경로가 많습니다",
                    "report_timing 옵션 4개(-nets -input_pins -nosplit "
                    "-path_type full_clock_expanded)를 확인해 주세요."),
+    "W-CPINCOL": ("고른 값이 넷 전체 cap 과 같습니다",
+                   "pin cap 이 아니라 wire cap 열을 집었을 수 있습니다. "
+                   "--cpin-col 로 다른 열을 골라 보세요."),
     "W-CPIN":     ("Cpin 이 비어 있는 줄이 많습니다",
                    "지금 리포트로 dump_attr.tcl 을 다시 돌려 보세요."),
     "W-RES":      ("Dist/Res 가 비어 있는 줄이 많습니다",
@@ -450,6 +476,11 @@ def main():
                  "         report_attribute 에 -application 이 필요합니다.")
     print("  읽은 핀   : %d개" % len(caps))
 
+    # 받은 표를 쓸 때만: 고른 값이 넷 전체 cap 과 같지 않은지 본다.
+    # 같으면 pin cap 이 아니라 wire cap 열을 집었을 가능성이 크다.
+    netcap = net_line_caps(rpt) if args.cpin_map else {}
+    n_same = n_over = n_cmp = 0
+
     n = hit = 0
     miss_examples = []
     with wopen(out) as fh:
@@ -458,6 +489,17 @@ def main():
             v = caps.get(pin, "")
             if v:
                 hit += 1
+                nc = netcap.get(idx)
+                if nc:
+                    try:
+                        fv = float(v)
+                        n_cmp += 1
+                        if abs(fv - nc) <= abs(nc) * 1e-9:
+                            n_same += 1
+                        elif fv > nc:
+                            n_over += 1
+                    except ValueError:
+                        pass
             elif len(miss_examples) < 8:
                 miss_examples.append(pin)
             n += 1
@@ -479,6 +521,16 @@ def main():
         code("E-PINNAME",
              "[ 실패 ] 핀 이름이 하나도 안 맞습니다.",
              "         리포트의 핀 이름 예: %s" % ", ".join(miss_examples[:3]))
+    if n_cmp and (n_same + n_over) * 2 > n_cmp:
+        code("W-CPINCOL",
+             "[ 주의 ] 고른 값이 넷 전체 cap 과 같거나 더 큽니다 (%d/%d)."
+             % (n_same + n_over, n_cmp),
+             "         Cpin 은 리시버 핀 하나의 값이라 넷 전체 cap 보다 작아야",
+             "         합니다. pin cap 이 아니라 wire cap 열을 집었을 수 있습니다.",
+             "         --cpin-col 로 다른 열을 골라 보세요 (이름 열이 1).",
+             "         지금 값 예: %s" % ", ".join(
+                 "%s=%s" % (p, caps.get(p)) for p in list(caps)[:2]))
+
     if hit < n * 0.9:
         code("W-CPIN",
              "[ 주의 ] %d개는 Cpin 이 비었습니다 (전체 %d)." % (n - hit, n),
