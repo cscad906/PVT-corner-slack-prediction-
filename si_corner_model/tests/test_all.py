@@ -149,6 +149,30 @@ def test_expand_si_on_when_crosstalk_declared(project):
     assert "crosstalk_regex" in cfg["data"]["patterns"]
 
 
+def test_mode_switches_every_path_at_once(project):
+    """`mode` 한 줄이 읽을 폴더와 쓸 폴더를 전부 갈라야 한다.
+
+    예전에는 files.subdir / files.crosstalk_subdir / out.cache / out.runs 를 각각
+    고쳐야 했고, subdir 만 hold 로 바꾸고 out 을 잊으면 hold 결과가 setup 캐시를
+    조용히 덮어썼다. 넷이 함께 움직이는지 여기서 못 박는다."""
+    project["mode"] = "hold"
+    m = expand(project)[0]
+    d = m["cfg"]["data"]
+    assert d["annotated_dir"].endswith(os.sep + "hold")
+    assert d["crosstalk_dir"].endswith(os.path.join("hold", "xtalk"))
+    assert d["cache"].startswith(os.path.join("cache", "hold") + os.sep)
+    assert m["cfg"]["train"]["out_dir"].startswith(os.path.join("runs", "hold") + os.sep)
+
+
+def test_mode_does_not_override_an_explicit_subdir(project):
+    """폴더명이 setup/hold 가 아닌 배치도 있어야 한다 -- auto 가 아닌 값은 그대로."""
+    project["mode"] = "hold"
+    project["files"]["subdir"] = "reports"
+    d = expand(project)[0]["cfg"]["data"]
+    assert d["annotated_dir"].endswith(os.sep + "reports")
+    assert d["cache"].startswith(os.path.join("cache", "hold") + os.sep)
+
+
 def test_expand_si_off_when_crosstalk_subdir_is_null(project):
     """위치를 모를 땐 null 로 두고 SI 없이 먼저 돌릴 수 있어야 한다."""
     project["files"]["crosstalk_subdir"] = None

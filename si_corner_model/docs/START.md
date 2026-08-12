@@ -116,14 +116,26 @@ files:
 
 ### 케이스 F — setup 과 hold 가 따로 있다
 
-setup/hold 는 **분리 차원**이라 한 번에 못 섞는다. `root` 나 `subdir` 을 그쪽으로
-겨눠서 **따로 두 번** 돌린다 (`out.runs` 도 다르게).
+setup/hold 는 **분리 차원**이라 한 번에 못 섞는다. 대신 고칠 곳은 `mode` 한 줄뿐이다.
+
+```yaml
+mode: setup     # -> 읽기 <root>/<회로>/setup/ + setup/xtalk/ , 쓰기 cache/setup/ runs/setup/
+mode: hold      # -> 읽기 <root>/<회로>/hold/  + hold/xtalk/  , 쓰기 cache/hold/  runs/hold/
+```
 
 ```bash
-SI_ROOT=.../setup bash scripts/run.sh all
-SI_ROOT=.../hold  bash scripts/run.sh all      # config 의 out.runs 를 바꾼 뒤
+vi config.yaml                 # mode: setup
+bash scripts/run.sh all
+vi config.yaml                 # mode: hold  (이 한 줄만)
+bash scripts/run.sh all
 ```
-이번 데이터는 전부 setup 이라 해당 없음.
+
+**출력 경로가 `mode` 를 따라가므로 hold 결과가 setup 결과를 덮어쓰지 않는다.**
+예전에는 `files.subdir` / `files.crosstalk_subdir` / `out.cache` / `out.runs` 를
+각각 고쳐야 했고, subdir 만 바꾸고 out 을 잊으면 조용히 덮어썼다.
+
+폴더 이름이 `setup`/`hold` 가 아니면(예: `reports/`) `files.subdir` 에 직접 적는다 —
+`auto` 가 아닌 값은 그대로 쓰인다.
 
 ### 케이스 G — 이 중 어느 것도 아니다
 

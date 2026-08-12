@@ -25,8 +25,11 @@ base(OLS) 튜닝은 [OLS.md](OLS.md), 리포트 파싱은 [PARSING.md](PARSING.m
 | `temps[].tag` | — | 모델/폴더 이름에 쓰일 문자열 (`125`, `m25`) |
 | `temps[].token` | `tag` | **파일명 안의** 온도 토큰. tag 와 달라도 됨 |
 | `temps[].levels` | — | 그 온도에 존재하는 BEOL 레벨. **온도마다 달라도 된다** |
-| `out.cache` | `cache` | `cache/<design>/<temp>/dataset.npz` |
-| `out.runs` | `runs` | `runs/<design>/<temp>/` + `runs/_all/` |
+| `mode` | `setup` | **setup/hold 를 정하는 한 줄.** 읽을 폴더(`files.subdir`, `files.crosstalk_subdir`)와 쓸 폴더(`out.*`)가 전부 여기서 유도된다 |
+| `out.cache` | `auto` | `auto` = `cache/<mode>/<design>/<temp>/dataset.npz` |
+| `out.runs` | `auto` | `auto` = `runs/<mode>/<design>/<temp>/` + `runs/<mode>/_all/` |
+| `files.subdir` | `auto` | `auto` = `<mode>`. 폴더명이 다르면 직접 적는다 (`reports`) |
+| `files.crosstalk_subdir` | `auto` | `auto` = `<mode>/xtalk`. `null` 이면 SI 끔 |
 | `task` | `slack` | `slack` \| `slew` |
 
 모델 이름은 `<design>/<tag>`. 공정이 여러 개면 `corners.process` 를 바꿔가며

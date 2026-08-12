@@ -65,9 +65,18 @@ temps:                              # 온도 = 분리 차원(모델이 갈린다
     levels: [rcmax, cmax, rcmin]
     hidden_corners: [[0.5, cmax], [0.685, rcmin]]
 
-out:                                # hold 를 돌릴 땐 이 두 줄도 바꾼다 (cache/hold, runs/hold)
-  cache: cache/setup                # cache/setup/<회로>/<온도>/dataset.npz
-  runs: runs/setup                  # runs/setup/<회로>/<온도>/ + runs/setup/_all/
+# ★ setup 이냐 hold 냐. 이 한 줄이 읽을 폴더와 쓸 폴더를 전부 정한다.
+#   mode: setup  ->  읽기 <root>/<회로>/setup/ , <root>/<회로>/setup/xtalk/
+#                    쓰기 cache/setup/ , runs/setup/
+#   mode: hold   ->  읽기 <root>/<회로>/hold/  , <root>/<회로>/hold/xtalk/
+#                    쓰기 cache/hold/  , runs/hold/
+#   setup 과 hold 는 분리 차원이라 한 번에 못 섞는다. 이 줄만 바꿔 다시 돌리면
+#   되고, 출력 경로가 같이 따라가므로 setup 결과를 덮어쓸 일이 없다.
+mode: setup
+
+out:                                # 보통 손댈 일 없다. auto = mode 를 따라감.
+  cache: auto                       # cache/<mode>/<회로>/<온도>/dataset.npz
+  runs: auto                        # runs/<mode>/<회로>/<온도>/ + runs/<mode>/_all/
 
 
 # ─── 2. 코너 정의 & 어떤 코너를 숨길지 ────────────────────────── [필수] ──────
@@ -120,10 +129,9 @@ files:
   #        <root>/<회로>/setup/xtalk/xt.*.rpt
   #        <root>/<회로>/hold/...                 <- hold 는 따로 돌린다(아래)
   #
-  # ★ setup 과 hold 는 분리 차원이라 한 번에 못 섞는다. hold 를 돌리려면
-  #   subdir / crosstalk_subdir 의 setup 을 hold 로 바꾸고,
-  #   out.cache / out.runs 도 다른 이름으로 바꾼 뒤 다시 실행한다.
-  subdir: setup                     # annotated 리포트가 있는 곳
+  # auto = 맨 위 `mode` 를 그대로 씀 (setup -> setup/, hold -> hold/).
+  # 폴더 이름이 setup/hold 가 아니면(예: reports/) 여기에 직접 적는다.
+  subdir: auto                      # annotated 리포트가 있는 곳
 
   # ── layout: flat 일 때 ──────────────────────────────────────────────────
   #   auto = 파일명을 토큰으로 쪼개 전압/레벨/온도/공정을 각각 알아서 찾는다.
@@ -144,7 +152,8 @@ files:
   #  정확히 일치해야 한다. 이 폴더는 annotated 탐색에서 자동 제외되므로
   #  회로폴더 안에 두어도 "같은 코너가 두 파일에 매칭" 에러가 안 난다.
   #  위치를 모르면 null -> SI 없이 학습 (나중에 두 줄만 채우면 켜짐)
-  crosstalk_subdir: setup/xtalk     # 크로스토크 리포트가 있는 곳
+  #  auto = <mode>/xtalk (setup -> setup/xtalk, hold -> hold/xtalk)
+  crosstalk_subdir: auto            # 크로스토크 리포트가 있는 곳
   crosstalk_regex: auto             # annotated_regex 와 동일한 규칙 (파일명 접두사 무관)
 
   # ── annotated 와 crosstalk 이 "같은 폴더" 에 있을 때 (pt_si_re 배치) ──────

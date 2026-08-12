@@ -278,6 +278,12 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     return cfg
 
 
+def _auto(value, default: str) -> str:
+    """``None`` / ``"auto"`` -> the mode-derived default; anything else is taken
+    literally, so an odd layout can still pin its own path."""
+    return default if value is None or str(value) == "auto" else str(value)
+
+
 def _order(spec, n_levels: int, cap: int) -> int:
     """``auto`` -> the highest order those levels can identify, capped."""
     if spec is None or str(spec) == "auto":
@@ -293,8 +299,13 @@ def expand(p: dict) -> "list[dict]":
     """
     from si_model.parsing.keys import corner_label
 
-    out_cache = p.get("out", {}).get("cache", "cache")
-    out_runs = p.get("out", {}).get("runs", "runs")
+    # setup 과 hold 는 리포트 위치도 출력 위치도 갈라져야 한다. 예전에는 그 네
+    # 군데(files.subdir / files.crosstalk_subdir / out.cache / out.runs)를 각각
+    # 손으로 고쳐야 했고, subdir 만 바꾸고 out 을 잊으면 hold 결과가 setup 캐시와
+    # run 을 조용히 덮어썼다. 이제 `mode` 한 줄이 넷 다 정한다.
+    mode = str(p.get("mode") or "setup")
+    out_cache = _auto(p.get("out", {}).get("cache"), f"cache/{mode}")
+    out_runs = _auto(p.get("out", {}).get("runs"), f"runs/{mode}")
 
     models = []
     for design in list_designs(p):
@@ -367,7 +378,7 @@ def expand(p: dict) -> "list[dict]":
                     patterns["voltage_regex"] = fi["voltage_regex"]
                 patterns["crosstalk_suffix"] = fi.get("crosstalk_suffix", ".by_path.rpt")
             data = {
-                "annotated_dir": os.path.join(ddir, fi.get("subdir") or ""),
+                "annotated_dir": os.path.join(ddir, _auto(fi.get("subdir"), mode)),
                 "temp": t.get("token", tag),
                 "corner_prefix": proc,
                 "rc_corners": levels,
@@ -375,8 +386,9 @@ def expand(p: dict) -> "list[dict]":
                 "cache": os.path.join(out_cache, design, tag, "dataset.npz"),
                 "patterns": patterns,
             }
-            if fi.get("crosstalk_subdir") is not None:
-                data["crosstalk_dir"] = os.path.join(ddir, fi["crosstalk_subdir"])
+            if fi.get("crosstalk_subdir", "auto") is not None:
+                data["crosstalk_dir"] = os.path.join(
+                    ddir, _auto(fi.get("crosstalk_subdir"), f"{mode}/xtalk"))
                 if layout == "flat":
                     patterns["crosstalk_regex"] = fi["crosstalk_regex"]
             if ho.get("query_corners"):
@@ -735,7 +747,9 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
     The corner label carries voltage and BEOL level but NOT the temperature or
     the circuit -- those are the split dimensions -- so they become columns.
     """
-    out_dir = os.path.join(p.get("out", {}).get("runs", "runs"), "_all")
+    out_dir = os.path.join(
+        _auto(p.get("out", {}).get("runs"),
+              f"runs/{p.get('mode') or 'setup'}"), "_all")
     os.makedirs(out_dir, exist_ok=True)
     out_fp = os.path.join(out_dir, f"predictions_{corners}.csv")
     header = None
