@@ -323,7 +323,7 @@ def main():
     if warn:
         print("  확인 필요한 코너 %d개: %s" % (len(warn), ", ".join(warn)))
         print("  파일은 만들어졌지만 데이터가 일부 비어 있습니다.")
-        print("      %s 9_diagnose.py --dir %s" % (sys.executable, os.path.join(args.root, warn[0])))
+        print("      2c 화면의 [원인 A/B/C/D] 줄을 보세요 (자동으로 붙습니다)")
         print("=" * 68)
         sys.exit(0)
 

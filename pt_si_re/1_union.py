@@ -429,9 +429,9 @@ CODE_INFO = {
     "W-CPIN":     ("Cpin 이 비어 있는 줄이 많습니다",
                    "지금 리포트로 dump_attr.tcl 을 다시 돌려 보세요."),
     "W-RES":      ("Dist/Res 가 비어 있는 줄이 많습니다",
-                   "9_diagnose.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다."),
+                   "2c_merge.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다(자동)."),
     "W-NA":       ("결과에 N/A 가 남아 있습니다",
-                   "9_diagnose.py 를 돌리면 원인을 알려줍니다."),
+                   "2c_merge.py 를 돌리면 원인이 자동으로 나옵니다."),
 }
 
 

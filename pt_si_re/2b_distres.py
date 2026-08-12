@@ -17,7 +17,7 @@ Dist / Res 가 뭔가:
 
 넷 이름이 리포트와 SPEF 에서 다를 수 있어, 이름 변형 5단계 + 핀 연결(CONN)
 기반 매칭까지 시도한다. 그래도 못 찾으면 그 줄은 N/A 로 남고,
-9_diagnose.py 가 원인을 분류해 준다.
+다음 단계인 2c_merge.py 가 원인을 자동으로 분류해 준다.
 """
 import argparse
 import os
@@ -96,9 +96,9 @@ CODE_INFO = {
     "W-CPIN":     ("Cpin 이 비어 있는 줄이 많습니다",
                    "지금 리포트로 dump_attr.tcl 을 다시 돌려 보세요."),
     "W-RES":      ("Dist/Res 가 비어 있는 줄이 많습니다",
-                   "9_diagnose.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다."),
+                   "2c_merge.py 를 돌리면 원인을 A/B/C 로 나눠 줍니다(자동)."),
     "W-NA":       ("결과에 N/A 가 남아 있습니다",
-                   "9_diagnose.py 를 돌리면 원인을 알려줍니다."),
+                   "2c_merge.py 를 돌리면 원인이 자동으로 나옵니다."),
 }
 
 
@@ -203,7 +203,7 @@ def main():
         code("W-RES",
              "[ 주의 ] Res 가 %d개 비었습니다 (%.0f%%)."
              % (n - hit_r, 100.0 * (n - hit_r) / n),
-             "         원인:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
+             "         원인:  다음 단계(2c_merge.py)에서 자동으로 나옵니다.")
     else:
         code("OK-DISTRES",
              "[ 정상 ] Dist/Res %d/%d." % (hit_r, n),

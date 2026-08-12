@@ -9,9 +9,11 @@
        distres.tsv   1b 결과
 출력   <코너>_fixed_annotated.txt   '(net)' 줄 끝에 Dist / Res / Cpin 3열이 붙은 리포트
 
-N/A 가 남으면 **원인 진단(9_diagnose.py)이 자동으로 이어 붙는다.** 명령을 한 번
-더 칠 필요가 없다. --spef 를 같이 주면 SPEF 쪽 원인(A/B/C)까지 보고, 안 주면
-Cpin 쪽(원인 D)만 본다. --no-diagnose 로 끌 수 있다.
+N/A 가 남으면 **어느 쪽이 빈 것인지 여기서 바로 갈라 준다.**
+    [Cpin]      Cpin 표에 그 핀이 없다     -> 받은 표 / get_pins 범위
+    [Dist/Res]  SPEF 에서 못 찾았다        -> SPEF 짝, *RES 포함 여부
+조치할 곳이 다르므로 이것만 알면 대개 끝난다. SPEF 를 다시 훑지 않아 빠르다.
+SPEF 쪽을 넷 단위로 더 잘게 보고 싶을 때만 9_diagnose.py 를 따로 돌린다.
        (기존 운영 산출물과 같은 이름 규약. 코너 이름은 폴더 이름을 쓴다)
 
 계산은 하지 않는다. 줄 번호로 값을 찾아 붙이기만 하므로 즉시 끝난다.
@@ -19,7 +21,6 @@ Cpin 쪽(원인 D)만 본다. --no-diagnose 로 끌 수 있다.
 """
 import argparse
 import os
-import subprocess
 import re
 import sys
 
@@ -111,8 +112,8 @@ CODE_INFO = {
     "W-RES":      ("Dist/Res 가 비어 있는 줄이 많습니다",
                    "위에 붙은 [원인 A/B/C] 줄을 보세요. SPEF 쪽 문제입니다."),
     "W-NA":       ("결과에 N/A 가 남아 있습니다",
-                   "위에 붙은 [원인 X] 줄을 보세요. 원인별 조치가 같이 적혀 "
-                   "있습니다. (진단은 자동으로 돌아갑니다)"),
+                   "위의 [Cpin] / [Dist/Res] 줄을 보세요. 어느 쪽이 빈 것인지와 "
+                   "조치가 같이 적혀 있습니다."),
 }
 
 
@@ -155,10 +156,7 @@ def main():
                     help="결과 파일 이름에 쓸 코너 이름. 안 주면 폴더 이름")
     ap.add_argument("--out", default=None)
     ap.add_argument("--spef", default=None,
-                    help="N/A 가 나면 이 SPEF 로 원인까지 진단한다. 없으면 "
-                         "Cpin 쪽(원인 D)만 본다")
-    ap.add_argument("--no-diagnose", action="store_true",
-                    help="N/A 가 나도 원인 진단을 돌리지 않는다")
+                    help="지금은 안 쓴다(호환용). 4_all_corners 가 넘겨도 무시")
     args = ap.parse_args()
 
     d = args.dir
@@ -180,6 +178,10 @@ def main():
 
     cpin = load_tsv(cpin_f, ["cpin"])
     dr = load_tsv(dr_f, ["dist", "res"])
+    # Cpin 이 빈 줄이 어떤 핀인지 알려주려고 리시버 핀 이름도 같이 읽는다.
+    # (cpin.tsv 에 line_no / net / recv_pin / cpin 이 들어 있다)
+    recv_pin = dict((k, v[0]) for k, v in
+                    load_tsv(cpin_f, ["recv_pin"]).items())
     print("  리포트   : %s" % rpt)
     print("  cpin.tsv : %s" % ("%d줄" % len(cpin) if cpin else "없음 -> Cpin 은 N/A"))
     print("  distres  : %s" % ("%d줄" % len(dr) if dr else "없음 -> Dist/Res 는 N/A"))
@@ -195,6 +197,8 @@ def main():
 
     header_len = 80
     n_net = n_full = 0
+    na_dr = na_cpin = 0     # N/A 가 SPEF 쪽인지 Cpin 쪽인지
+    na_pins = []            # Cpin 이 빈 리시버 핀 예시
     outlines = []
     for idx, line in enumerate(lines):
         clean = line.rstrip("\r")
@@ -222,6 +226,17 @@ def main():
         sc = fmt4(sc) or "N/A"
         if "N/A" not in (sd, sr, sc):
             n_full += 1
+        else:
+            # 어느 쪽이 빈 것인지 나눠 센다. Dist/Res 는 SPEF 에서,
+            # Cpin 은 Cpin 표에서 오므로 조치할 곳이 완전히 다르다.
+            if sd == "N/A" or sr == "N/A":
+                na_dr += 1
+            if sc == "N/A":
+                na_cpin += 1
+                if len(na_pins) < 6:
+                    pin = recv_pin.get(idx)
+                    if pin and pin not in na_pins:
+                        na_pins.append(pin)
 
         m_net = NET_ROW_RE.match(clean)
         if m_net:
@@ -245,34 +260,26 @@ def main():
              "[ 정상 ] 3열 %d/%d. 다음:  %s 5a_contexts.py --dir %s"
              % (n_full, n_net, sys.executable, d))
     else:
-        # N/A 가 나면 **여기서 바로 원인까지** 본다. 예전에는 화면에
-        # "9_diagnose.py 를 돌려 보세요" 라고만 하고 끝냈는데, 현장에서
-        # 명령을 한 번 더 치는 것 자체가 부담이라 자동으로 이어 붙였다.
-        # (SPEF 를 한 번 훑으므로 N/A 가 있을 때만 돈다)
-        if not args.no_diagnose:
-            print("")
-            print("-" * 68)
-            print("  N/A 가 있어 원인을 진단합니다 (9_diagnose.py)")
-            print("-" * 68)
-            cmd = [sys.executable, os.path.join(HERE, "9_diagnose.py"), "--dir", d]
-            if args.spef:
-                cmd += ["--spef", args.spef]
-            try:
-                pr = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                      stderr=subprocess.STDOUT)
-                out = pr.communicate()[0].decode("utf-8", "replace")
-                # 진단기의 머리말은 빼고 본문만 이어 붙인다
-                for ln in out.splitlines():
-                    if ln.startswith("=") or ln.startswith("9 - "):
-                        continue
-                    print("  " + ln)
-            except Exception as e:
-                print("  (진단을 돌리지 못했습니다: %s)" % e)
-                print("  직접:  %s 9_diagnose.py --dir %s" % (sys.executable, d))
-        code("W-NA",
-             "[ 주의 ] N/A 가 %d개 있습니다 (전체 %d)." % (n_net - n_full, n_net),
-             "         위 [원인 X] 줄을 보세요.")
-
+        # N/A 가 어느 쪽에서 왔는지 여기서 바로 갈라 준다. 조치할 곳이
+        # 완전히 다르기 때문이다 -- Dist/Res 는 SPEF, Cpin 은 Cpin 표.
+        # SPEF 를 다시 훑지 않는다(이미 있는 두 tsv 만 보면 알 수 있다).
+        msg = ["[ 주의 ] N/A 가 %d개 있습니다 (전체 %d)."
+               % (n_net - n_full, n_net), ""]
+        if na_cpin:
+            msg.append("  [Cpin] %d줄 -- 리시버 핀이 Cpin 표에 없습니다." % na_cpin)
+            for pn in na_pins[:4]:
+                msg.append("           예: %s" % pn)
+            msg.append("         -> 받은 Cpin 표에 이 핀들이 있는지 보세요.")
+            msg.append("            2a 화면의 '1열 판별' 과 'Cpin N/M' 도 함께.")
+            msg.append("            get_pins 범위가 좁았거나 이름 규약이 다릅니다.")
+        if na_dr:
+            msg.append("  [Dist/Res] %d줄 -- SPEF 에서 못 찾았습니다." % na_dr)
+            msg.append("         -> SPEF 가 이 리포트와 같은 디자인/코너인지,")
+            msg.append("            저항(*RES)을 포함해 뽑았는지 보세요.")
+            msg.append("            넷 단위로 더 잘게 나누려면:")
+            msg.append("              %s 9_diagnose.py --dir %s"
+                       % (sys.executable, d))
+        code("W-NA", *msg)
 
 if __name__ == "__main__":
     main()

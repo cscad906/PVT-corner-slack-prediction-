@@ -485,7 +485,6 @@ aggressor_driver_slew_max  coupling_cap_ff
 `W-` 는 파일은 나왔지만 데이터가 불완전한 경우다. **몇 퍼센트인지**가 중요하다.
 
 ```bash
-python3 9_diagnose.py --dir <코너폴더>          # Dist/Res 가 빌 때 원인 분류
 # 막히면 화면 맨 아래 **코드**(예: W-CPIN)를 그대로 물어보면 된다.
 # 코드 목록과 조치는 코드표.md 에 있다.
 ```
@@ -518,7 +517,6 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 5b_pairs.py        crosstalk 2단계 - 쌍 정리  (PT 를 다녀온 뒤)
 5c_report.py       crosstalk 3단계 -> 14열 리포트   ★
 4_all_corners.py   위를 코너 전부에 (--phase 1/2)
-9_diagnose.py      Dist/Res N/A 원인 분류
 ```
 
 ### pt_shell 에서 source 하는 것
