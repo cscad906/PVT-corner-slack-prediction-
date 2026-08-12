@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 """7 - 다 돌린 결과에서 **최종 파일 2종만** 뽑아 넘길 형태로 모은다.
 
-    python3 7_collect.py --root round2 --out deliver --mode setup
+    python3 7_collect.py --root round2      --out deliver --mode setup
+    python3 7_collect.py --root round2_hold --out deliver --mode hold
+
+setup 과 hold 는 **작업 폴더가 따로**다(별개 2세트). --out 은 같은 곳을 주면
+그 아래에 setup/ 과 hold/ 로 갈려 담긴다.
 
 파이프라인은 코너마다 작업 폴더를 쓴다(cpin.tsv, distres.tsv, xtalk/... 등).
 넘길 때는 그게 다 필요 없고 최종 2종만 있으면 된다. 그걸 아래 형태로 모은다.
