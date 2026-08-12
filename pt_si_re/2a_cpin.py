@@ -93,12 +93,17 @@ def read_two_column(path):
                 parts = line.split("\t")
             elif "," in line:
                 parts = line.split(",")
+            elif ":" in line:
+                parts = line.split(":")
             else:
                 parts = line.split()
             parts = [p.strip() for p in parts if p.strip() != ""]
             if len(parts) < 2:
                 continue
-            key = parts[0]
+            # Tcl 로 뽑으면 이름에 중괄호/따옴표가 붙어 나오는 경우가 있다.
+            #   foreach p [get_pins *] { puts "$p [get_attribute $p ...]" }
+            # 그대로 두면 이름이 안 맞아 전부 비게 된다.
+            key = parts[0].strip("{}\"'")
             m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)", parts[1])
             if not m:
                 continue            # 헤더 줄 등
