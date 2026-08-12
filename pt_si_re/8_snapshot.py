@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 """8 - 문제가 생겼을 때 상황을 한 화면으로 요약한다. (원격 문의용)
 
-    python3 8_snapshot.py --dir <폴더>
+    python3 8_snapshot.py --dir <폴더>              전체 (화면 + 파일)
+    python3 8_snapshot.py --dir <폴더> --brief      숫자만 8줄
+
+--brief 는 **화면 복사도 사진도 파일 반출도 안 될 때** 쓴다. 사람이 읽어서
+전달할 수 있는 분량(8줄, 숫자만)으로만 찍는다. 경로도 예시 줄도 안 나온다.
 
 막혔을 때 이것만 돌려서 **화면 전체를 복사해 보내면** 원인을 파악할 수 있다.
 파일을 통째로 보낼 필요가 없다. 핸드폰으로 붙여넣을 수 있는 분량으로 맞춰 두었다.
@@ -233,6 +237,109 @@ def check_result(d, mask):
         print("  %-14s 없음" % "crosstalk.tsv")
 
 
+
+def brief(d):
+    """전화로 불러 줄 수 있는 분량으로만 찍는다.
+
+    현장에서 화면 복사도, 사진도, 파일 반출도 안 되는 경우가 있다.
+    그때는 **사람이 읽어서 전달**하는 수밖에 없다. 그래서 경로도 예시 줄도
+    빼고 숫자만 남긴다. 이 숫자들만 있으면 어디가 틀어졌는지 대개 잡힌다.
+    """
+    import glob as _glob
+
+    def nlines(path, pred=None):
+        if not os.path.isfile(path):
+            return -1
+        n = 0
+        with open(path, "r", errors="ignore") as f:
+            for l in f:
+                if pred is None or pred(l):
+                    n += 1
+        return n
+
+    def one(pat):
+        hits = _glob.glob(os.path.join(d, pat))
+        return hits[0] if hits else None
+
+    print("=" * 40)
+    print("짧은 요약  (이 숫자만 불러 주세요)")
+    print("=" * 40)
+    ver = sys.version.split()[0]
+    pt = "Y"
+    try:
+        import subprocess
+        subprocess.check_output(["which", "pt_shell"], stderr=subprocess.STDOUT)
+    except Exception:
+        pt = "N"
+    print("  py %s   pt %s" % (ver, pt))
+
+    # 리포트
+    rpt = None
+    for c in sorted(_glob.glob(os.path.join(d, "*.rpt"))):
+        if c.endswith("by_path.rpt"):
+            continue
+        rpt = c
+        break
+    if rpt:
+        npath = nlines(rpt, lambda l: l.lstrip().startswith("Startpoint:"))
+        nnet = nlines(rpt, lambda l: "(net)" in l)
+        print("  rpt   path %d  net %d" % (npath, nnet))
+    else:
+        print("  rpt   없음")
+
+    # 2a / 2b / 2c
+    for name, pat, col in (("cpin", "cpin.tsv", 3),
+                           ("dr  ", "distres.tsv", 2)):
+        f = os.path.join(d, pat)
+        if not os.path.isfile(f):
+            print("  %s  없음" % name)
+            continue
+        tot = miss = 0
+        with open(f, "r", errors="ignore") as fh:
+            next(fh, None)
+            for l in fh:
+                c = l.rstrip("\n").split("\t")
+                tot += 1
+                if len(c) <= col or not c[col].strip():
+                    miss += 1
+        print("  %s  %d  빈칸 %d" % (name, tot, miss))
+
+    ann = one("*_fixed_annotated.txt")
+    if ann:
+        na = nlines(ann, lambda l: "(net)" in l and "N/A" in l)
+        net = nlines(ann, lambda l: "(net)" in l)
+        print("  ann   net %d  N/A %d" % (net, na))
+    else:
+        print("  ann   없음")
+
+    # crosstalk
+    xd = os.path.join(d, "xtalk")
+    raw = os.path.join(xd, "context_raw.rpt")
+    if os.path.isfile(raw):
+        blk = err = 0
+        vdd = set()
+        mode = "?"
+        with open(raw, "r", errors="ignore") as fh:
+            for l in fh:
+                if l.startswith("### PATH_CONTEXT_BEGIN"):
+                    blk += 1
+                elif l.startswith("### status=") and not l.rstrip().endswith("=OK"):
+                    err += 1
+                elif l.startswith("Victim driver rail"):
+                    t = l.split(":")
+                    if len(t) > 1:
+                        vdd.add(t[1].strip())
+                elif mode == "?" and l.startswith("Annotated m"):
+                    mode = "setup" if l[10:13] == "max" else "hold"
+        print("  xt    ctx %d  fail %d  %s  vdd %s"
+              % (blk, err, mode, ",".join(sorted(vdd)) or "?"))
+    else:
+        print("  xt    없음")
+
+    fin = one("*.path_context_si_compact.by_path.rpt")
+    print("  최종  %s" % ("있음" if fin else "없음"))
+    print("=" * 40)
+
 def main():
     ap = argparse.ArgumentParser(description="문제 상황을 한 화면으로 요약한다.")
     ap.add_argument("--dir", default=".")
@@ -241,7 +348,14 @@ def main():
                     help="인스턴스 이름을 가린다 (설계 정보 노출이 걱정될 때)")
     ap.add_argument("--out", default="debug/snapshot.txt",
                     help="결과를 저장할 파일. 이 파일을 git push 하면 된다.")
+    ap.add_argument("--brief", action="store_true",
+                    help="숫자만 10줄 안쪽으로. 화면 복사/사진/파일 반출이 "
+                         "다 안 되어 **사람이 읽어 전달**해야 할 때")
     args = ap.parse_args()
+
+    if args.brief:
+        brief(args.dir)
+        return
 
     # 화면과 파일에 동시에 쓴다. 파일은 git 으로 넘기는 용도.
     outdir = os.path.dirname(os.path.abspath(args.out))
@@ -264,7 +378,8 @@ def main():
     d = args.dir
 
     print("=" * W)
-    print("상황 요약  (이 화면 전체를 복사해서 보내세요)")
+    print("상황 요약   -> %s 에도 저장됩니다" % args.out)
+    print("(복사도 사진도 안 되면:  python3 8_snapshot.py --dir <폴더> --brief)")
     print("=" * W)
 
     show_env()
