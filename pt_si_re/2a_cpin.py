@@ -129,8 +129,11 @@ def read_two_column(path, col=None):
                 ncol_seen = len(parts)
 
             def num(tok):
-                m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)$",
-                             tok.strip("{}\"'"))
+                # 숫자 뒤에 단위가 붙어 있어도 받는다(0.0012pF, 1.5e-3 F).
+                # 대신 숫자로 **시작**하고 뒤에 오는 것이 단위 글자뿐일 때만
+                # 인정한다. 그래야 이름 같은 토큰이 값으로 오인되지 않는다.
+                m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)"
+                             r"\s*[a-zA-Z]{0,3}$", tok.strip("{}\"'"))
                 return m.group(1) if m else None
 
             if col:
