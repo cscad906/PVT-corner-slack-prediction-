@@ -17,10 +17,11 @@ Stages
   base     cache          -> per-hidden-corner OLS-base error (the ONLY place
                             base-only numbers are printed; needs numpy only)
   train    cache          -> runs/<design>/<temp>/best.pt + summary.json
-  predict  best.pt        -> runs/<design>/<temp>/predictions_<corners>.csv
+  bundle   per-temp best.pt -> runs/<design>/model.pt  (ONE file per circuit)
+  predict  model.pt       -> runs/<design>/<temp>/predictions_<corners>.csv
   sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack 전용, 비교용)
   merge    all members    -> runs/_all/predictions_<corners>.csv + summary.json
-  all      build, base, train, predict, merge   (sweep 은 명시할 때만)
+  all      build, base, train, bundle, predict, merge  (sweep 은 명시할 때만)
 
 A failing member does not silently vanish: it is recorded, reported at the end,
 and makes the run exit non-zero -- a merged file that looks complete but is
@@ -38,8 +39,8 @@ import yaml
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PROJECT = os.path.join(REPO_ROOT, "config.yaml")
 STAGES = ("help", "recon", "check", "list", "build", "base", "train", "sweep",
-          "predict", "merge", "all")
-_ALL_STAGES = ("build", "base", "train", "predict", "merge")
+          "bundle", "predict", "merge", "all")
+_ALL_STAGES = ("build", "base", "train", "bundle", "predict", "merge")
 
 HELP = """\
 si_corner_model — 명령은 `bash scripts/run.sh <단계>` 하나뿐이다.
@@ -56,9 +57,10 @@ si_corner_model — 명령은 `bash scripts/run.sh <단계>` 하나뿐이다.
     base       OLS base 오차만 출력. base 수치는 여기서만 나온다  (numpy만, 수 초)
                -> 학습 전에 데이터가 제대로 파싱됐는지 확인하는 단계
     train      학습 -> runs/<회로>/<온도>/best.pt + summary.json   (torch/GPU)
-    predict    저장된 체크포인트로 예측만 -> predictions_<corners>.csv
+    bundle     온도별 가중치를 회로당 한 파일로 -> runs/<회로>/model.pt
+    predict    저장된 가중치로 예측만 -> predictions_<corners>.csv
     merge      전 회로·전 온도 예측을 runs/_all/ 로 합침
-    all        build -> base -> train -> predict -> merge
+    all        build -> base -> train -> bundle -> predict -> merge
     sweep      lambda_si {0, 0.1, 1, 10} 비교 -> runs/_sweep/ (slack 전용)
 
   옵션
@@ -724,16 +726,77 @@ def stage_train(m: dict) -> None:
     _trainer(m).run()
 
 
+BUNDLE_NAME = "model.pt"
+BUNDLE_FORMAT = "si_corner_model/bundle/1"
+
+
+def bundle_path(m: dict) -> str:
+    """One circuit's single weight file: runs/<mode>/<회로>/model.pt."""
+    return os.path.join(os.path.dirname(m["cfg"]["train"]["out_dir"]), BUNDLE_NAME)
+
+
+def stage_bundle(models: list) -> None:
+    """Pack every temperature's weights for a circuit into ONE file.
+
+    Temperature is a split dimension -- 125C and m25C are fitted separately
+    because their BEOL level sets differ and two temperatures cannot support an
+    interpolating polynomial. But that is an internal detail: from the outside a
+    circuit should be one model, one file, one command. So training still writes
+    a per-temperature ``best.pt`` (it needs somewhere to checkpoint mid-run) and
+    this stage collects them into ``runs/<mode>/<회로>/model.pt``, which is what
+    predict loads and what gets handed over.
+    """
+    import torch
+
+    from si_model.compat import load_checkpoint
+
+    by_design = {}
+    for m in models:
+        by_design.setdefault(m["design"], []).append(m)
+
+    for design, ms in sorted(by_design.items()):
+        temps, missing = {}, []
+        for m in sorted(ms, key=lambda x: str(x["temp"])):
+            ck_path = os.path.join(m["cfg"]["train"]["out_dir"], "best.pt")
+            if not os.path.exists(ck_path):
+                missing.append(str(m["temp"]))
+                continue
+            ck = load_checkpoint(ck_path, map_location="cpu")
+            temps[str(m["temp"])] = {"model": ck["model"], "enc": ck["enc"],
+                                     "cfg": ck["cfg"], "epoch": ck["epoch"]}
+        if not temps:
+            print(f"  {design}: 학습된 온도가 없어 건너뜀 (train 먼저)", flush=True)
+            continue
+        out = bundle_path(ms[0])
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        torch.save({"format": BUNDLE_FORMAT, "design": design,
+                    "temps": temps}, out)
+        note = f"  (미학습: {', '.join(missing)})" if missing else ""
+        print(f"  {out}  <- 온도 {len(temps)}개 [{', '.join(sorted(temps))}]{note}",
+              flush=True)
+
+
 def stage_predict(m: dict, corners: str) -> None:
     import numpy as np
 
     from si_model.compat import load_checkpoint
 
     out_dir = m["cfg"]["train"]["out_dir"]
-    ckpt = os.path.join(out_dir, "best.pt")
-    assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (train 먼저)"
     tr = _trainer(m)
-    ck = load_checkpoint(ckpt, map_location=tr.dev)
+    # 배포되는 단일 파일(model.pt)이 있으면 그걸 쓴다. 없으면 학습 직후의
+    # 온도별 체크포인트로 넘어간다 -- bundle 없이 train->predict 만 돌린 경우.
+    bundle = bundle_path(m)
+    if os.path.exists(bundle):
+        b = load_checkpoint(bundle, map_location=tr.dev)
+        key = str(m["temp"])
+        assert key in b["temps"], (
+            f"{bundle} 에 온도 {key} 가 없다 (있는 것: {sorted(b['temps'])}). "
+            f"run.sh bundle 을 다시 돌릴 것")
+        ck = b["temps"][key]
+    else:
+        ckpt = os.path.join(out_dir, "best.pt")
+        assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (train 먼저)"
+        ck = load_checkpoint(ckpt, map_location=tr.dev)
     tr.model.load_state_dict(ck["model"])
     tr.enc.load_state_dict(ck["enc"])
     idx = {"hidden": tr.split.hidden_idx, "seen": tr.split.seen_idx,
@@ -820,6 +883,14 @@ def main(argv=None):
     stages = _ALL_STAGES if args.stage == "all" else (args.stage,)
     failed = []
     for stage in stages:
+        if stage == "bundle":
+            print(f"\n===== bundle: 회로별 단일 가중치 파일 =====", flush=True)
+            try:
+                stage_bundle(models)
+            except Exception as e:
+                failed.append(("bundle", repr(e)))
+                traceback.print_exc()
+            continue
         if stage == "merge":
             try:
                 stage_merge(models, p, args.corners)

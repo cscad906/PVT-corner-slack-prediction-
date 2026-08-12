@@ -52,7 +52,8 @@ bash scripts/run.sh list           # ③ 검산 (코너 수/파라미터 수까�
 bash scripts/run.sh build          # ④ 캐시     (numpy만)
 bash scripts/run.sh base           # ⑤ base 점검 (numpy만, 수 초) -- 학습 전 필수
 bash scripts/run.sh train          # ⑥ 학습     (torch)
-# 또는 ④~⑥ 한 방에:  bash scripts/run.sh all
+bash scripts/run.sh bundle         # ⑦ 회로당 가중치 한 파일로 묶기
+# 또는 ④~⑦ 한 방에:  bash scripts/run.sh all
 ```
 
 회로/온도만 골라서: `run.sh train --design cpu --temp 125`
@@ -61,10 +62,16 @@ bash scripts/run.sh train          # ⑥ 학습     (torch)
 ### 결과
 
 ```
-runs/_all/predictions_hidden.csv    ★ 전 회로·전 온도 통합본
-runs/_all/summary.json              ★ 모델별 지표
-runs/<회로>/<온도>/                  개별 (best.pt, summary.json, predictions_*.csv)
+runs/<mode>/_all/predictions_hidden.csv   ★ 전 회로·전 온도 통합본
+runs/<mode>/_all/summary.json             ★ 모델별 지표
+runs/<mode>/<회로>/model.pt               ★ 그 회로의 가중치 — 온도 전부가 이 한 파일에
+runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summary.json, predictions_*.csv)
 ```
+
+**넘길 건 회로당 `model.pt` 하나다.** 온도는 내부적으로만 갈라져 있다 — 125C 와
+m25C 는 BEOL 레벨 집합이 달라서 따로 적합해야 하지만, 밖에서는 회로 하나 = 파일
+하나로 보인다. `predict` 도 이 파일 하나만 있으면 두 온도 다 예측한다
+(`<온도>/best.pt` 는 학습 중 체크포인트라 지워도 된다).
 
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps

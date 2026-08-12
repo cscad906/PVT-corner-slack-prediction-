@@ -215,10 +215,18 @@ files:
 회로 3개 × 온도 2개 = **모델 6개**, 각각:
 
 ```
-cache/<회로>/<온도>/dataset.npz     ← 데이터도 따로
-runs/<회로>/<온도>/best.pt          ← 학습도 따로
-runs/_all/predictions_hidden.csv   ← 결과는 design,temp 열이 붙어 한 파일로 합쳐짐
+cache/<mode>/<회로>/<온도>/dataset.npz    ← 데이터도 따로
+runs/<mode>/<회로>/<온도>/best.pt         ← 학습도 따로 (학습 중 체크포인트)
+runs/<mode>/<회로>/model.pt               ← ★ 그 회로의 온도 전부가 이 한 파일에
+runs/<mode>/_all/predictions_hidden.csv   ← 결과는 design,temp 열이 붙어 한 파일로
 ```
+
+**밖에서는 회로 하나 = 모델 하나로 보인다.** 온도를 나누는 건 물리적 이유가 있다 —
+125C 와 m25C 는 BEOL 레벨 집합부터 다르고(`rcmax,cmax` vs `rcmax,cmax,rcmin`),
+온도가 2개뿐이라 그 축으로는 보간 다항식을 세울 수도 없다. 그래서 적합은 따로
+하되, `run.sh bundle` 이 온도별 가중치를 회로당 `model.pt` 하나로 묶는다
+(`run.sh all` 에 포함). `predict` 는 이 파일 하나만 있으면 모든 온도를 예측하므로,
+넘길 때도 받을 때도 회로당 파일 하나만 신경 쓰면 된다.
 
 **온도별로 다르게 줄 수 있는 것**: `levels`(필수 — 온도마다 레벨이 다름),
 `hidden_corners` / `hidden_per_voltage` / `hidden_voltages` / `seen_voltages` /
@@ -388,9 +396,10 @@ bash scripts/run.sh all
 결과:
 
 ```
-runs/_all/predictions_hidden.csv    ★ 전 회로·전 온도 통합본
-runs/_all/summary.json              ★ 모델별 지표
-runs/<회로>/<온도>/                  개별 (best.pt, summary.json, predictions_*.csv)
+runs/<mode>/_all/predictions_hidden.csv   ★ 전 회로·전 온도 통합본
+runs/<mode>/_all/summary.json             ★ 모델별 지표
+runs/<mode>/<회로>/model.pt               ★ 넘길 가중치 (온도 전부 포함, 회로당 하나)
+runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summary.json, predictions_*.csv)
 ```
 
 ```
