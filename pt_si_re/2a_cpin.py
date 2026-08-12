@@ -13,9 +13,25 @@
 --cpin-map : 현장에서 "이름 <탭/쉼표/공백> Cpin" 2열로 받은 표를 쓸 때 준다.
 1열이 무엇인지는 리포트와 대조해 **알아서 판별**한다.
 
-    inst/pin     U123/A                  설계 핀   -> 그대로 쓴다
-    cell/pin     gt3_6t_and2_x1_rvt/A    셀의 핀   -> 리포트로 설계 핀에 펼친다
-    cell         gt3_6t_and2_x1_rvt      셀만      -> 같은 셀의 모든 핀에 같은 값
+    inst/pin      U123/A                       설계 핀   -> 그대로
+    cell/pin      gt3_6t_and2_x1_rvt/A         셀의 핀   -> 리포트로 펼침
+    lib/cell/pin  op_cond_all/..._x1_rvt/A     get_lib_pins 출력 -> 앞을 떼고 펼침
+    cell          gt3_6t_and2_x1_rvt           셀만      -> 모든 핀에 같은 값
+
+담당자분께 부탁드릴 때 쓸 수 있는 두 가지 (PT 로 실측 확인):
+
+    # (가) 설계 핀 -- 제일 정확. 핀 수만큼 나온다
+    foreach_in_collection p [get_pins -hierarchical *] {
+        puts "[get_object_name $p]\t[get_attribute -quiet $p pin_capacitance_max]"
+    }
+
+    # (나) 라이브러리 핀 -- 훨씬 작다(셀 종류 수). 값은 (가)와 같다
+    foreach_in_collection p [get_lib_pins *] {
+        puts "[get_object_name $p]\t[get_attribute -quiet $p pin_capacitance]"
+    }
+
+주의: lib_pin 에서는 attribute 이름이 `pin_capacitance` 다.
+`capacitance` 나 `pin_capacitance_max` 는 빈 값으로 나온다(실측).
 
 앞의 둘은 pin_attr.txt 로 만든 것과 **byte 단위로 같은** cpin.tsv 가 나온다
 (BoomCoreV3 로 확인). 셋째는 핀 구분이 없어 값이 어긋난다 -- 화면에 경고가
@@ -131,15 +147,32 @@ def load_cpin_map(path, rpt):
     for pin, cell in pin2cell.items():
         cell_pins.add("%s/%s" % (cell, pin.rsplit("/", 1)[1]))
 
+    # get_lib_pins 로 뽑으면 이름이 '라이브러리/셀/핀' 3단으로 나온다.
+    #   op_cond_all/gt3_6t_buf_x12_rvt/A
+    # 앞의 라이브러리 이름을 떼면 'cell/pin' 이 된다. 값은 설계 핀의
+    # pin_capacitance_max 와 같다(실측 확인).
+    def drop_lib(k):
+        parts = k.split("/")
+        if len(parts) == 3:
+            return "/".join(parts[1:])
+        return k
+
     keys = [k for k, _ in rows]
     n = float(len(keys))
     hit_design = sum(1 for k in keys if k in design_pins) / n
     hit_cellpin = sum(1 for k in keys if k in cell_pins) / n
     hit_cell = sum(1 for k in keys if k in cells) / n
+    hit_libpin = sum(1 for k in keys if drop_lib(k) in cell_pins) / n
 
     note = []
-    best = max((hit_design, "design_pin"), (hit_cellpin, "cell_pin"),
-               (hit_cell, "cell"))
+    # 동점이면 앞쪽을 고른다. 2단(cell/pin)은 drop_lib 가 그대로 두므로
+    # lib_cell_pin 과 점수가 같아지는데, 그때는 cell_pin 이라고 불러야 맞다.
+    cand = [(hit_design, "design_pin"), (hit_cellpin, "cell_pin"),
+            (hit_libpin, "lib_cell_pin"), (hit_cell, "cell")]
+    best = cand[0]
+    for c in cand[1:]:
+        if c[0] > best[0]:
+            best = c
     if best[0] < 0.05:
         note.append("1열이 리포트의 핀 이름과도, 셀 이름과도 안 맞습니다.")
         note.append("  읽은 예: %s" % ", ".join(keys[:3]))
@@ -152,10 +185,10 @@ def load_cpin_map(path, rpt):
     if kind == "design_pin":
         for k, v in rows:
             caps[k] = v
-    elif kind == "cell_pin":
+    elif kind in ("cell_pin", "lib_cell_pin"):
         want = {}
         for k, v in rows:
-            want[k] = v
+            want[drop_lib(k) if kind == "lib_cell_pin" else k] = v
         for pin, cell in pin2cell.items():
             v = want.get("%s/%s" % (cell, pin.rsplit("/", 1)[1]))
             if v is not None:
@@ -350,9 +383,10 @@ def main():
         # 현장에서 받은 2열 표를 쓴다. 1열이 무엇인지는 알아서 판별한다.
         print("  Cpin 표   : %s" % args.cpin_map)
         caps, kind, note = load_cpin_map(args.cpin_map, rpt)
-        label = {"design_pin": "설계 핀 (inst/pin)",
-                 "cell_pin":   "셀의 핀 (cell/pin)",
-                 "cell":       "셀 이름만 (핀 구분 없음)"}.get(kind, kind)
+        label = {"design_pin":   "설계 핀 (inst/pin)",
+                 "cell_pin":     "셀의 핀 (cell/pin)",
+                 "lib_cell_pin": "라이브러리 핀 (lib/cell/pin) -- get_lib_pins",
+                 "cell":         "셀 이름만 (핀 구분 없음)"}.get(kind, kind)
         print("  1열 판별  : %s" % label)
         for m in note:
             print("    %s" % m)
