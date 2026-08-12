@@ -3,10 +3,23 @@
 """2a - Cpin (리시버 핀 capacitance) 표를 만든다.
 
     python3 2a_cpin.py --dir ./work
+    python3 2a_cpin.py --dir ./work --cpin-map <받은표>   # pin_attr.txt 대신
 
 입력   timing.rpt     어느 넷을 누가 받는지
        pin_attr.txt   PT 핀 attribute 덤프
+       (또는 --cpin-map 으로 받은 2열 표. 아래 참조)
 출력   cpin.tsv       line_no / net / recv_pin / cpin
+
+--cpin-map : 현장에서 "이름 <탭/쉼표/공백> Cpin" 2열로 받은 표를 쓸 때 준다.
+1열이 무엇인지는 리포트와 대조해 **알아서 판별**한다.
+
+    inst/pin     U123/A                  설계 핀   -> 그대로 쓴다
+    cell/pin     gt3_6t_and2_x1_rvt/A    셀의 핀   -> 리포트로 설계 핀에 펼친다
+    cell         gt3_6t_and2_x1_rvt      셀만      -> 같은 셀의 모든 핀에 같은 값
+
+앞의 둘은 pin_attr.txt 로 만든 것과 **byte 단위로 같은** cpin.tsv 가 나온다
+(BoomCoreV3 로 확인). 셋째는 핀 구분이 없어 값이 어긋난다 -- 화면에 경고가
+뜬다. 실측하면 80%는 그대로였지만 상위 10%가 1.6%, 최악은 146% 틀렸다.
 
 이 단계는 **SPEF 를 읽지 않는다.** 그래서 몇 초면 끝나고, SPEF 에 문제가 있어도
 Cpin 은 정상적으로 나온다. 핀 이름이 안 맞는 문제를 여기서 먼저 걸러낸다.
@@ -29,6 +42,134 @@ from find_rpt import find_rpt
 
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 ATTR = "pin_capacitance_max"
+
+
+
+# ---------------------------------------------------------------------------
+# 현장에서 "cell 이름 / cpin 값" 2열 파일을 받는 경우
+# ---------------------------------------------------------------------------
+# pin_attr.txt 를 못 받고 담당자분이 PT 로 따로 뽑아 주신 표를 쓸 때 쓴다.
+# 1열이 무엇인지 사이트마다 달라서 **파일을 보고 알아서 판별**한다.
+#
+#   (1) inst/pin      U123/A                    설계 핀. 제일 정확하다
+#   (2) libcell/pin   gt3_6t_and2_x1_rvt/A      라이브러리 셀의 핀
+#   (3) libcell       gt3_6t_and2_x1_rvt        셀만. 핀 구분이 없다
+#
+# (2)(3)은 리포트에서 "핀 -> 셀" 을 읽어 설계 핀으로 펼친다. 리포트가
+#   U123/A (gt3_6t_and2_x1_rvt)
+# 형태로 셀 이름을 같이 적어 주기 때문에 가능하다.
+#
+# (3)은 **정보가 준다.** 한 셀 안에서도 핀마다 Cpin 이 다르기 때문이다
+# (실측: gt3_6t_and2_x1_rvt 의 A=0.000378, B=0.000371 -- 약 2% 차이).
+# 그래서 (3)으로 판별되면 화면에 경고를 띄운다.
+
+CELL_RE = re.compile(r"^\s+(\S+/\S+)\s+\(([^)]+)\)")
+
+
+def load_pin_to_cell(rpt):
+    """리포트에서 {설계핀: 라이브러리셀}. 같은 핀이 여러 번 나와도 값은 같다."""
+    out = {}
+    with open(rpt, "r", errors="ignore") as f:
+        for line in f:
+            m = CELL_RE.match(line)
+            if m:
+                out[m.group(1)] = m.group(2)
+    return out
+
+
+def read_two_column(path):
+    """1열 이름 / 2열 숫자. 구분자는 탭, 쉼표, 공백 아무거나.
+
+    주석(#), 빈 줄, 헤더(2열이 숫자가 아닌 첫 줄)는 건너뛴다.
+    값에 단위가 붙어 있으면(0.0012pF) 숫자 부분만 취한다.
+    """
+    rows = []
+    with open(path, "r", errors="ignore") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith("*"):
+                continue
+            if "\t" in line:
+                parts = line.split("\t")
+            elif "," in line:
+                parts = line.split(",")
+            else:
+                parts = line.split()
+            parts = [p.strip() for p in parts if p.strip() != ""]
+            if len(parts) < 2:
+                continue
+            key = parts[0]
+            m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)", parts[1])
+            if not m:
+                continue            # 헤더 줄 등
+            try:
+                float(m.group(1))          # 숫자인지만 확인한다
+            except ValueError:
+                continue
+            # 값은 **원문 문자열 그대로** 담는다. float 로 바꿔 담으면
+            # 0.000520 이 0.00052 로 바뀌어 pin_attr.txt 경로와 표기가
+            # 어긋난다(값은 같지만 파일 비교가 안 된다).
+            rows.append((key, m.group(1)))
+    return rows
+
+
+def load_cpin_map(path, rpt):
+    """2열 파일 -> {설계핀: 값}. (dict, 판별한 종류, 안내문들) 반환."""
+    rows = read_two_column(path)
+    if not rows:
+        return {}, "none", ["파일에서 '이름 값' 두 열을 하나도 못 읽었습니다."]
+
+    pin2cell = load_pin_to_cell(rpt)
+    design_pins = set(pin2cell)
+    cells = set(pin2cell.values())
+    cell_pins = set()          # 'cell/pin' 형태로 만들어 둔 것
+    for pin, cell in pin2cell.items():
+        cell_pins.add("%s/%s" % (cell, pin.rsplit("/", 1)[1]))
+
+    keys = [k for k, _ in rows]
+    n = float(len(keys))
+    hit_design = sum(1 for k in keys if k in design_pins) / n
+    hit_cellpin = sum(1 for k in keys if k in cell_pins) / n
+    hit_cell = sum(1 for k in keys if k in cells) / n
+
+    note = []
+    best = max((hit_design, "design_pin"), (hit_cellpin, "cell_pin"),
+               (hit_cell, "cell"))
+    if best[0] < 0.05:
+        note.append("1열이 리포트의 핀 이름과도, 셀 이름과도 안 맞습니다.")
+        note.append("  읽은 예: %s" % ", ".join(keys[:3]))
+        note.append("  리포트 핀 예: %s" % ", ".join(sorted(design_pins)[:2]))
+        note.append("  리포트 셀 예: %s" % ", ".join(sorted(cells)[:2]))
+        return {}, "unknown", note
+
+    kind = best[1]
+    caps = {}
+    if kind == "design_pin":
+        for k, v in rows:
+            caps[k] = v
+    elif kind == "cell_pin":
+        want = {}
+        for k, v in rows:
+            want[k] = v
+        for pin, cell in pin2cell.items():
+            v = want.get("%s/%s" % (cell, pin.rsplit("/", 1)[1]))
+            if v is not None:
+                caps[pin] = v
+    else:                       # cell
+        want = {}
+        for k, v in rows:
+            want[k] = v
+        for pin, cell in pin2cell.items():
+            v = want.get(cell)
+            if v is not None:
+                caps[pin] = v
+        note.append("셀 단위 값이라 **한 셀의 모든 핀에 같은 값**이 들어갑니다.")
+        note.append("  한 셀 안에서도 핀마다 Cpin 이 다릅니다. BoomCoreV3 로 재 보니")
+        note.append("  80%는 그대로였지만 상위 10%가 1.6%, 최악은 146% 어긋났습니다.")
+        note.append("  (FF 의 CLK 핀처럼 유독 큰 핀이 평균에 묻히면 크게 틀립니다)")
+        note.append("  핀별 값을 받을 수 있으면 그쪽이 정확합니다. 1열을")
+        note.append("  'inst/pin' 이나 'cell/pin' 으로 주시면 그대로 씁니다.")
+    return caps, kind, note
 
 
 def load_pin_caps(path, attr=ATTR):
@@ -168,6 +309,10 @@ def main():
                     help="**코너 폴더 하나** (그 안에 .rpt 가 있는 폴더). 여러 코너를 한 번에 하려면 4_all_corners.py --root")
     ap.add_argument("--rpt", default=None)
     ap.add_argument("--pin-attr", default=None)
+    ap.add_argument("--cpin-map", default=None,
+                    help="현장에서 받은 '이름  Cpin' 2열 파일. 주면 "
+                         "pin_attr.txt 대신 이걸 쓴다. 1열이 설계핀/셀핀/셀 "
+                         "어느 것인지는 알아서 판별한다")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -183,21 +328,41 @@ def main():
     print("2a - Cpin 표  (SPEF 를 읽지 않습니다)")
     print("=" * 68)
 
-    for label, p in (("timing.rpt", rpt), ("pin_attr.txt", pin_attr)):
+    need = [("timing.rpt", rpt)]
+    if args.cpin_map:
+        need.append(("cpin-map", args.cpin_map))
+    else:
+        need.append(("pin_attr.txt", pin_attr))
+    for label, p in need:
         if not os.path.isfile(p):
             print("")
             code("E-NOFILE",
                  "[ 실패 ] %s 이 없습니다: %s" % (label, p),
                  "         0_check.py 로 무엇이 없는지 확인하세요.")
     print("  리포트    : %s" % rpt)
-    print("  핀 속성   : %s" % pin_attr)
 
-    caps = load_pin_caps(pin_attr)
-    if not caps:
-        print("")
-        code("E-NOATTR",
-             "[ 실패 ] pin_attr.txt 에서 %s 를 하나도 못 읽었습니다." % ATTR,
-             "         report_attribute 에 -application 이 필요합니다.")
+    if args.cpin_map:
+        # 현장에서 받은 2열 표를 쓴다. 1열이 무엇인지는 알아서 판별한다.
+        print("  Cpin 표   : %s" % args.cpin_map)
+        caps, kind, note = load_cpin_map(args.cpin_map, rpt)
+        label = {"design_pin": "설계 핀 (inst/pin)",
+                 "cell_pin":   "셀의 핀 (cell/pin)",
+                 "cell":       "셀 이름만 (핀 구분 없음)"}.get(kind, kind)
+        print("  1열 판별  : %s" % label)
+        for m in note:
+            print("    %s" % m)
+        if not caps:
+            print("")
+            code("E-NOATTR",
+                 "[ 실패 ] Cpin 표에서 쓸 수 있는 값을 못 만들었습니다.")
+    else:
+        print("  핀 속성   : %s" % pin_attr)
+        caps = load_pin_caps(pin_attr)
+        if not caps:
+            print("")
+            code("E-NOATTR",
+                 "[ 실패 ] pin_attr.txt 에서 %s 를 하나도 못 읽었습니다." % ATTR,
+                 "         report_attribute 에 -application 이 필요합니다.")
     print("  읽은 핀   : %d개" % len(caps))
 
     n = hit = 0
