@@ -716,6 +716,46 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (정답 없어 건너뜀: {skipped})")
+    if hid and field == "slack":
+        _print_weighting_comparison(y, phi, split, coords, cfg, hid)
+
+
+def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
+    """What each base.weighting would have scored at the hidden corners.
+
+    Printed only -- never written to summary.json or any file. The mode in
+    effect is already chosen (config, plus the small-grid downgrade in
+    ``loo._effective_mode``); this is here so the choice can be sanity-checked
+    at a glance instead of taken on faith.
+
+    Do NOT turn it into an automatic selector. Picking by these numbers is
+    selection against held-out data over very few corners, and the label-free
+    alternatives were measured and found unreliable: plain seen-LOO ranks the
+    modes backwards, and the row-masked variant cannot be computed at all when a
+    voltage has a single seen corner."""
+    import copy
+
+    import numpy as np
+
+    from si_model.training.loo import _effective_mode, fit_field
+
+    cur = _effective_mode(cfg, split)
+    print(f"    ── weighting 별 히든 (참고용, 저장 안 함) ──")
+    for w in ("plain", "local", "adaptive"):
+        c = copy.deepcopy(cfg)
+        c["base"]["weighting"] = w
+        if w == "local" and not c["base"].get("bandwidth"):
+            print(f"       {w:9s} (bandwidth 미설정)")
+            continue
+        try:
+            loo, _ = fit_field(y, phi, split, coords, c, force_mode=w)
+        except Exception as e:
+            print(f"       {w:9s} (못 잼: {repr(e)[:40]})")
+            continue
+        e = np.array([float(np.nanmean(np.abs(loo[:, ci] - y[:, ci])) * 1000.0)
+                      for ci in hid])
+        print(f"       {w:9s} {e.mean():8.3f} ps  (worst {e.max():7.3f})"
+              f"{'  <- 지금 이것' if w == cur else ''}")
 def _trainer(m: dict):
     if m["task"] == "slew":
         from si_model.tasks.slew.train_slew import Trainer

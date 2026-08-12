@@ -230,10 +230,14 @@ def _effective_mode(cfg: dict, split: Split) -> str:
     return "plain"
 
 
-def fit_field(y, phi, split, coords, cfg):
+def fit_field(y, phi, split, coords, cfg, force_mode: "str | None" = None):
     """Fit one per-corner field (slack / SI / slew) under base.weighting.
-    Returns (loo_field [N,C], picks-or-None)."""
-    mode = _effective_mode(cfg, split)
+    Returns (loo_field [N,C], picks-or-None).
+
+    ``force_mode`` bypasses ``_effective_mode`` so a caller can measure what a
+    mode WOULD have produced -- used by the comparison print in ``run.stage_base``,
+    which must show adaptive's real numbers even where the rule downgrades it."""
+    mode = force_mode or _effective_mode(cfg, split)
     if mode == "adaptive":
         return fit_base_adaptive(y, phi, split.seen, coords, **_adaptive_kwargs(cfg))
     if mode == "local":
