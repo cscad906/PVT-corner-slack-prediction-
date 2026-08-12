@@ -17,6 +17,17 @@
     cell/pin      gt3_6t_and2_x1_rvt/A         셀의 핀   -> 리포트로 펼침
     lib/cell/pin  op_cond_all/..._x1_rvt/A     get_lib_pins 출력 -> 앞을 떼고 펼침
     cell          gt3_6t_and2_x1_rvt           셀만      -> 모든 핀에 같은 값
+    net           ZCTSNET_4157                 넷 이름   -> Cpin 이 아니므로 중단
+
+**값 열도 알아서 고른다.** pin cap 과 wire cap 이 같이 있는 표여도,
+순서가 어느 쪽이어도 된다. 리포트의 '(net)' 줄에 그 넷의 전체 cap 이
+찍혀 있는데, Cpin 은 리시버 하나의 값이라 그보다 작아야 한다. 열마다
+그 비율을 재서 제일 높은 열을 쓴다. 화면에 어느 열을 왜 골랐는지 찍는다.
+
+    값 열 : 2번째 (자동 선택, 넷 전체 cap 보다 작은 비율 100%)
+        3번째 열은 12% -- 안 씀
+
+--cpin-col 로 직접 지정할 수도 있다(이름 열이 1).
 
 담당자분께 부탁드릴 때 쓸 수 있는 두 가지 (PT 로 실측 확인):
 
@@ -93,18 +104,26 @@ def load_pin_to_cell(rpt):
     return out
 
 
-def read_two_column(path, col=None):
-    """1열 이름 / 나머지 열 중 숫자. 구분자는 탭, 쉼표, 콜론, 공백 아무거나.
+def read_name_value_rows(path):
+    """받은 표를 읽어 [(이름, [열값들])] 로 돌려준다.
 
-    col 을 주면 **그 열**(1부터 센다, 이름 열이 1)을 값으로 쓴다.
-    안 주면 이름 뒤의 **첫 숫자 열**을 쓴다.
+    구분자는 탭/쉼표/콜론/공백 아무거나. 주석(#)·빈 줄·헤더는 건너뛴다.
+    숫자 열이 몇 개든 **전부 담는다.** 어느 열이 Cpin 인지는 나중에
+    리포트와 대조해 고른다(pin cap 과 wire cap 이 같이 오는 경우가 있다).
 
-    pin cap 과 wire cap 이 같이 있는 표처럼 숫자 열이 여러 개면 col 로 고른다.
-    주석(#), 빈 줄, 헤더(숫자가 없는 줄)는 건너뛴다.
-    값에 단위가 붙어 있으면(0.0012pF) 숫자 부분만 취한다.
+    값은 원문 문자열 그대로 담는다. float 로 바꿔 담으면 0.000520 이
+    0.00052 로 바뀌어 pin_attr.txt 경로와 표기가 어긋난다.
     """
+    NUM = re.compile(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)"
+                     r"\s*[a-zA-Z]{0,3}$")
+
+    def num(tok):
+        # 숫자 뒤에 단위가 붙어 있어도 받는다(0.0012pF). 이름 같은 토큰은 뺀다.
+        m = NUM.match(tok.strip("{}\"'"))
+        return m.group(1) if m else None
+
     rows = []
-    ncol_seen = 0
+    ncol = 0
     with open(path, "r", errors="ignore") as f:
         for raw in f:
             line = raw.strip()
@@ -118,46 +137,24 @@ def read_two_column(path, col=None):
                 parts = line.split(":")
             else:
                 parts = line.split()
-            parts = [p.strip() for p in parts if p.strip() != ""]
+            parts = [q.strip() for q in parts if q.strip() != ""]
             if len(parts) < 2:
                 continue
-            # Tcl 로 뽑으면 이름에 중괄호/따옴표가 붙어 나오는 경우가 있다.
+            # Tcl 로 뽑으면 이름에 중괄호/따옴표가 붙는다.
             #   foreach p [get_pins *] { puts "$p [get_attribute $p ...]" }
-            # 그대로 두면 이름이 안 맞아 전부 비게 된다.
             key = parts[0].strip("{}\"'")
-            if len(parts) > ncol_seen:
-                ncol_seen = len(parts)
-
-            def num(tok):
-                # 숫자 뒤에 단위가 붙어 있어도 받는다(0.0012pF, 1.5e-3 F).
-                # 대신 숫자로 **시작**하고 뒤에 오는 것이 단위 글자뿐일 때만
-                # 인정한다. 그래야 이름 같은 토큰이 값으로 오인되지 않는다.
-                m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)"
-                             r"\s*[a-zA-Z]{0,3}$", tok.strip("{}\"'"))
-                return m.group(1) if m else None
-
-            if col:
-                if len(parts) < col:
-                    continue
-                v = num(parts[col - 1])
-            else:
-                v = None
-                for tok in parts[1:]:
-                    v = num(tok)
-                    if v is not None:
-                        break
-            if v is None:
+            vals = [num(t) for t in parts[1:]]
+            if not any(v is not None for v in vals):
                 continue            # 헤더 줄 등
-            # 값은 **원문 문자열 그대로** 담는다. float 로 바꿔 담으면
-            # 0.000520 이 0.00052 로 바뀌어 pin_attr.txt 경로와 표기가
-            # 어긋난다(값은 같지만 파일 비교가 안 된다).
-            rows.append((key, v))
-    return rows, ncol_seen
+            rows.append((key, vals))
+            if len(vals) > ncol:
+                ncol = len(vals)
+    return rows, ncol
 
 
 def load_cpin_map(path, rpt, col=None):
     """받은 표 -> {설계핀: 값}. (dict, 판별한 종류, 안내문들) 반환."""
-    rows, ncol = read_two_column(path, col)
+    rows, ncol = read_name_value_rows(path)
     if not rows:
         return {}, "none", ["파일에서 '이름 값' 을 하나도 못 읽었습니다."]
 
@@ -220,36 +217,85 @@ def load_cpin_map(path, rpt, col=None):
         return {}, "unknown", note
 
     kind = best[1]
-    if ncol > 2 and col is None:
-        note.append("열이 %d개입니다. 이름 뒤 **첫 숫자 열**을 값으로 썼습니다." % ncol)
-        note.append("  pin cap 과 wire cap 이 같이 있는 표라면 --cpin-col 로 고르세요.")
-        note.append("  (--cpin-col 2 = 이름 다음 열, 3 = 그다음 열)")
-    caps = {}
-    if kind == "design_pin":
-        for k, v in rows:
-            caps[k] = v
-    elif kind in ("cell_pin", "lib_cell_pin"):
-        want = {}
-        for k, v in rows:
-            want[drop_lib(k) if kind == "lib_cell_pin" else k] = v
+
+    # --- 어느 열이 Cpin 인지 고른다 -------------------------------------
+    # 표에 pin cap 과 wire cap 이 같이 오는 경우가 있어 열 순서를 믿을 수 없다.
+    # 리포트의 '(net)' 줄에 그 넷의 **전체 cap** 이 찍혀 있으므로, 그것보다
+    # 작은 값이 나오는 열이 pin cap 이다. 열마다 그 비율을 재서 제일 높은
+    # 열을 쓴다. --cpin-col 을 주면 그것을 그대로 따른다.
+    netcap = net_line_caps(rpt)
+    recv = list(iter_net_receiver(rpt))
+
+    def expand(vi):
+        """vi 번째 열로 {설계핀: 값} 을 만든다."""
+        out = {}
+        for k, vals in rows:
+            if vi >= len(vals) or vals[vi] is None:
+                continue
+            kk = (k if kind == "design_pin"
+                  else drop_lib(k) if kind == "lib_cell_pin" else k)
+            out[kk] = vals[vi]
+        if kind == "design_pin":
+            return out
+        res = {}
         for pin, cell in pin2cell.items():
-            v = want.get("%s/%s" % (cell, pin.rsplit("/", 1)[1]))
+            leaf = pin.rsplit("/", 1)[1]
+            v = (out.get("%s/%s" % (cell, leaf)) if kind in ("cell_pin", "lib_cell_pin")
+                 else out.get(cell))
             if v is not None:
-                caps[pin] = v
-    else:                       # cell
-        want = {}
-        for k, v in rows:
-            want[k] = v
-        for pin, cell in pin2cell.items():
-            v = want.get(cell)
-            if v is not None:
-                caps[pin] = v
+                res[pin] = v
+        return res
+
+    def score(cand):
+        """넷 전체 cap 보다 작은 비율. Cpin 이면 1 에 가깝다."""
+        ok = tot = 0
+        for idx, _net, pin in recv:
+            v = cand.get(pin)
+            nc = netcap.get(idx)
+            if v is None or not nc:
+                continue
+            try:
+                fv = float(v)
+            except ValueError:
+                continue
+            tot += 1
+            if 0 < fv < nc:
+                ok += 1
+        return (float(ok) / tot) if tot else 0.0
+
+    if col:
+        vi = col - 2                      # 이름 열이 1 이므로 값 열은 2부터
+        if vi < 0:
+            vi = 0
+        caps = expand(vi)
+        note.append("값 열 : %d번째 (직접 지정)" % (vi + 2))
+    else:
+        cands = []
+        for vi in range(ncol):
+            c = expand(vi)
+            if c:
+                cands.append((score(c), -vi, vi, c))
+        if not cands:
+            return {}, kind, note + ["숫자 열을 하나도 못 읽었습니다."]
+        cands.sort(reverse=True)
+        sc, _, vi, caps = cands[0]
+        if ncol > 1:
+            note.append("값 열 : %d번째 (자동 선택, 넷 전체 cap 보다 작은 비율 %.0f%%)"
+                        % (vi + 2, sc * 100))
+            for s2, _n, v2, _c in sorted(cands, key=lambda x: x[2]):
+                if v2 != vi:
+                    note.append("    %d번째 열은 %.0f%% -- 안 씀" % (v2 + 2, s2 * 100))
+        if sc < 0.5:
+            note.append("어느 열도 Cpin 처럼 보이지 않습니다(제일 나은 것이 %.0f%%)." % (sc * 100))
+            note.append("  wire cap 만 있는 표일 수 있습니다. 핀 cap 을 받아야 합니다.")
+    if kind == "cell":
         note.append("셀 단위 값이라 **한 셀의 모든 핀에 같은 값**이 들어갑니다.")
         note.append("  한 셀 안에서도 핀마다 Cpin 이 다릅니다. BoomCoreV3 로 재 보니")
         note.append("  80%는 그대로였지만 상위 10%가 1.6%, 최악은 146% 어긋났습니다.")
         note.append("  (FF 의 CLK 핀처럼 유독 큰 핀이 평균에 묻히면 크게 틀립니다)")
         note.append("  핀별 값을 받을 수 있으면 그쪽이 정확합니다. 1열을")
         note.append("  'inst/pin' 이나 'cell/pin' 으로 주시면 그대로 씁니다.")
+
     return caps, kind, note
 
 
