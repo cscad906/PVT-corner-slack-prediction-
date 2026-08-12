@@ -453,6 +453,10 @@ def expand(p: dict) -> "list[dict]":
                 base["adaptive_grid"] = b["adaptive_grid"]
             if b.get("weighting") == "local":
                 assert b.get("bandwidth"), "base.weighting: local 이면 base.bandwidth 필요"
+            # bandwidth 는 weighting 과 무관하게 넘긴다 -- run.sh base 의 weighting
+            # 비교표가 local 도 재려면 대역폭이 있어야 하는데, local 일 때만 넘기면
+            # local 은 영영 표에서 빠진다.
+            if b.get("bandwidth"):
                 base["bandwidth"] = b["bandwidth"]
 
             models.append({
@@ -712,8 +716,6 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (정답 없어 건너뜀: {skipped})")
-
-
 def _trainer(m: dict):
     if m["task"] == "slew":
         from si_model.tasks.slew.train_slew import Trainer

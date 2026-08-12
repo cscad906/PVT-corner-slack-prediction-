@@ -241,6 +241,32 @@ def test_merge_flags_a_summary_older_than_its_checkpoint(project, tmp_path, caps
     assert "오래됨" in capsys.readouterr().out
 
 
+def test_adaptive_downgrades_to_plain_on_a_grid_too_small_for_it(project):
+    """adaptive 는 이웃 adaptive_k 개로 대역폭을 고른다. seen 코너가 그보다 많지
+    않으면 이웃 = 전체가 되어 후보들이 같은 데이터로 채점되고, 승자는 잡음이다.
+
+    실측(14nm, 125C: seen 6 / adaptive_k 6): adaptive 3.151 ps vs plain 2.148 ps.
+    코너 수만 보고 정하므로 라벨을 읽기 전에 결정된다."""
+    import numpy as np
+
+    from si_model.training.loo import Split, _effective_mode
+
+    cfg = expand(project)[0]["cfg"]
+    cfg["base"]["weighting"] = "adaptive"
+    cfg["base"]["adaptive_k"] = 6
+
+    def split_with(n_seen):
+        C = n_seen + 2
+        seen = np.zeros(C, bool); seen[:n_seen] = True
+        return Split([f"c{i}" for i in range(C)], np.zeros((C, 2)), seen, ~seen, 0)
+
+    assert _effective_mode(cfg, split_with(6)) == "plain"     # 6 <= 6
+    assert _effective_mode(cfg, split_with(10)) == "adaptive"  # 10 > 6
+    # 명시적으로 고른 모드는 건드리지 않는다
+    cfg["base"]["weighting"] = "plain"
+    assert _effective_mode(cfg, split_with(10)) == "plain"
+
+
 def test_mode_switches_every_path_at_once(project):
     """`mode` 한 줄이 읽을 폴더와 쓸 폴더를 전부 갈라야 한다.
 
