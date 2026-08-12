@@ -191,8 +191,9 @@ python3 2c_merge.py    --dir $D      # -> <코너>_fixed_annotated.txt
 
 단위: `Dist` = µm, `Res` = Ω, `Cpin` = pF.
 
-> 한 번에 하고 싶으면 `python3 2_annotate.py --dir $D` 로 2a+2b+2c 를 대신할 수
-> 있습니다. 나눠 놓은 이유는 어디서 틀어졌는지 보기 위해서입니다.
+> 코너 전부를 한 번에 하려면 `python3 4_all_corners.py --root <round2> --phase 1`
+> 로 2a+2b+2c+5a 를 대신할 수 있습니다. 단계를 나눠 놓은 이유는 어디서 틀어졌는지
+> 보기 위해서입니다.
 
 ---
 

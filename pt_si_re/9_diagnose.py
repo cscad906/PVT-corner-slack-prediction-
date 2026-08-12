@@ -4,7 +4,8 @@
 
     python3 9_diagnose.py --dir ./work
 
-2_annotate.py 결과에 N/A 가 있을 때 돌린다. SPEF 를 한 번 훑어 실패한 넷마다
+2c_merge.py 가 [Dist/Res] N/A 를 알려줬을 때, **넷 단위로 더 잘게** 보고 싶으면
+돌린다. 2c 는 'SPEF 쪽이 비었다' 까지만 말해 주고, 여기서 A/B/C 로 나눈다. SPEF 를 한 번 훑어 실패한 넷마다
 아래 중 어디서 막혔는지 판정하고, 원인별 개수와 조치를 출력한다.
 
   원인 A  넷이 SPEF 에 아예 없다

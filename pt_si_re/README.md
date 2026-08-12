@@ -14,6 +14,26 @@ crosstalk 을 붙여 학습 입력 두 개를 만든다.
 
 ---
 
+## 역할이 나뉜다 — 이게 제일 중요하다
+
+| | 누가 | 무엇을 |
+|---|---|---|
+| **PT** | **담당자분(현장 PT 엔지니어)** | 우리가 드린 tcl 을 pt_shell 에서 `source` |
+| **파이썬** | **우리** | 받은 결과를 **현장 서버에서** 후처리 |
+
+**우리는 pt_shell 을 직접 만지지 않는다.** 담당자분께 드리는 것은 tcl 두 개뿐이다.
+
+```
+pt/xtalk_all.tcl        setup 용
+pt/xtalk_all_hold.tcl   hold 용   (DELAY_TYPE 한 줄만 다르다)
+```
+
+그리고 `1_union.py` 가 만들어 주는 `fixed_paths.tcl` 을 같이 드린다.
+
+파이썬은 **현장 서버에서** 돌린다. 연구실로 가져와서 돌리는 것이 아니다.
+
+---
+
 ## 준비 — 파이썬 정하기 (한 번)
 
 ```bash
@@ -47,25 +67,24 @@ python 0_check.py
            다음 단계:  /usr/synopsys/pt/.../python3 2b_distres.py --dir round2/TT_0p6V_25C
   ```
 
-
-**터미널을 두 개 띄운다.** 하나는 pt_shell, 하나는 셸. 파이썬 터미널은
-라이선스를 안 먹으므로 PT 는 켜 둔 채로 왔다 갔다 한다.
-
 ---
 
 ## 전체 흐름
 
+**PT 는 총 3번**이다. 다만 2회차와 3회차(crosstalk)는 **같은 pt_shell 세션에서
+이어서** 할 수 있으므로, 담당자분이 세션을 여시는 것은 **2번**이면 된다.
+
 ```
-[PT]  1회차   코너마다 report_timing        -> round1/corners/<코너>.rpt
-[셸]  union   합쳐서 측정할 경로 결정        -> fixed_paths.tcl
-[PT]  2회차   그 경로를 코너마다 재측정      -> round2/<코너>/
-[셸]  묶음 1  Dist/Res/Cpin + crosstalk 준비
-[PT]  crosstalk  계산 + 도착시각/slew 를 한 번에  (xtalk_all.tcl)
-[셸]  묶음 2  쌍 정리 + 14열 리포트 완성
+[PT 1회차]  코너마다 report_timing                 -> round1/corners/<코너>.rpt
+[우리]      union — 측정할 경로 결정               -> fixed_paths.tcl
+[PT 2회차]  source fixed_paths.tcl                 -> <코너>.rpt
+[PT   이어서] source xtalk_all.tcl                 -> <db이름>/xtalk/  (4개)
+[우리]      받은 것 검사 -> 후처리 -> 최종 2종
 ```
 
-**터미널 왕복은 코너가 몇 개든 6번**이다. 각 단계가 끝날 때 다음에 칠 명령이
-화면에 그대로 찍히니 외울 필요는 없다.
+`fixed_paths.tcl` 과 `xtalk_all.tcl` 사이에 파이썬이 끼지 않는다. 예전에는
+넷 목록을 파이썬으로 만들어 넘겨야 해서 중간에 한 번 나왔어야 했는데, 지금은
+`xtalk_all.tcl` 이 리포트를 읽어 **자기가 직접** 목록을 만든다.
 
 ---
 
@@ -92,9 +111,13 @@ redirect -file round1/corners/TT_0p6V_25C.rpt {
 **hidden 코너는 이 폴더에 넣지 않는다.** 경로 선정에서 빠질 뿐, 2회차에서는
 측정한다. 따로 제외 옵션은 필요 없다.
 
+> 리포트가 너무 커서 union 이 버거우면 `0_trim.py --dir <폴더> --keep N` 으로
+> 코너마다 나쁜 것 N개만 남긴 사본을 만들 수 있다. 다만 **코너별로 자르는
+> 것**이라 아래 `--per-corner-max` 와 같은 편향이 생긴다.
+
 ---
 
-## union — 측정할 경로 결정 (셸)
+## union — 측정할 경로 결정 (우리)
 
 ```bash
 python3 1_union.py --dir round1/corners
@@ -135,6 +158,9 @@ python3 1_union.py --dir round1/corners --slack-max -0.2815
 보통은 **(1)** 이 편하다. 위 표에서 문턱값을 읽어 옮겨 적을 필요가 없다.
 둘을 같이 주면 둘 다 적용된다(문턱값으로 거른 뒤 개수로 자른다).
 
+리포트가 크면 `-j`(`--jobs`) 로 코너를 동시에 읽을 수 있다. **결과는 몇을 주든
+완전히 같다** — 시간과 메모리만 바뀐다.
+
 ### 자르는 시점 — 합친 뒤 vs 합치기 전
 
 | 옵션 | 언제 자르나 |
@@ -166,87 +192,145 @@ python3 1_union.py --dir round1/corners --slack-max -0.2815
 |---|---|
 | `union_summary.txt` | **vi 로 읽는 용도.** 경로별로 어느 코너에서 몇 ns 였는지 |
 | `union_paths.tsv` | 같은 내용 TSV |
-| `fixed_paths.tcl` | **2회차에서 PT 가 읽을 파일** |
+| `fixed_paths.tcl` | **담당자분께 드릴 파일** |
 
 자세한 설명은 `UNION_설명.md`.
 
 ---
 
-## 2회차 — 코너마다 재측정 (PT)
+## 2회차 + crosstalk — 담당자분께 드리는 부분 (PT)
 
-`example/02_round2_all.tcl` 위쪽의 **코너 목록만** 자기 것으로 바꾼다.
-`00_setup.tcl` 은 필요 없다 — 이 파일이 코너마다 알아서 로드한다.
+드리는 파일은 세 개뿐이다.
+
+```
+fixed_paths.tcl         union 이 만든 것 (경로 목록)
+pt/xtalk_all.tcl        setup
+pt/xtalk_all_hold.tcl   hold
+```
+
+담당자분은 **코너(db)를 로드한 뒤, 같은 세션에서 이어서** 두 줄을 치신다.
 
 ```tcl
-### 코너 목록 -- 적는 곳은 여기뿐 ###
-set CORNERS {}
-lappend CORNERS [list TT_0p6V_25C  "$L/TT_0p6V_25C_op_cond_all.db"  "$S/core_25.spef"]
-lappend CORNERS [list TT_0p7V_25C  "$L/TT_0p7V_25C_op_cond_all.db"  "$S/core_25.spef"]
-lappend CORNERS [list TT_0p6V_125C "$L/TT_0p6V_125C_op_cond_all.db" "$S/core_125.spef"]
-
-### 디자인 -- 코너와 무관 ###
-set CI_TOP     "MyCore"
-set CI_VERILOG "$S/core_icc2.v"
-set CI_SDC     "$S/core.sdc"
-
-### 어디서 읽고 어디에 쓸지 ###
-set FIXED  "/data/results/round1/corners/fixed_paths.tcl"
-set OUTTOP "/data/results/round2"
+pt_shell> source <경로>/fixed_paths.tcl
+pt_shell> source <경로>/xtalk_all.tcl        ;# hold 면 xtalk_all_hold.tcl
 ```
 
-| 칸 | 뜻 |
-|---|---|
-| 코너이름 | 폴더 이름이자 산출물 파일 이름. **db 이름과 맞추는 게 안전** |
-| db | **이것이 코너를 결정한다** (전압/온도/공정) |
-| spef | 배선 RC. **온도만** 맞추면 된다 (전압/공정과 무관) |
+### `xtalk_all.tcl` 이 리포트를 스스로 찾는다 — cd 가 필요 없다
+
+찾는 순서는 이렇다.
+
+1. 파일 맨 위 `RPT_FILE` 에 박아 둔 경로 (비어 있으면 넘어감)
+2. **같은 세션의 `OUT` 변수** — `fixed_paths.tcl` 이 남겨 둔 것. 보통 여기서 잡힌다
+3. 지금 폴더의 `*.rpt` 중 **첫 줄이 `### FIXED_PATH` 로 시작**하는 것
+
+셋 다 실패하면 `E-NORPTFILE` 로 멈춘다. 위처럼 두 줄을 이어서 치면 2번에서
+잡히므로 `cd` 할 일이 없다.
+
+### 결과가 어디에 쌓이나 — 로드된 db 이름으로 갈린다
+
+`xtalk_all.tcl` 은 `link_path` 에서 db 이름을 뽑아 그 이름으로 폴더를 만든다.
 
 ```
-pt_shell> source example/02_round2_all.tcl
+<db이름>/xtalk/          setup
+<db이름>_hold/xtalk/     hold
 ```
 
-코너당 30초(로드) + 30초(측정). 코너 폴더마다 네 개가 생긴다.
+**같은 자리에서 코너를 여러 개 돌려도 서로 안 덮어쓴다.** 화면 마지막이
+`[ OK-XTALK ]` 이면 정상이다.
 
-```
-<코너>.rpt          합집합 경로를 이 코너에서 측정한 것
-pin_attr.txt        Cpin, arrival, slew
-net_attr.txt        crosstalk delta, aggressor, coupling cap
-corner_info.tcl     ★ 무슨 db/spef 로 만들었는지 기록
-```
+> `fixed_paths.tcl` 쪽은 사정이 다르다. 리포트 이름을 `set CORNER [file tail [pwd]]`
+> 로 **지금 폴더 이름**에서 가져온다. 그래서 코너마다 이름이 갈리려면
+> 코너별 폴더에서 돌리시거나, `fixed_paths.tcl` 맨 위 `set CORNER` 한 줄을
+> 코너 이름으로 고치셔야 한다. 화면에 `이번 코너 : <이름> -> <이름>.rpt` 가
+> 찍히니 거기서 확인할 수 있다.
 
-### `corner_info.tcl` 이 왜 중요한가
-
-crosstalk 단계는 **나중에 따로 돈다.** 그때 이 폴더가 어느 db 로 만들어졌는지
-알아야 같은 db 로 다시 로드할 수 있다. 없으면 처음 로드된 db 하나로 모든 코너를
-계산해 버린다 — **값은 나오고 화면엔 `OK` 로 뜬다.** 그래서 없으면 아예
-건너뛰도록 해 두었다.
-
-### 한 코너만 다시 볼 때
-
-`example/02_round2.tcl` 은 코너 하나짜리다. 위쪽 세 줄(`CORNER` / `CI_DB` /
-`CI_SPEF`)만 바꿔 쓴다.
+담당자분께 그대로 보내 드릴 한 장은 `담당자요청.md` 다.
 
 ---
 
-## 값 붙이기 — 묶음 1/2 (셸 ↔ PT)
+## 받는 것 — 코너마다 이 네 덩어리
 
-파이썬이 PT 를 부를 수 없어서 두 토막으로 나뉜다. `--phase` 가 그 번호다.
-**중간에 PT 를 한 번만 다녀오면 된다.**
+| | 무엇 |
+|---|---|
+| `<코너>.rpt` | `fixed_paths.tcl` 산출물 |
+| `xtalk/` | 파일 4개 — `unique_contexts.tsv`, `context_raw.rpt`, `victim_windows.tsv`, `aggressor_windows.tsv` |
+| **Cpin 표** | 담당자분이 PT 로 뽑아 주신 2열 이상 표 (예: `핀이름  pin_cap  wire_cap`, 띄어쓰기 구분, 헤더 없음) |
+| SPEF | 현장에 이미 있다 |
+
+### Cpin 은 코너마다 다르다 — 한 표를 돌려 쓰면 안 된다
+
+0.6V 와 0.8V 를 실측해 보면 **중앙값 5.95%, 최대 8.27%** 차이가 난다.
+788개 중 값이 같은 것은 **176개뿐**이다. 코너별로 받아서 각 폴더에 두는 것이 맞다.
+
+---
+
+## 폴더를 이렇게 둔다
+
+```
+round2/<코너>/<코너>.rpt
+round2/<코너>/cpin_map.txt      <- 받은 Cpin 표를 이 이름으로
+round2/<코너>/xtalk/            <- 받은 4개
+```
+
+`cpin_map.txt` 라는 **이름은 우리가 정한 규약**이다. 이 이름으로 만들어 주는
+코드는 없다 — 받은 파일을 그 이름으로 두면 배치가 알아서 집는다는 뜻이다
+(SPEF 의 `design.spef` 와 같은 방식).
+
+코너마다 SPEF 가 다르면 코너 폴더에 `design.spef` 로 둔다. 그러면 `--spef` 보다
+그쪽이 우선한다.
+
+---
+
+## 우리가 돌리는 것 — 네 줄
 
 ```bash
-# 셸
-python3 4_all_corners.py --root /data/results/round2 --spef /data/spef/core_25.spef --phase 1
+python3 6_check_xtalk.py --root round2                          # 받은 것 검사
+python3 4_all_corners.py --root round2 --phase 1 --spef <SPEF>  # 2a 2b 2c 5a
+python3 4_all_corners.py --root round2 --phase 2                # 5b 5c
+python3 7_collect.py     --root round2 --out deliver --mode setup
 ```
-```
-pt_shell> source /data/results/round2/run_pt_xtalk.tcl
-```
+
+hold 는 **작업 폴더를 따로 두고** 같은 네 줄에 `--mode hold` 를 붙인다
+(`4_all_corners.py` 와 `7_collect.py` 에). `6_check_xtalk.py` 는 setup/hold 를
+PT 원문에서 자동 판별하므로 붙일 필요가 없다.
+
+### 6 — 받은 것 검사 (먼저 한다)
+
 ```bash
-python3 4_all_corners.py --root /data/results/round2 --phase 2
+python3 6_check_xtalk.py --root round2
 ```
 
-`run_pt_xtalk.tcl` 은 **`4_all_corners.py --phase 1` 이 절대경로로 만들어 준다.**
-고칠 것이 없고, 화면에 경로가 찍히니 복사만 하면 된다.
+받은 폴더 아래에서 이름이 `xtalk` 인 폴더를 **전부** 찾아 한 번에 본다.
+setup 과 hold 가 섞여 있어도 알아서 갈라 본다. **읽기만 하고 아무것도 안 고친다.**
 
-### 묶음마다 이 표가 나온다
+코너마다 보는 것:
+
+- 파일 4개가 다 있고 비어 있지 않은가
+- **어느 전압으로 계산됐는가** (PT 원문에 찍힌 VDD)
+- **setup 인가 hold 인가** (원문의 `Annotated max/min`)
+- crosstalk 이 실제로 잡혔는가 (delta 가 0 이 아닌 넷 수)
+- victim/aggressor 도착시각이 채워졌는가
+
+그리고 코너끼리 비교한다. **같은 분석 안에서 전압이 코너마다 다른가** — 같으면
+코너를 바꿔 놓고 db 를 안 갈아 끼운 것이다. 화면에는 정상으로 뜨고 값만 틀리는
+경우라 제일 잡기 어렵다. 이 검사가 그것을 잡으라고 있는 것이다.
+
+### 4 — 코너 전부 후처리
+
+```bash
+python3 4_all_corners.py --root round2 --phase 1 --spef <SPEF>
+python3 4_all_corners.py --root round2 --phase 2
+```
+
+`--phase 1` 이 `2a → 2b → 2c → 5a`, `--phase 2` 가 `5b → 5c` 다.
+(묶음이 나뉘어 있는 것은 원래 그 사이에 PT 가 끼던 흔적이다. 지금은 crosstalk
+계산이 현장에서 이미 끝나 있으므로 **두 줄을 연달아 치면 된다.**)
+
+> `--phase 1` 이 끝나면 화면 끝에 `run_pt_xtalk.tcl 을 source 하세요` 라는
+> 안내가 나온다. 그건 **우리가 PT 까지 직접 돌릴 때**(`dev/`) 쓰는 길이다.
+> 현장에서 `xtalk/` 를 받아 온 경우에는 무시하고 바로 `--phase 2` 로 간다.
+
+묶음마다 이 표가 나온다.
 
 ```
   코너                      2a cpin       2b distres    2c merge      5a contexts
@@ -263,67 +347,148 @@ python3 4_all_corners.py --root /data/results/round2 --phase 2
 | 옵션 | 언제 |
 |---|---|
 | `--spef <파일>` | 코너들이 같은 SPEF 를 쓸 때. 폴더에 `design.spef` 가 있으면 그쪽 우선 |
+| `--cpin-map <파일>` | 코너들이 같은 Cpin 표를 쓸 때. 폴더에 `cpin_map.txt` 가 있으면 그쪽 우선. **코너별로 받았으면 폴더에 두는 쪽이 맞다** |
 | `--skip-done` | **중간에 끊겼을 때.** 이미 만든 단계는 건너뛴다 |
 | `--quiet` | 화면을 숨기고 결과 표만 |
 | `--only 2a,2b` | 그 묶음 안에서 일부만 |
 | `--mode hold` | hold 데이터를 만들 때 (5b 에 전달) |
 
-### 5a / 5b / 5c 가 하는 일
+### 7 — 넘길 형태로 모으기
 
-crosstalk 14열을 만드는 세 조각이다. 중간에 PT 를 한 번 다녀와야 해서 5a 와 5b
-사이가 끊긴다.
+```bash
+python3 7_collect.py --root round2 --out deliver --mode setup
+```
+
+작업 폴더에는 중간 파일(`cpin.tsv`, `distres.tsv`, `xtalk/...`)이 잔뜩 남는데,
+넘길 때 필요한 것은 두 종류뿐이다. 그것만 아래 형태로 모은다.
+**원본은 건드리지 않고 복사만 한다**(`--move` 를 주면 옮긴다).
+
+```
+deliver/setup/report.<코너>_fixed_annotated.rpt
+deliver/setup/xtalk/xt.<코너>.path_context_si_compact.by_path.rpt
+deliver/hold/   (같은 구조. --mode hold 로 한 번 더)
+```
+
+파일 이름의 코너는 **코너 폴더 이름**을 그대로 쓴다. 모아 놓고 보면 어느 코너인지가
+이름뿐이라 여기서 통일해 둔다.
+
+---
+
+## Cpin 표 — 2a 가 알아서 판별한다
+
+담당자분마다 뽑아 주시는 표 모양이 다르다. `2a_cpin.py` 는 **1열이 뭔지**와
+**어느 열이 Cpin 인지**를 리포트와 대조해 스스로 정한다.
+
+### 1열 판별
+
+| 1열이 이것이면 | 예 | 어떻게 |
+|---|---|---|
+| 설계 핀 (`inst/pin`) | `U123/A` | 그대로 쓴다 |
+| 셀의 핀 (`cell/pin`) | `gt3_6t_and2_x1_rvt/A` | 리포트로 펼쳐 쓴다 |
+| lib 핀 (`lib/cell/pin`) | `op_cond_all/..._x1_rvt/A` | 앞을 떼고 펼쳐 쓴다 |
+| **셀 이름만** | `gt3_6t_and2_x1_rvt` | **멈춘다** |
+| **넷 이름** | `ZCTSNET_4157` | **멈춘다** |
+
+뒤의 둘에서 멈추는 것은 **핀 구분이 없어 조용히 틀린 값이 들어가기** 때문이다.
+Cpin 은 핀마다 다르다. 실측하면 80%는 그대로였지만 상위 10%가 1.6%, 최악은
+146% 틀렸다.
+
+앞의 셋은 셋 다 **byte 단위로 같은** `cpin.tsv` 가 나온다 (BoomCoreV3 로 확인).
+
+### 값 열 판별
+
+`pin_cap` 과 `wire_cap` 이 같이 있어도, 순서가 어느 쪽이어도 된다.
+리포트의 `(net)` 줄에 그 넷의 **전체** cap 이 찍혀 있는데, Cpin 은 리시버
+하나 몫이라 그보다 작아야 한다. 열마다 그 비율을 재서 제일 높은 열을 쓴다.
+
+```
+  값 열 : 2번째 (자동 선택, 넷 전체 cap 보다 작은 비율 100%)
+      3번째 열은 12% -- 안 씀
+```
+
+먼저 앞 300개만 보고, 열이 확연히 안 갈리면 전체로 다시 센다.
+직접 정하려면 `--cpin-col N` (이름 열이 1).
+
+### 담당자분께 부탁드릴 PT 명령
+
+```tcl
+# (가) 설계 핀 -- 제일 정확. 핀 수만큼 나온다
+foreach_in_collection p [get_pins -hierarchical *] {
+    puts "[get_object_name $p]\t[get_attribute -quiet $p pin_capacitance_max]"
+}
+
+# (나) 라이브러리 핀 -- 훨씬 작다(셀 종류 수). 값은 (가)와 같다
+foreach_in_collection p [get_lib_pins *] {
+    puts "[get_object_name $p]\t[get_attribute -quiet $p pin_capacitance]"
+}
+```
+
+lib_pin 에서는 attribute 이름이 `pin_capacitance` 다. `capacitance` 나
+`pin_capacitance_max` 는 빈 값으로 나온다(실측).
+
+---
+
+## crosstalk 과 annotation 은 서로 독립이다
+
+한쪽이 막혀도 다른 쪽은 나온다. 기다릴 필요가 없다.
+
+| | 쓰는 입력 | 안 쓰는 것 |
+|---|---|---|
+| **annotation** (2a/2b/2c) | `<코너>.rpt` + Cpin 표 + SPEF | `xtalk/` 를 안 본다 |
+| **crosstalk** (5a/5b/5c) | `<코너>.rpt` + `xtalk/` 4개 | Dist/Res/Cpin 을 안 쓴다 |
+
+crosstalk 쪽은 annotated 파일이 있으면 그것을 쓰지만 없으면 원본 `.rpt` 로도
+같은 결과가 나온다(byte 동일 확인). 그래서 SPEF 가 아직 없거나 `2b` 가 오래
+걸릴 때 crosstalk 을 먼저 돌려도 된다.
+
+```bash
+# annotation 만 (PT 결과의 xtalk/ 가 아직 없어도 된다)
+python3 4_all_corners.py --root round2 --spef <SPEF> --phase 1 --only 2a,2b,2c
+
+# crosstalk 만 (SPEF 도 Cpin 표도 필요 없다)
+python3 4_all_corners.py --root round2 --phase 1 --only 5a
+python3 4_all_corners.py --root round2 --phase 2
+```
+
+---
+
+## 5a / 5b / 5c 가 하는 일
+
+crosstalk 14열을 만드는 세 조각이다.
 
 | | 하는 일 | 나오는 것 |
 |---|---|---|
-| **5a** | 리포트를 읽어 **PT 에 뭘 물어볼지** 목록을 만든다. 같은 넷이 여러 경로에 나오므로 중복을 뺀다 | `xtalk/unique_contexts.tsv`, `xtalk/path_victim_nets.tsv` |
-| PT (`xtalk_all.tcl`) | 그 넷마다 `report_delay_calculation -crosstalk`, **이어서** 거기서 긁은 aggressor 의 도착시각·slew 까지 | `xtalk/context_raw.rpt`, `xtalk/*_windows.tsv` |
+| **5a** | 리포트를 읽어 경로별 victim 넷 목록과 **PT 에 물어볼 넷 목록**을 만든다. 같은 넷이 여러 경로에 나오므로 중복을 뺀다 | `xtalk/path_victim_nets.tsv`, `xtalk/unique_contexts.tsv` |
+| PT (`xtalk_all.tcl`) | **현장에서 이미 끝나 있다.** 그 넷마다 `report_delay_calculation -crosstalk`, **이어서** 거기서 긁은 aggressor 의 도착시각·slew 까지 | `xtalk/context_raw.rpt`, `xtalk/*_windows.tsv` |
 | **5b** | PT 출력을 파싱해 **victim–aggressor 쌍**으로 만든다 | `xtalk/active_features.tsv` |
 | **5c** | 위를 합쳐 14열로 쓴다 | `<코너>.path_context_si_compact.by_path.rpt` ★ |
+
+받아 온 폴더에 `unique_contexts.tsv` 가 이미 들어 있는데도 5a 를 다시 도는 이유는
+**`path_victim_nets.tsv` 때문**이다. 5c 가 그것을 쓰는데 담당자분 쪽 산출물에는
+없다(PT 는 필요가 없어서 안 만든다). 같은 리포트에서 만드는 것이라 결과는 같다.
 
 실제 숫자(294경로 기준): victim 넷 줄 8,930 → 물어볼 넷 **788개**(중복 제거) →
 쌍 **13,947줄**.
 
 **PT 안에서 무슨 일이 일어나나**
 
-- `report_attribute`(2회차에서 이미 뽑음)로는 **합계**만 나온다.
-  "이 넷에 aggressor 151개, coupling cap 합은 얼마".
+- `report_attribute` 로는 **합계**만 나온다. "이 넷에 aggressor 151개, coupling cap
+  합은 얼마".
 - 14열은 **하나하나**를 요구한다. "그중 `gre_a_INV_857_152` 가 0.023240 밀었고,
   걔 coupling cap 은 0.315fF". 이건 `report_delay_calculation -crosstalk` 만 안다.
 - 그런데 그 aggressor 가 **언제 스위칭하는지**는 안 알려준다. crosstalk 은 victim 과
   aggressor 가 같은 시점에 움직여야 실제 영향이 있으므로 그게 필요하다. aggressor 는
-  우리 경로 밖의 남의 넷이라 `pin_attr.txt` 에 없다.
+  우리 경로 밖의 남의 넷이라 리포트에 없다.
 - 그래서 예전에는 PT 1차(계산) → 파이썬(aggressor 이름 추출) → PT 2차(도착시각)
-  로 **PT 를 두 번** 다녀왔다. 지금은 `xtalk_all.tcl` 이 **자기가 방금 받은 출력에서
-  aggressor 이름을 직접 긁어** 이어서 처리하므로 **한 번이면 된다.**
+  로 **PT 를 두 번** 다녀와야 했다. 지금은 `xtalk_all.tcl` 이 **자기가 방금 받은
+  출력에서 aggressor 이름을 직접 긁어** 이어서 처리하므로 **한 번이면 된다.**
+  담당자분이 세션을 두 번만 여시면 되는 것이 이 덕이다.
 
 ---
 
 ## 한 단계씩 / 일부만 돌리기
 
 `--only` 로 그 묶음 안에서 원하는 단계만 돌린다. 이름은 `2a` `2b` `2c` `5a` `5b` `5c`.
-
-### annotation 만
-
-```bash
-python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2a,2b,2c
-```
-```
-생긴 파일:  cpin.tsv  distres.tsv  <코너>_fixed_annotated.txt
-```
-
-crosstalk 준비를 건너뛰고 **annotation 만** 나온다. PT 를 더 안 가도 된다.
-
-### crosstalk 만
-
-```bash
-python3 4_all_corners.py --root <round2> --phase 1 --only 5a
-```
-
-**SPEF 도 `annotated` 도 필요 없다.** crosstalk 14열은 Dist/Res/Cpin 을 쓰지
-않으므로 2회차 `.rpt` 만 있으면 된다. SPEF 가 아직 없거나 `2b` 가 오래 걸릴 때
-이쪽을 먼저 돌려도 된다.
-
-### 한 단계씩
 
 ```bash
 python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2a
@@ -333,14 +498,14 @@ python3 4_all_corners.py --root <round2>                --phase 1 --only 5a
 ```
 
 순서는 지켜야 한다. `2c` 는 `2a`/`2b` 결과를 합치는 것이고, `5b`/`5c` 는
-PT(`xtalk_all.tcl`)를 거쳐야 한다.
+`xtalk/context_raw.rpt` (담당자분 산출물)가 있어야 한다.
 
 ```
 2a ──┐
      ├──> 2c ──> <코너>_fixed_annotated.txt
 2b ──┘
 
-5a ──> [PT: xtalk_all.tcl] ──> 5b ──> 5c ──> 14열 리포트
+5a ──> [받은 xtalk/] ──> 5b ──> 5c ──> 14열 리포트
 ```
 
 ### 중간에 끊겼을 때
@@ -352,8 +517,6 @@ python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --skip-done
 이미 만들어진 단계는 `SKIP` 으로 건너뛰고 안 된 것만 이어서 한다.
 코너 17개 중 12개에서 끊겨도 처음부터 다시 할 필요가 없다.
 
----
-
 ### 코너 하나만 손으로
 
 `4_all_corners.py` 는 아래를 대신 쳐줄 뿐이다. 결과 파일은 바이트 단위로 같다.
@@ -361,28 +524,17 @@ python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --skip-done
 
 ```bash
 D=<round2>/<코너>
-python3 2a_cpin.py     --dir $D                    # -> cpin.tsv       1초
-python3 2b_distres.py  --dir $D --spef <SPEF>      # -> distres.tsv    SPEF 크기에 따라
-python3 2c_merge.py    --dir $D                    # -> <코너>_fixed_annotated.txt ★
-python3 5a_contexts.py --dir $D                    # -> 물어볼 넷 목록
-```
-```
-pt_shell> cd $D
-pt_shell> set XT_DIR "xtalk"                       ;# 결과를 $D/xtalk/ 에 바로
-pt_shell> source <패키지>/pt/xtalk_all.tcl         # hold 면 xtalk_all_hold.tcl
-```
-```bash
-python3 5b_pairs.py --dir $D                       # -> 쌍
-python3 5c_report.py --dir $D                      # -> <코너>.path_...by_path.rpt ★
+python3 2a_cpin.py     --dir $D --cpin-map $D/cpin_map.txt   # -> cpin.tsv     1초
+python3 2b_distres.py  --dir $D --spef <SPEF>                # -> distres.tsv  SPEF 크기에 따라
+python3 2c_merge.py    --dir $D                              # -> <코너>_fixed_annotated.txt ★
+python3 5a_contexts.py --dir $D                              # -> 물어볼 넷 목록 + 경로별 victim
+python3 5b_pairs.py    --dir $D                              # -> 쌍
+python3 5c_report.py   --dir $D                              # -> <코너>.path_...by_path.rpt ★
 ```
 
-> `XT_DIR` 을 안 주면 xtalk_all.tcl 은 **PT 에 올라온 db 이름으로** 폴더를
-> 만든다 — `$D/<db이름>/xtalk/` (hold 는 `<db이름>_hold/xtalk/`). 한 자리에서
-> 코너를 여러 개 돌려도 서로 안 덮어쓰게 하려는 것이다. 그 경우 5b/5c 에는
-> `--xtalk $D/<db이름>/xtalk` 을 같이 준다.
->
-> 화면 마지막이 `[ OK-XTALK ]` 이면 정상이다. `XT_DIR` 은 세션에 남으므로,
-> 다른 코너로 넘어가기 전에 `unset XT_DIR` 하는 것이 안전하다.
+> 받은 `xtalk` 폴더가 코너 폴더 바로 아래가 아니라 `<db이름>/xtalk` 처럼 한 겹
+> 더 들어가 있으면, 5a/5b/5c 에 `--xtalk <그 폴더 절대경로>` 를 같이 준다.
+> hold 면 5b 에 `--mode hold` 도.
 
 ---
 
@@ -436,8 +588,9 @@ aggressor_driver_slew_max  coupling_cap_ff
 |---|---|---|
 | 1회차 `report_timing` | `-delay_type max` | `-delay_type min` |
 | `1_union.py` | `--mode setup` (기본) | **`--mode hold`** |
-| `02_round2_all.tcl` | `FIXED`/`OUTTOP` 을 setup 폴더로 | hold 폴더로 |
+| 담당자분이 source 할 tcl | `pt/xtalk_all.tcl` | **`pt/xtalk_all_hold.tcl`** |
 | `4_all_corners.py` | `--mode setup` (기본) | **`--mode hold`** |
+| `7_collect.py` | `--mode setup` | **`--mode hold`** |
 
 `1_union.py --mode` 는 생성되는 `fixed_paths.tcl` 의 `set DTYPE` 을 정한다.
 이걸 안 주면 hold 리포트로 고른 경로를 **setup 으로 측정**하게 된다.
@@ -447,8 +600,12 @@ aggressor_driver_slew_max  coupling_cap_ff
   분석 : hold  (2회차는 -delay_type min 로 측정)
 ```
 
-`4_all_corners.py --mode hold` 는 `5b_pairs.py` 와 crosstalk PT 단계의
-`DELAY_TYPE` 에 전달된다.
+`xtalk_all.tcl` 은 같은 세션의 `DTYPE` 과 자기 `DELAY_TYPE` 이 다르면 화면에
+경고를 띄운다(값을 몰래 바꾸지는 않는다). setup 용 tcl 을 hold 세션에서 돌리면
+거기서 걸린다.
+
+hold 결과 폴더는 `<db이름>_hold/xtalk/` 로 갈리므로, 담당자분이 같은 자리에서
+setup 과 hold 를 연달아 돌리셔도 안 섞인다.
 
 > db/spef 는 setup/hold 와 무관하다. **같은 코너 목록을 그대로 쓰면 된다.**
 > 달라지는 것은 `-delay_type` 과 출력 폴더뿐이다.
@@ -460,17 +617,17 @@ aggressor_driver_slew_max  coupling_cap_ff
 | 바뀌는 것 | 고칠 곳 |
 |---|---|
 | 경로 선정 코너 | 1회차 `.rpt` 를 `round1/corners/` 에 넣느냐 마느냐 |
-| 측정 코너 (hidden 포함) | `02_round2_all.tcl` 의 `CORNERS` 목록 |
-| 디자인 | 같은 파일의 `CI_TOP` / `CI_VERILOG` / `CI_SDC` |
-| 경로 개수 | `1_union.py --slack-max` |
+| 측정 코너 (hidden 포함) | 담당자분이 로드하실 db 목록. 우리 쪽에 고칠 것 없음 |
+| 경로 개수 | `1_union.py --max-paths` / `--slack-max` |
 
-**파이썬 코드는 손댈 일이 없다.**
+**파이썬 코드는 손댈 일이 없다.** 코너가 몇 개든 `--root` 아래 폴더를 전부 돈다.
 
 ---
 
 ## 막혔을 때
 
-화면 마지막 블록의 **`하실 일`** 을 먼저 한다. 안 되면 `에러 코드`만 전달한다.
+화면 마지막 블록의 **`하실 일`** 을 먼저 한다. 안 되면 **`에러 코드` 하나만**
+전달하면 된다. 원격(핸드폰)으로 물어볼 때 타자를 아끼려고 이렇게 만들어 두었다.
 
 ```
 ==================================================================
@@ -482,14 +639,35 @@ aggressor_driver_slew_max  coupling_cap_ff
 ==================================================================
 ```
 
+**화면 맨 아래 코드만 물어보면 된다.** 예를 들어 `W-CPIN` 이나 `E-NORPTFILE`
+하나만 보내면 어느 단계에서 무엇이 막혔는지 정해진다. 코드 목록과 조치는
+`코드표.md` (47개), 화면 읽는 법은 `원격문의.md`.
+
 `W-` 는 파일은 나왔지만 데이터가 불완전한 경우다. **몇 퍼센트인지**가 중요하다.
 
-```bash
-# 막히면 화면 맨 아래 **코드**(예: W-CPIN)를 그대로 물어보면 된다.
-# 코드 목록과 조치는 코드표.md 에 있다.
+### N/A 가 남았을 때 — 어느 쪽인지 2c 가 갈라 준다
+
+```
+  [Cpin]      1,204줄 -- 리시버 핀이 Cpin 표에 없습니다
+  [Dist/Res]     37줄 -- SPEF 에서 못 찾았습니다
 ```
 
-전체 코드 목록은 `코드표.md` (47개), 화면 읽는 법은 `원격문의.md`.
+조치할 곳이 다르다.
+
+| | 어디를 보나 |
+|---|---|
+| `[Cpin]` | 받은 Cpin 표. 담당자분의 `get_pins` 범위가 좁았거나, 표가 다른 코너 것 |
+| `[Dist/Res]` | SPEF. 리포트와 짝이 맞는지, `*RES` 가 들어 있는지 |
+
+SPEF 쪽을 **넷 단위로 더 잘게** 보고 싶을 때만 따로 돌린다.
+
+```bash
+python3 9_diagnose.py --dir <코너폴더> --spef <SPEF>
+```
+
+원인 A(넷이 SPEF 에 없음) / B(이름 표기가 다름) / C(`*RES` 없음) / D(Cpin 만 빔)
+으로 갈라 개수와 조치를 찍는다. 2c 는 SPEF 를 다시 훑지 않아 빠르고, 9 는
+훑으므로 느리다.
 
 ### PT 쪽에서 미리 확인할 것
 
@@ -499,52 +677,55 @@ pt_shell> printvar si_enable_analysis      # false 면 crosstalk 이 전부 0
 
 SPEF 에 coupling 이 있어야 한다 (`read_parasitics -keep_capacitive_coupling`,
 StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하다.
+`xtalk_all.tcl` 도 `si_enable_analysis` 가 꺼져 있으면 화면에 경고를 띄운다.
 
 ---
 
 ## 파일 목록
 
-### 셸에서 돌리는 것
+### 우리가 셸에서 돌리는 것
 
 ```
-0_check.py         환경/입력 점검. 처음에 한 번
-1_union.py         코너 합치기 -> fixed_paths.tcl
+0_check.py         환경/입력 점검. 처음에 한 번 (파이썬 2.7 로도 돌아간다)
+0_trim.py          리포트가 너무 클 때 코너마다 worst N개만 남긴 사본
+1_union.py         코너 합치기 -> fixed_paths.tcl               ★ 담당자분께 드림
+6_check_xtalk.py   받은 crosstalk 결과 검사 (읽기만 한다)
 2a_cpin.py         Cpin        (SPEF 안 읽음, 1초)
 2b_distres.py      Dist/Res    (SPEF 읽음)
-2c_merge.py        -> <코너>_fixed_annotated.txt   ★
-2_annotate.py      2a+2b+2c 를 한 번에 (나눠 놓은 게 디버깅엔 낫다)
-5a_contexts.py     crosstalk 1단계 - 물어볼 넷 목록
-5b_pairs.py        crosstalk 2단계 - 쌍 정리  (PT 를 다녀온 뒤)
-5c_report.py       crosstalk 3단계 -> 14열 리포트   ★
-4_all_corners.py   위를 코너 전부에 (--phase 1/2)
+2c_merge.py        -> <코너>_fixed_annotated.txt                ★
+5a_contexts.py     경로별 victim 넷 + PT 에 물어볼 넷 목록
+5b_pairs.py        받은 PT 출력에서 victim-aggressor 쌍
+5c_report.py       -> 14열 리포트                                ★
+4_all_corners.py   위를 코너 전부에 (--phase 1 / 2)
+7_collect.py       최종 2종만 넘길 형태로 모으기
+9_diagnose.py      N/A 원인을 넷 단위로 분류 (필요할 때만)
 ```
 
-### pt_shell 에서 source 하는 것
+### 담당자분께 드리는 tcl — 이 두 개뿐
 
 ```
-example/00_setup.tcl        예제용 디자인 로드 (현장에선 안 씀)
-example/01_round1.tcl       1회차 예제/템플릿
-example/02_round2_all.tcl   2회차 — 코너 전부   ★ 목록을 여기서 고침
-example/02_round2.tcl       2회차 — 코너 하나
-pt/xtalk_all.tcl            crosstalk PT — 코너 하나, setup(-max)
-pt/xtalk_all_hold.tcl       같은 것의 hold(-min) 판
+pt/xtalk_all.tcl        crosstalk PT — 코너 하나, setup(-max)
+pt/xtalk_all_hold.tcl   같은 것의 hold(-min) 판
 ```
 
-**`pt/` 에는 이 두 개만 있다.** 현장 담당자에게 드릴 파일이 그 둘뿐이라
-일부러 갈라 뒀다. 그 외 tcl 은 전부 `dev/` 에 있고 **우리가 직접 돌릴 때만**
-쓴다 -- 현장에 나가지 않는다.
+여기에 `1_union.py` 가 만든 `fixed_paths.tcl` 을 같이 드린다.
+**`pt/` 에 이 두 개만 둔 것은 일부러다** — 현장에 나가는 파일이 그 둘뿐이라
+섞이지 않게 갈라 뒀다.
+
+### 우리 내부용 — 현장에 안 나간다
 
 ```
-dev/round2_one.tcl          2회차 한 코너 (example/02_round2*.tcl 이 부름)
+dev/round2_one.tcl          2회차 한 코너
 dev/load_corner.tcl         코너 하나를 PT 에 올리는 부품 (remove_design 부터)
-dev/dump_attr.tcl           pin_attr.txt / net_attr.txt 덤프 (Cpin)
-dev/all_xtalk_one.tcl       xtalk_all.tcl 을 코너 폴더 전부에 (4_all_corners.py)
+dev/dump_attr.tcl           pin_attr.txt / net_attr.txt 덤프 (Cpin 을 우리가 뽑을 때)
+dev/all_xtalk_one.tcl       xtalk_all.tcl 을 코너 폴더 전부에 (우리가 PT 를 돌릴 때)
 dev/make_hold.py            xtalk_all.tcl -> xtalk_all_hold.tcl 재생성
+example/*.tcl               예제용 (BoomCoreV3 로 전 과정을 우리가 돌려 본 것)
+debug/why_dropped.py        union 에서 경로가 왜 빠졌는지
 ```
 
-`dev/` 는 **직접 열 일이 없다.** `example/*.tcl` 과 `4_all_corners.py` 가
-알아서 부른다. 다만 `xtalk_all.tcl` 을 고쳤으면 `python3 dev/make_hold.py` 로
-hold 판을 맞춰 줘야 두 파일이 어긋나지 않는다.
+`xtalk_all.tcl` 을 고쳤으면 `python3 dev/make_hold.py` 로 hold 판을 맞춰 줘야
+두 파일이 어긋나지 않는다.
 
 ### 문서
 
@@ -552,7 +733,7 @@ hold 판을 맞춰 줘야 두 파일이 어긋나지 않는다.
 README.md          이 파일. 현장 실행 안내
 담당자요청.md      PT 담당자께 드릴 한 장 (무엇을 source 하고 세션에 뭘 하는지)
 UNION_설명.md      union 이 하는 일과 결과 읽는 법
-코드표.md          에러 코드 47개 전체
+코드표.md          결과 코드 전체 목록
 원격문의.md        화면 읽는 법, 원격으로 물어볼 때
 example/README.md  BoomCoreV3 로 전 과정을 돌려 본 기록
 ```
@@ -563,4 +744,6 @@ example/README.md  BoomCoreV3 로 전 과정을 돌려 본 기록
 
 `example/README.md` 에 실제 디자인(BoomCoreV3, 3nm)으로 처음부터 끝까지 돌린
 기록이 있다. 숫자까지 그대로 적어 두었으니, 현장에서 나온 숫자와 비교해 보면
-된다.
+된다. 다만 그 기록은 **우리가 PT 까지 직접 돌리던 때**의 것이라, 2회차와
+crosstalk 을 우리가 `example/*.tcl` 로 도는 형태로 적혀 있다. 숫자와 파일 형식은
+그대로 유효하고, 누가 PT 를 치느냐만 지금과 다르다.
