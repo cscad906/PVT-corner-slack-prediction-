@@ -85,7 +85,7 @@ class Trainer:
 
     def _prep_base(self):
         sp = self.split
-        self.phi, self.coords, _, _ = build_design(self.cfg, sp)
+        self.phi, self.coords, _, _ = build_design(self.cfg, sp, y=self.ds["slew"])
         base, picks = fit_field(self.ds["slew"], self.phi, sp, self.coords, self.cfg)
         self.base_hat = base                                    # [N,C] ns (LOO/all-seen)
         if picks:
