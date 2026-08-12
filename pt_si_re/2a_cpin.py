@@ -93,13 +93,18 @@ def load_pin_to_cell(rpt):
     return out
 
 
-def read_two_column(path):
-    """1열 이름 / 2열 숫자. 구분자는 탭, 쉼표, 공백 아무거나.
+def read_two_column(path, col=None):
+    """1열 이름 / 나머지 열 중 숫자. 구분자는 탭, 쉼표, 콜론, 공백 아무거나.
 
-    주석(#), 빈 줄, 헤더(2열이 숫자가 아닌 첫 줄)는 건너뛴다.
+    col 을 주면 **그 열**(1부터 센다, 이름 열이 1)을 값으로 쓴다.
+    안 주면 이름 뒤의 **첫 숫자 열**을 쓴다.
+
+    pin cap 과 wire cap 이 같이 있는 표처럼 숫자 열이 여러 개면 col 로 고른다.
+    주석(#), 빈 줄, 헤더(숫자가 없는 줄)는 건너뛴다.
     값에 단위가 붙어 있으면(0.0012pF) 숫자 부분만 취한다.
     """
     rows = []
+    ncol_seen = 0
     with open(path, "r", errors="ignore") as f:
         for raw in f:
             line = raw.strip()
@@ -120,25 +125,38 @@ def read_two_column(path):
             #   foreach p [get_pins *] { puts "$p [get_attribute $p ...]" }
             # 그대로 두면 이름이 안 맞아 전부 비게 된다.
             key = parts[0].strip("{}\"'")
-            m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)", parts[1])
-            if not m:
+            if len(parts) > ncol_seen:
+                ncol_seen = len(parts)
+
+            def num(tok):
+                m = re.match(r"^([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)$",
+                             tok.strip("{}\"'"))
+                return m.group(1) if m else None
+
+            if col:
+                if len(parts) < col:
+                    continue
+                v = num(parts[col - 1])
+            else:
+                v = None
+                for tok in parts[1:]:
+                    v = num(tok)
+                    if v is not None:
+                        break
+            if v is None:
                 continue            # 헤더 줄 등
-            try:
-                float(m.group(1))          # 숫자인지만 확인한다
-            except ValueError:
-                continue
             # 값은 **원문 문자열 그대로** 담는다. float 로 바꿔 담으면
             # 0.000520 이 0.00052 로 바뀌어 pin_attr.txt 경로와 표기가
             # 어긋난다(값은 같지만 파일 비교가 안 된다).
-            rows.append((key, m.group(1)))
-    return rows
+            rows.append((key, v))
+    return rows, ncol_seen
 
 
-def load_cpin_map(path, rpt):
-    """2열 파일 -> {설계핀: 값}. (dict, 판별한 종류, 안내문들) 반환."""
-    rows = read_two_column(path)
+def load_cpin_map(path, rpt, col=None):
+    """받은 표 -> {설계핀: 값}. (dict, 판별한 종류, 안내문들) 반환."""
+    rows, ncol = read_two_column(path, col)
     if not rows:
-        return {}, "none", ["파일에서 '이름 값' 두 열을 하나도 못 읽었습니다."]
+        return {}, "none", ["파일에서 '이름 값' 을 하나도 못 읽었습니다."]
 
     pin2cell = load_pin_to_cell(rpt)
     design_pins = set(pin2cell)
@@ -157,8 +175,15 @@ def load_cpin_map(path, rpt):
             return "/".join(parts[1:])
         return k
 
+    # 리포트에 나오는 넷 이름도 모아 둔다. 받은 표가 넷 단위면
+    # 그건 Cpin 이 아니라 넷의 wire cap 일 가능성이 크다.
+    nets = set()
+    for _i, net, _p in iter_net_receiver(rpt):
+        nets.add(net)
+
     keys = [k for k, _ in rows]
     n = float(len(keys))
+    hit_net = sum(1 for k in keys if k in nets) / n
     hit_design = sum(1 for k in keys if k in design_pins) / n
     hit_cellpin = sum(1 for k in keys if k in cell_pins) / n
     hit_cell = sum(1 for k in keys if k in cells) / n
@@ -168,11 +193,22 @@ def load_cpin_map(path, rpt):
     # 동점이면 앞쪽을 고른다. 2단(cell/pin)은 drop_lib 가 그대로 두므로
     # lib_cell_pin 과 점수가 같아지는데, 그때는 cell_pin 이라고 불러야 맞다.
     cand = [(hit_design, "design_pin"), (hit_cellpin, "cell_pin"),
-            (hit_libpin, "lib_cell_pin"), (hit_cell, "cell")]
+            (hit_libpin, "lib_cell_pin"), (hit_cell, "cell"),
+            (hit_net, "net")]
     best = cand[0]
     for c in cand[1:]:
         if c[0] > best[0]:
             best = c
+    if best[1] == "net" and best[0] >= 0.05:
+        note.append("1열이 **넷 이름**입니다. Cpin(리시버 핀의 입력 capacitance)이")
+        note.append("  아니라 넷 쪽 값(wire cap 등)으로 보입니다.")
+        note.append("  Cpin 은 핀마다 다르므로 넷 단위 값으로는 못 만듭니다.")
+        note.append("  담당자분께 **핀 단위**로 부탁드려야 합니다:")
+        note.append("    get_attribute <pin> pin_capacitance_max        (설계 핀)")
+        note.append("    get_attribute <lib_pin> pin_capacitance        (라이브러리 핀)")
+        note.append("  이미 받은 표에 핀 열이 따로 있으면 --cpin-col 로 고르세요.")
+        return {}, "net", note
+
     if best[0] < 0.05:
         note.append("1열이 리포트의 핀 이름과도, 셀 이름과도 안 맞습니다.")
         note.append("  읽은 예: %s" % ", ".join(keys[:3]))
@@ -181,6 +217,10 @@ def load_cpin_map(path, rpt):
         return {}, "unknown", note
 
     kind = best[1]
+    if ncol > 2 and col is None:
+        note.append("열이 %d개입니다. 이름 뒤 **첫 숫자 열**을 값으로 썼습니다." % ncol)
+        note.append("  pin cap 과 wire cap 이 같이 있는 표라면 --cpin-col 로 고르세요.")
+        note.append("  (--cpin-col 2 = 이름 다음 열, 3 = 그다음 열)")
     caps = {}
     if kind == "design_pin":
         for k, v in rows:
@@ -348,9 +388,12 @@ def main():
     ap.add_argument("--rpt", default=None)
     ap.add_argument("--pin-attr", default=None)
     ap.add_argument("--cpin-map", default=None,
-                    help="현장에서 받은 '이름  Cpin' 2열 파일. 주면 "
-                         "pin_attr.txt 대신 이걸 쓴다. 1열이 설계핀/셀핀/셀 "
+                    help="현장에서 받은 '이름  Cpin' 표. 주면 pin_attr.txt "
+                         "대신 이걸 쓴다. 1열이 설계핀/셀핀/lib핀/셀/넷 "
                          "어느 것인지는 알아서 판별한다")
+    ap.add_argument("--cpin-col", type=int, default=None,
+                    help="값으로 쓸 열 번호(이름 열이 1). 숫자 열이 여럿일 때 "
+                         "쓴다. 예: 'pin  pincap  wirecap' 이면 --cpin-col 2")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -382,7 +425,7 @@ def main():
     if args.cpin_map:
         # 현장에서 받은 2열 표를 쓴다. 1열이 무엇인지는 알아서 판별한다.
         print("  Cpin 표   : %s" % args.cpin_map)
-        caps, kind, note = load_cpin_map(args.cpin_map, rpt)
+        caps, kind, note = load_cpin_map(args.cpin_map, rpt, args.cpin_col)
         label = {"design_pin":   "설계 핀 (inst/pin)",
                  "cell_pin":     "셀의 핀 (cell/pin)",
                  "lib_cell_pin": "라이브러리 핀 (lib/cell/pin) -- get_lib_pins",
