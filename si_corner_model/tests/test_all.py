@@ -193,6 +193,31 @@ def test_bundle_skips_untrained_temperatures_instead_of_failing(project, tmp_pat
     assert set(b["temps"]) == {str(models[0]["temp"])}
 
 
+def test_corner_table_is_keyed_by_corner_not_by_model(tmp_path):
+    """요약은 '모델별' 이 아니라 '코너별' 이어야 한다.
+
+    모델(회로x온도)은 내부 분할일 뿐이고, 넘길 때 궁금한 건 "이 코너가 얼마나
+    잘 맞았나" 다. 정답이 없는 query 코너는 경로 수만 세고 오차는 비운다."""
+    from si_model.run import _corner_table
+
+    fp = tmp_path / "predictions_hidden.csv"
+    fp.write_text(
+        "design,temp,path_key,corner,truth_ps,model_ps,model_err_ps\n"
+        "cpu,125,A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n"
+        "cpu,125,B,SSPG_0p54V_rcmax,10.0,6.0,-4.0\n"
+        "cpu,m25,A,SSPG_0p5V_cmax,10.0,11.0,1.0\n"
+        "cpu,m25,A,SSPG_0p57V_cmax,,11.0,\n")          # query 코너 (정답 없음)
+
+    rows = {(r["temp"], r["corner"]): r for r in _corner_table(str(fp))}
+    assert len(rows) == 3
+    assert rows[("125", "SSPG_0p54V_rcmax")]["mae_ps"] == 3.0      # (2+4)/2
+    assert rows[("125", "SSPG_0p54V_rcmax")]["worst_ps"] == 4.0
+    assert rows[("125", "SSPG_0p54V_rcmax")]["n_paths"] == 2
+    # query 코너: 경로는 세지만 오차는 없다 -- 0.0 으로 세면 평균이 좋아 보인다
+    q = rows[("m25", "SSPG_0p57V_cmax")]
+    assert q["n_paths"] == 1 and q["mae_ps"] is None and q["worst_ps"] is None
+
+
 def test_mode_switches_every_path_at_once(project):
     """`mode` 한 줄이 읽을 폴더와 쓸 폴더를 전부 갈라야 한다.
 

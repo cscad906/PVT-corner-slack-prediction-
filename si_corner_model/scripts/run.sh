@@ -9,8 +9,10 @@
 #   bash scripts/run.sh train --design cpu  # 특정 회로/온도만
 #   bash scripts/run.sh predict --corners all
 #
-# 다른 파이썬을 쓰려면:  PY=/path/to/python bash scripts/run.sh all
-# 경로만 임시로 바꾸려면: SI_ROOT=/real/path bash scripts/run.sh list
+# 다른 파이썬을 쓰려면:  env PY=/path/to/python bash scripts/run.sh all
+#   (`PY=... bash ...` 접두 문법은 bash/zsh 전용이다. csh/tcsh 에서는 안 먹으므로
+#    위처럼 env 를 쓰거나 `setenv PY /path/to/python` 을 먼저 한다.)
+# 경로만 임시로 바꾸려면: env SI_ROOT=/real/path bash scripts/run.sh list
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="${PY:-python3}"

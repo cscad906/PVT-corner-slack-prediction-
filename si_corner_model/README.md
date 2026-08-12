@@ -56,8 +56,9 @@ bash scripts/run.sh bundle         # ⑦ 회로당 가중치 한 파일로 묶�
 # 또는 ④~⑦ 한 방에:  bash scripts/run.sh all
 ```
 
-회로/온도만 골라서: `run.sh train --design cpu --temp 125`
-경로만 임시로: `SI_ROOT=/real/path bash scripts/run.sh list`
+회로/온도만 골라서: `bash scripts/run.sh train --design MFC_Timing_Report --temp 125`
+경로만 임시로: `env SI_ROOT=/real/path bash scripts/run.sh list`
+(csh/tcsh 에서는 `env` 를 꼭 붙인다 -- `VAR=값 명령` 접두는 bash/zsh 전용)
 
 ### 결과
 
@@ -75,12 +76,21 @@ m25C 는 BEOL 레벨 집합이 달라서 따로 적합해야 하지만, 밖에�
 
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps
-cpu,125,A->B,SSPG_0p54V_cmax,12.000,12.500,0.500
-cpu,m25,A->B,SSPG_0p54V_rcmin,20.000,19.100,-0.900
+MFC_Timing_Report,125,A->B,SSPG_0p54V_rcmax,12.000,12.500,0.500
+MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
 ```
 
 `model_ps` 가 최종 예측값. 측정값 없는 코너(`query_corners`)는 `truth_ps` 빈칸.
 **OLS base 수치는 어떤 출력에도 안 나온다** — base 만 보려면 `run.sh base`.
+
+성적은 **코너 기준 한 표**로 나온다 (`summary.json` 의 `by_corner`, merge 가 화면에도 찍음):
+
+```
+  회로                    온도    코너                       경로       MAE     worst
+  MFC_Timing_Report     125   SSPG_0p54V_rcmax       3000   14.00ps   24.65ps
+  MFC_Timing_Report     125   SSPG_0p6V_cmax         3000    6.15ps   14.81ps
+  전체                                                12000   10.73ps   27.46ps
+```
 
 ---
 

@@ -15,7 +15,7 @@
 # ─── 1. 경로 ─────────────────────────────────────────────────────────────────
 #  배치가 아래와 같으면 이 두 줄은 그대로 두면 된다 (고칠 것 없음):
 #
-#      academyXXXX/                 <- root (auto 가 여기를 잡는다)
+#      academy_experiment/          <- root (auto 가 여기를 잡는다)
 #      ├── si_corner_model/         <- 이 repo. designs 에서 자동 제외됨
 #      ├── 회로1/  report.sspg_0p5000_125c_rcmax.rpt ...
 #      ├── 회로2/  ...

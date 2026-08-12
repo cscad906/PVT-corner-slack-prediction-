@@ -80,7 +80,7 @@ si_corner_model — 명령은 `bash scripts/run.sh <단계>` 하나뿐이다.
     bash scripts/run.sh predict --corners all
 
   파일 고치지 않고 경로만 바꾸기
-    SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
+    env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
 
   문서
     docs/START.md    도착해서 처음부터 (폴더 구조 케이스별)
@@ -147,7 +147,7 @@ def list_designs(p: dict) -> "list[str]":
         root = p["root"]
         assert os.path.isdir(root), (
             f"root does not exist: {root}\n"
-            f"  -> fix `root:` in config.yaml, or run with SI_ROOT=/real/path")
+            f"  -> fix `root:` in config.yaml, or run with env SI_ROOT=/real/path")
         skip = {os.path.basename(REPO_ROOT), "cache", "runs", "__pycache__"}
         d = sorted(n for n in os.listdir(root)
                    if os.path.isdir(os.path.join(root, n))
@@ -841,17 +841,68 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         print(f"  (!) 빠진 모델: {missing}")
     print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
 
-    summ = {}
+    summ = {"by_corner": _corner_table(out_fp), "by_model": {}}
     for m in models:
         sfp = os.path.join(m["cfg"]["train"]["out_dir"], "summary.json")
         if os.path.exists(sfp):
             with open(sfp) as f:
-                summ[m["name"]] = json.load(f)
-    if summ:
-        with open(os.path.join(out_dir, "summary.json"), "w") as f:
-            json.dump(summ, f, indent=2)
-        print(f"  wrote {out_dir}/summary.json ({len(summ)} models)")
+                summ["by_model"][m["name"]] = json.load(f)
+    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        json.dump(summ, f, indent=2)
+    print(f"  wrote {out_dir}/summary.json "
+          f"(코너 {len(summ['by_corner'])}개, 모델 {len(summ['by_model'])}개)")
+    _print_corner_table(summ["by_corner"])
     return out_fp
+
+
+def _corner_table(csv_fp: str) -> list:
+    """One row per CORNER, read back from the merged predictions.
+
+    The per-model summaries answer "how did model X do"; this answers "how well
+    is each corner predicted", which is the question the deliverable is actually
+    about -- a corner is a corner regardless of which circuit/temperature model
+    happened to produce it. Rows with no truth (query corners) are counted but
+    carry no error.
+    """
+    acc = {}
+    with open(csv_fp, newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            key = (row["design"], row["temp"], row["corner"])
+            a = acc.setdefault(key, {"n": 0, "n_truth": 0, "sum": 0.0, "worst": 0.0})
+            a["n"] += 1
+            if row.get("truth_ps") in (None, ""):
+                continue
+            e = abs(float(row["model_err_ps"]))
+            a["n_truth"] += 1
+            a["sum"] += e
+            a["worst"] = max(a["worst"], e)
+    out = []
+    for (design, temp, corner), a in sorted(acc.items()):
+        out.append({
+            "design": design, "temp": temp, "corner": corner,
+            "n_paths": a["n"],
+            "mae_ps": round(a["sum"] / a["n_truth"], 3) if a["n_truth"] else None,
+            "worst_ps": round(a["worst"], 3) if a["n_truth"] else None,
+        })
+    return out
+
+
+def _print_corner_table(rows: list) -> None:
+    if not rows:
+        return
+    print("\n  코너별 성적 (모델이 아니라 코너 기준)")
+    print(f"    {'회로':<22}{'온도':<6}{'코너':<20}{'경로':>7}{'MAE':>10}{'worst':>10}")
+    for r in rows:
+        mae = "-" if r["mae_ps"] is None else f"{r['mae_ps']:.2f}ps"
+        wst = "-" if r["worst_ps"] is None else f"{r['worst_ps']:.2f}ps"
+        print(f"    {r['design']:<22}{r['temp']:<6}{r['corner']:<20}"
+              f"{r['n_paths']:>7}{mae:>10}{wst:>10}")
+    scored = [r for r in rows if r["mae_ps"] is not None]
+    if scored:
+        print(f"    {'전체':<48}{sum(r['n_paths'] for r in rows):>7}"
+              f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
+              f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
 
 
 # ----------------------------------------------------------------------- main

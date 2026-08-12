@@ -58,7 +58,7 @@ designs:
 경로를 파일 수정 없이 바꾸려면:
 
 ```bash
-SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
+env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
 ```
 
 ---

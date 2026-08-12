@@ -6,9 +6,10 @@
 아무 인자 없이 `bash scripts/run.sh` 를 치면 단계 목록이 나온다.
 
 ```
-recon  →  config.yaml 수정  →  list  →  build  →  base  →  train  →  결과
- 정찰      (여기만 고침)       검산     캐시    base점검   학습    predictions.csv
+recon → config.yaml 수정 → list → build → base → train → bundle → predict → merge
+ 정찰     (여기만 고침)     검산    캐시   base점검  학습   가중치묶기  예측   통합
 ```
+`run.sh all` 이 build 부터 merge 까지 한 번에 한다.
 
 ---
 
@@ -18,11 +19,42 @@ recon  →  config.yaml 수정  →  list  →  build  →  base  →  train  �
 권장한다 — 그러면 `root` 를 안 적어도 된다.
 
 ```bash
-cd /user/s5e9665p5/academy진짜이름     # 회로 폴더들이 있는 곳
+cd /user/s5e9965p5/academy_experiment   # 회로 폴더들이 있는 곳
 # (si_corner_model 을 여기로 복사/클론)
 cd si_corner_model
 
-# 환경: Python 3.9+ 면 됨. conda 없어도 venv 로 충분
+bash scripts/find_python.sh             # ★ 먼저 이것부터
+```
+
+`find_python.sh` 가 **서버에 이미 깔려 있는 python 들을 전부 뒤져서** numpy/pyyaml/
+torch 가 있는 놈을 찾아준다. EDA 서버에는 보통 Synopsys/Cadence 가 끼워 넣은
+python 이 여러 개 있고 그중 하나는 torch까지 갖고 있다. 출력 맨 아래가 알려주는
+대로 하면 된다:
+
+**쉘에 따라 문법이 다르다.** `echo $SHELL` 로 확인하고 맞는 쪽을 쓴다:
+
+```bash
+export PY=/usr/bin/python3              # bash / zsh
+```
+```csh
+setenv PY /usr/bin/python3              # csh / tcsh  (EDA 서버 기본값인 경우가 많다)
+```
+
+한 번만 쓸 거면 쉘과 무관하게 `env` 를 앞에 붙이면 된다:
+
+```
+env PY=/usr/bin/python3 bash scripts/run.sh all
+```
+
+`PY=... bash scripts/run.sh all` 처럼 **접두로 쓰는 건 bash/zsh 전용**이다.
+csh 에서 그러면 `PY=/usr/bin/python3: Command not found.` 가 난다.
+
+**설치가 필요 없다면 여기서 STEP 1 로 넘어간다.** 인터넷이 막힌 서버가 많아
+`pip install` 이 안 되는 경우가 흔한데, 그래도 위 방법이면 대부분 그냥 돌아간다.
+
+새로 만들어야 할 때만:
+
+```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .[train]                 # numpy, pyyaml, torch
 python -c "import numpy,yaml,torch; print('OK, cuda =', torch.cuda.is_available())"
@@ -48,29 +80,48 @@ bash scripts/run.sh                     # 단계 목록 확인
 
 ### 케이스 A — 표준 (권장)
 
+**이게 회사 배치다. 이 경우 config 는 고칠 것이 없다.**
+
 ```
-/user/s5e9665p5/academyXXXX/          ← root
-├── si_corner_model/                  ← 이 repo
-├── cpu/
-│   └── report.sspg_0p5000_125c_rcmax.rpt      ← 코너당 1개
-│       report.sspg_0p5000_125c_cmax.rpt
-│       report.sspg_0p5400_125c_rcmax.rpt
-│       ...  (온도 m25 것도 같이 있어도 됨 — 파일명 온도로 걸러진다)
-└── gpu/
-    └── ...
+/user/s5e9965p5/academy_experiment/          ← root
+├── si_corner_model/                         ← 이 repo
+├── MFC_Timing_Report/
+│   ├── setup/
+│   │   ├── report.sspg_0p5000_125c_rcmax.rpt      ← 코너당 1개
+│   │   ├── report.sspg_0p5000_125c_cmax.rpt
+│   │   ├── report.sspg_0p5400_m25c_rcmin.rpt
+│   │   ├── ...   (125 / m25 것이 섞여 있어도 됨 — 파일명 온도로 걸러진다)
+│   │   └── xtalk/
+│   │       ├── xt.sspg_0p5000_125c_rcmax.rpt      ← 코너당 1개, annotated 와 같은 코너 집합
+│   │       └── ...
+│   └── hold/                                ← hold 는 mode 를 바꿔 따로 돌린다
+│       └── (setup 과 같은 구조)
+├── MIF_Timing_Report/     (동일)
+├── PERIC0_Timing_Report/  (동일)
+├── pr_si/                 ← designs 에 안 적었으니 무시됨
+└── spice/                 ← 무시됨
 ```
 
 ```yaml
+mode: setup         # setup/ 와 setup/xtalk/ 를 읽고 cache/setup, runs/setup 에 쓴다
 root: auto          # si_corner_model 이 회로들과 나란히 -> 자동
-designs: auto       # root 밑 폴더 전부를 회로로
-files: {subdir: ""}
+designs:            # pr_si / spice 가 섞여 있으니 auto 로 두지 말고 명시한다
+  - MFC_Timing_Report
+  - MIF_Timing_Report
+  - PERIC0_Timing_Report
+files:
+  subdir: auto              # = <mode>
+  crosstalk_subdir: auto    # = <mode>/xtalk
 ```
+
+리포트가 `setup/` 없이 회로 폴더 바로 밑에 있으면 `files: {subdir: ""}` 로 두면 된다
+(하위 몇 겹이든 재귀로 찾는다).
 
 ### 케이스 B — 회로 폴더 밑에 하위폴더가 있다
 
 ```
-academyXXXX/cpu/reports/report.sspg_...rpt
-academyXXXX/cpu/logs/...
+academy_experiment/cpu/reports/report.sspg_...rpt
+academy_experiment/cpu/logs/...
 ```
 
 ```yaml
@@ -85,14 +136,14 @@ files: {subdir: reports}
 ### 케이스 C — si_corner_model 이 딴 데 있다
 
 ```yaml
-root: /user/s5e9665p5/academyXXXX     # 절대경로로 적는다
+root: /user/s5e9965p5/academy_experiment     # 절대경로로 적는다
 ```
-또는 파일 안 고치고: `SI_ROOT=/user/... bash scripts/run.sh list`
+또는 파일 안 고치고: `env SI_ROOT=/user/... bash scripts/run.sh list`
 
 ### 케이스 D — root 밑에 회로가 아닌 폴더도 섞여 있다
 
 ```
-academyXXXX/{cpu, gpu, lib, scripts, tmp}
+academy_experiment/{cpu, gpu, lib, scripts, tmp}
 ```
 `designs: auto` 는 `lib`, `scripts`, `tmp` 도 회로로 착각한다. 명시한다:
 
@@ -103,8 +154,8 @@ designs: [cpu, gpu]
 ### 케이스 E — 레벨이 하위폴더고 파일명엔 전압만
 
 ```
-academyXXXX/cpu/rcmax/xxx_tt0p5000v_125c.rpt
-academyXXXX/cpu/cmax/ xxx_tt0p5000v_125c.rpt
+academy_experiment/cpu/rcmax/xxx_tt0p5000v_125c.rpt
+academy_experiment/cpu/cmax/ xxx_tt0p5000v_125c.rpt
 ```
 
 ```yaml
@@ -317,29 +368,37 @@ PT 가 이 서버에서 안 돌고 **결과만 가져오는** 경우, 필요한 
 bash scripts/run.sh list
 ```
 
+실제 출력은 이렇다 (회사와 같은 배치로 리허설한 결과 그대로):
+
 ```
-root    : /user/s5e9665p5/academyXXXX
-task    : slack    models: 4    process: SSPG
+root    : /user/s5e9965p5/academy_experiment
+task    : slack    models: 6    process: SSPG
 voltages: [0.5, 0.54, 0.6, 0.685]    levels: {'rcmin': -1, 'cmax': 0, 'rcmax': 1}
-holdout : hidden_v=[0.54]  seen_v=-  hidden_levels=-  hidden_corners=-  query=-
+anchor  : 0.685V x cmax  (항상 seen)
 
-  ── cpu/125  [SI:off]
-     reports : /user/s5e9665p5/academyXXXX/cpu/
+  ── MFC_Timing_Report/125  [SI:on ]
+     reports : /user/s5e9965p5/academy_experiment/MFC_Timing_Report/setup
      levels  : ['rcmax', 'cmax']   ref: SSPG_0p685V_cmax   temp token: 125
-     out     : cache/cpu/125/dataset.npz  |  runs/cpu/125
+     out     : cache/setup/MFC_Timing_Report/125/dataset.npz  |  runs/setup/MFC_Timing_Report/125
+     hidden  : 2개 SSPG_0p54V_rcmax, SSPG_0p6V_cmax
      corners : 전체 8 = seen 6 + hidden 2   (min_seen 가드 6)
-     basis   : v^2 x level^1 -> 5 파라미터 ['drc', 'dv', 'dvdrc', 'dv2']
+     basis   : v^3 x level^1 까지 -> 최대 6 파라미터 [...]  ⚠ seen 이 파라미터 수 이하 -- ...
+               (최종 기저는 build 때 seen-LOO 로 선택된다 -- run.sh base 로 확인)
      base    : weighting=adaptive  cross_max_degree=2
-     files   : 디렉토리 존재, 파일 20개
+     files   : 디렉토리 존재, 파일 40개
 ```
 
-**여기서 확인할 것 4가지:**
+`basis` 줄의 **⚠ 는 정상이다** — 여기 적힌 건 "최대 이만큼까지 쓸 수 있다"는 상한이고,
+실제 기저는 `build` 때 seen-LOO 로 더 작게 골라진다(125C 는 5 파라미터). 확정된
+기저와 그 성적은 `run.sh base` 가 찍는다.
 
-1. `models:` 개수가 맞나 (회로 수 × 온도 수)
+**여기서 확인할 것 5가지:**
+
+1. `models:` 개수가 맞나 (회로 수 × 온도 수 = 3 × 2 = **6**)
 2. `files : 디렉토리 존재` 인가 — `(!) 디렉토리 없음` 이면 `root`/`designs`/`subdir`
-3. `corners : 전체 N` 이 예상과 맞나 (전압 수 × 레벨 수)
-4. `basis` 의 **파라미터 수 < seen 코너 수** 인가
-   - `⚠` 경고가 뜨면 다항식이 코너 수에 비해 크다 → [OLS.md §3](OLS.md)
+3. `corners : 전체 N` 이 예상과 맞나 (전압 수 × 레벨 수). 125 는 4×2=8, m25 는 4×3=12
+4. `hidden : 2개` 가 온도마다 의도한 코너인가
+5. `[SI:on ]` 인가 — `[SI:off]` 면 `xtalk/` 를 못 찾은 것
 
 틀린 게 있으면 config 고치고 다시 `list`. 여기서 맞을 때까지는 build 로 안 넘어간다.
 
@@ -348,11 +407,12 @@ holdout : hidden_v=[0.54]  seen_v=-  hidden_levels=-  hidden_corners=-  query=-
 ## STEP 5. `build` → `base` — 데이터가 제대로 읽혔는지 (GPU 불필요)
 
 ```bash
-bash scripts/run.sh build      # 리포트 -> cache/<회로>/<온도>/dataset.npz
+bash scripts/run.sh build      # 리포트 -> cache/<mode>/<회로>/<온도>/dataset.npz
 bash scripts/run.sh base       # OLS base 오차 (numpy만, 수 초)
 ```
 
-`build` 성공 로그: `wrote cache/cpu/125/dataset.npz: N=<경로수> C=8 S=... A=...`
+`build` 성공 로그:
+`wrote cache/setup/MFC_Timing_Report/125/dataset.npz: N=<경로수> C=8 S=... A=...`
 → **C 가 STEP 4 의 코너 수와 같은지 확인.**
 
 `base` 출력:
@@ -383,12 +443,18 @@ bash scripts/run.sh base       # OLS base 오차 (numpy만, 수 초)
 ## STEP 6. `train` → 결과
 
 ```bash
-bash scripts/run.sh train              # 전부
-bash scripts/run.sh train --design cpu # 회로 하나만
-bash scripts/run.sh predict --corners all
-bash scripts/run.sh merge
-# 또는 한 방에:
-bash scripts/run.sh all
+bash scripts/run.sh all                # ★ build -> base -> train -> bundle -> predict -> merge
+
+# 단계별로 하고 싶으면:
+bash scripts/run.sh train                              # 학습 (온도별로 best.pt)
+bash scripts/run.sh bundle                             # 회로당 model.pt 하나로 묶기
+bash scripts/run.sh predict                            # 히든 코너 예측
+bash scripts/run.sh merge                              # 전 회로·전 온도를 한 파일로
+
+# 회로/온도만 골라서:
+bash scripts/run.sh all --design MFC_Timing_Report
+bash scripts/run.sh train --design MFC_Timing_Report --temp 125
+bash scripts/run.sh predict --corners all              # seen 코너까지 다 예측
 ```
 
 한 모델이 실패해도 나머지는 계속 돌고, 끝에 실패 목록을 찍고 exit 1 한다.
@@ -404,12 +470,36 @@ runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summar
 
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps
-cpu,125,A->B,SSPG_0p54V_cmax,12.000,12.500,0.500
-cpu,m25,A->B,SSPG_0p54V_rcmin,20.000,19.100,-0.900
+MFC_Timing_Report,125,A->B,SSPG_0p54V_rcmax,12.000,12.500,0.500
+MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
 ```
 
 `model_ps` 가 최종 예측값이다. **base 수치는 여기 안 나온다** — 모델 수치와
 헷갈리지 않게 분리했다. base 는 `run.sh base` 로만 본다.
+
+`merge` 는 끝에 **코너별 성적표**를 찍고 같은 내용을 `summary.json` 의
+`by_corner` 에 넣는다. 모델(회로x온도)은 내부 분할일 뿐이라, 넘길 때 궁금한
+"이 코너가 얼마나 잘 맞았나" 를 코너 기준 한 표로 본다:
+
+```
+  코너별 성적 (모델이 아니라 코너 기준)
+    회로                    온도    코너                       경로       MAE     worst
+    MFC_Timing_Report     125   SSPG_0p54V_rcmax       3000   14.00ps   24.65ps
+    MFC_Timing_Report     125   SSPG_0p6V_cmax         3000    6.15ps   14.81ps
+    MFC_Timing_Report     m25   SSPG_0p5V_cmax         3000   13.78ps   27.46ps
+    MFC_Timing_Report     m25   SSPG_0p685V_rcmin      3000    8.99ps   18.42ps
+    전체                                                12000   10.73ps   27.46ps
+```
+
+`summary.json` 은 두 부분이다:
+
+| 키 | 내용 |
+|---|---|
+| `by_corner` | ★ 위 표. 코너마다 `mae_ps` / `worst_ps` / `n_paths` |
+| `by_model` | 모델별 상세 (`hidden_mae_ps`, `best_epoch`, `si_branch` ...) |
+
+정답이 없는 `query_corners` 는 `n_paths` 만 세고 `mae_ps` 는 비어 있다.
+
 
 ### 실전 예측 — 측정 안 한 코너
 
@@ -495,16 +585,19 @@ bash scripts/run.sh sweep      # lambda_si {0,0.1,1,10} 비교
 ## 체크리스트
 
 ```
-[ ] STEP 0  si_corner_model 을 회로폴더 옆에 두고 venv + pip install
-[ ] STEP 1  내 폴더 구조가 A~G 중 어느 케이스인지 확인
+[ ] STEP 0  si_corner_model 을 회로폴더 옆에 두고  bash scripts/find_python.sh
+[ ]         쉘 확인: bash 면 export PY=... / csh 면 setenv PY ...
+[ ] STEP 1  내 폴더 구조가 A~G 중 어느 케이스인지 확인 (회사 배치 = 케이스 A)
 [ ] STEP 2  bash scripts/run.sh recon   -> recon_out.txt
-[ ] STEP 3  config.yaml: root/designs/temps/corners/files
+[ ] STEP 3  config.yaml: mode/root/designs/temps/corners/files
 [ ]         + 온도별 홀드아웃 (temps[].hidden_corners)  -> docs/HOLDOUT.md
-[ ] STEP 4  bash scripts/run.sh list    -> models/corners/basis 검산, ⚠ 없는지
+[ ] STEP 4  bash scripts/run.sh list    -> models 6개 / corners / hidden 2개 / [SI:on]
 [ ] STEP 5  build -> C 확인, base -> 수치 상식적인지
-[ ] STEP 6  train (또는 all) -> runs/_all/predictions_hidden.csv
+[ ] STEP 6  bash scripts/run.sh all     -> runs/<mode>/_all/predictions_hidden.csv
+[ ]                                        + runs/<mode>/<회로>/model.pt
 [ ] STEP 7  파싱 0개면: 코너 간 경로 집합 동일한지 확인
 [ ] STEP 8  SI: crosstalk_subdir 채우고 재빌드 -> S=... 확인
+[ ] hold 도 돌린다면: config 의 mode: setup -> hold 로 바꾸고 위를 반복
 ```
 
 ## 어디를 볼지
