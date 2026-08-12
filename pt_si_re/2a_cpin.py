@@ -99,6 +99,48 @@ ATTR = "pin_capacitance_max"
 CELL_RE = re.compile(r"^\s+(\S+/\S+)\s+\(([^)]+)\)")
 
 
+
+NUMS_RE = re.compile(r"[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?")
+
+
+def scan_report(rpt):
+    """리포트를 **한 번만** 읽어 세 가지를 함께 만든다.
+
+        recv     [(줄번호, 넷, 리시버핀)]   '(net)' 줄 다음 첫 핀 줄
+        netcap   {줄번호: 넷 전체 cap}      '(net)' 줄 끝의 마지막 숫자
+        pin2cell {설계핀: 라이브러리셀}     'U123/A (cell)' 의 괄호 안
+
+    예전에는 이 셋을 따로 만들어 같은 파일을 세 번 훑었다. 셋 다 같은
+    줄에서 같은 정규식으로 뽑는 것이라 한 번에 끝난다.
+    """
+    recv = []
+    netcap = {}
+    pin2cell = {}
+    pending = None
+    with open(rpt, "r", errors="ignore") as f:
+        for idx, line in enumerate(f):
+            m = OBJ_RE.match(line)
+            if not m:
+                continue
+            name, kind = m.group(1), m.group(2)
+            if kind.lower() == "net":
+                pending = (idx, name)
+                nums = NUMS_RE.findall(line[m.end():])
+                if nums:
+                    try:
+                        netcap[idx] = float(nums[-1])
+                    except ValueError:
+                        pass
+                continue
+            if "/" in name:
+                pin2cell[name] = kind
+            if pending is not None:
+                recv.append((pending[0], pending[1], name))
+                pending = None
+    if pending is not None:
+        recv.append((pending[0], pending[1], ""))
+    return recv, netcap, pin2cell
+
 def load_pin_to_cell(rpt):
     """리포트에서 {설계핀: 라이브러리셀}. 같은 핀이 여러 번 나와도 값은 같다."""
     out = {}
@@ -158,13 +200,14 @@ def read_name_value_rows(path):
     return rows, ncol
 
 
-def load_cpin_map(path, rpt, col=None, recv=None, netcap=None):
+def load_cpin_map(path, rpt, col=None, recv=None, netcap=None, pin2cell=None):
     """받은 표 -> {설계핀: 값}. (dict, 판별한 종류, 안내문들) 반환."""
     rows, ncol = read_name_value_rows(path)
     if not rows:
         return {}, "none", ["파일에서 '이름 값' 을 하나도 못 읽었습니다."]
 
-    pin2cell = load_pin_to_cell(rpt)
+    if pin2cell is None:
+        pin2cell = load_pin_to_cell(rpt)
     design_pins = set(pin2cell)
     cells = set(pin2cell.values())
     cell_pins = set()          # 'cell/pin' 형태로 만들어 둔 것
@@ -183,10 +226,8 @@ def load_cpin_map(path, rpt, col=None, recv=None, netcap=None):
 
     # 리포트에 나오는 넷 이름도 모아 둔다. 받은 표가 넷 단위면
     # 그건 Cpin 이 아니라 넷의 wire cap 일 가능성이 크다.
-    if recv is None:
-        recv = list(iter_net_receiver(rpt))
-    if netcap is None:
-        netcap = net_line_caps(rpt)
+    if recv is None or netcap is None:
+        recv, netcap, _pc = scan_report(rpt)
     nets = set(net for _i, net, _p in recv)
 
     keys = [k for k, _ in rows]
@@ -523,10 +564,9 @@ def main():
         # 현장에서 받은 2열 표를 쓴다. 1열이 무엇인지는 알아서 판별한다.
         print("  Cpin 표   : %s" % args.cpin_map)
         # 리포트는 여기서 한 번만 훑고, 그 결과를 아래까지 돌려 쓴다.
-        _recv = list(iter_net_receiver(rpt))
-        _netcap = net_line_caps(rpt)
+        _recv, _netcap, _p2c = scan_report(rpt)
         caps, kind, note = load_cpin_map(args.cpin_map, rpt, args.cpin_col,
-                                         _recv, _netcap)
+                                         _recv, _netcap, _p2c)
         label = {"design_pin":   "설계 핀 (inst/pin)",
                  "cell_pin":     "셀의 핀 (cell/pin)",
                  "lib_cell_pin": "라이브러리 핀 (lib/cell/pin) -- get_lib_pins",
