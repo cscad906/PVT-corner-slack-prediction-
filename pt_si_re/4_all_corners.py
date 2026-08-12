@@ -25,7 +25,13 @@ SPEF 고르는 순서
 Cpin 고르는 순서 (현장에서 pin_attr.txt 대신 Cpin 표를 받았을 때)
     1) 코너 폴더 안의 cpin_map.txt 가 있으면 그것      <- 코너마다 받았을 때
     2) 없으면 --cpin-map 으로 준 파일
-    3) 둘 다 없으면 각 코너의 pin_attr.txt 를 쓴다(원래 방식)
+    3) 둘 다 없으면 각 코너의 pin_attr.txt 를 쓴다(dump_attr.tcl 로 뽑던 방식)
+
+    **`cpin_map.txt` 라는 이름은 우리가 정한 규약이다.** 이 이름으로 만들어
+    주는 코드는 없다 -- 받은 파일을 코너 폴더에 그 이름으로 두면 배치가
+    알아서 집는다는 뜻이다(SPEF 의 `design.spef` 와 같은 방식).
+    다른 이름을 쓰려면 아래 CPIN_MAP_NAME 한 줄만 고치면 된다.
+    코너를 하나씩 돌릴 때는 이름과 무관하다 -- `--cpin-map <경로>` 로 준다.
 
     **Cpin 은 코너마다 다르다.** 0.6V 와 0.8V 를 재 보면 중앙값 6%,
     최대 8% 차이가 난다. 한 파일을 --cpin-map 으로 전 코너에 돌려 쓰면
@@ -44,6 +50,10 @@ sys.path.insert(0, os.path.join(HERE, "_engine"))
 from utf8 import force_utf8, wopen
 force_utf8()
 from find_rpt import find_rpt
+
+# 코너 폴더에서 이 이름을 찾으면 그것을 Cpin 표로 쓴다.
+# 현장에서 받는 파일 이름이 정해져 있으면 여기만 바꾸면 된다.
+CPIN_MAP_NAME = "cpin_map.txt"
 
 # 단계는 PT 를 사이에 두고 두 묶음으로 나뉜다. PT 는 파이썬에서 못 부르므로
 # 묶음 1 이 끝나면 pt_shell 로 한 번 갔다 와야 한다.
@@ -173,7 +183,7 @@ def main():
                          "있으면 그쪽이 우선한다")
     ap.add_argument("--cpin-map", default=None,
                     help="모든 코너가 함께 쓸 Cpin 표(2열 이상). 코너 폴더에 "
-                         "cpin_map.txt 가 있으면 그쪽이 우선한다. 안 주면 "
+                         "%s 가 있으면 그쪽이 우선한다. 안 주면 " % CPIN_MAP_NAME +
                          "각 코너의 pin_attr.txt 를 쓴다")
     ap.add_argument("--phase", default="1", choices=["1", "2"],
                     help="1=2a~5a(기본), 2=5b~5c. 사이에 pt_shell 을 한 번 다녀온다")
@@ -246,7 +256,7 @@ def main():
         #   3) 둘 다 없으면 안 준다 -> 2a 가 pin_attr.txt 를 쓴다
         # Cpin 은 코너마다 다르므로(0.6V<->0.8V 에서 중앙값 6% 차이)
         # 1) 이 있으면 그쪽이 맞다.
-        cmap = os.path.join(d, "cpin_map.txt")
+        cmap = os.path.join(d, CPIN_MAP_NAME)
         if not os.path.isfile(cmap):
             cmap = args.cpin_map
 

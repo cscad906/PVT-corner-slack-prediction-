@@ -555,9 +555,20 @@ def main():
     for label, p in need:
         if not os.path.isfile(p):
             print("")
-            code("E-NOFILE",
-                 "[ 실패 ] %s 이 없습니다: %s" % (label, p),
-                 "         0_check.py 로 무엇이 없는지 확인하세요.")
+            msg = ["[ 실패 ] %s 이 없습니다: %s" % (label, p)]
+            if label == "pin_attr.txt":
+                # 현장에서 Cpin 표를 받아 쓰는 경우가 많다. pin_attr.txt 는
+                # dump_attr.tcl 로 뽑는 것이라 없을 수 있으니 대안을 알려준다.
+                msg += ["",
+                        "         Cpin 을 얻는 길은 둘입니다.",
+                        "         (1) 받은 Cpin 표를 쓴다  <- 보통 이쪽",
+                        "               --cpin-map <받은파일>",
+                        "         (2) PT 에서 직접 뽑는다",
+                        "               pt_shell> source <패키지>/dev/dump_attr.tcl",
+                        "               -> 이 폴더에 pin_attr.txt 가 생깁니다"]
+            else:
+                msg.append("         0_check.py 로 무엇이 없는지 확인하세요.")
+            code("E-NOFILE", *msg)
     print("  리포트    : %s" % rpt)
 
     if args.cpin_map:
