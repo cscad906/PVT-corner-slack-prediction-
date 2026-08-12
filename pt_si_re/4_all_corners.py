@@ -22,6 +22,15 @@ SPEF 고르는 순서
     2) 없으면 --spef 로 준 파일                        <- 보통 이쪽
     3) 둘 다 없으면 그 코너는 2b/2c 를 건너뛴다(2a, 3 은 SPEF 가 필요 없다)
 
+Cpin 고르는 순서 (현장에서 pin_attr.txt 대신 Cpin 표를 받았을 때)
+    1) 코너 폴더 안의 cpin_map.txt 가 있으면 그것      <- 코너마다 받았을 때
+    2) 없으면 --cpin-map 으로 준 파일
+    3) 둘 다 없으면 각 코너의 pin_attr.txt 를 쓴다(원래 방식)
+
+    **Cpin 은 코너마다 다르다.** 0.6V 와 0.8V 를 재 보면 중앙값 6%,
+    최대 8% 차이가 난다. 한 파일을 --cpin-map 으로 전 코너에 돌려 쓰면
+    그만큼 틀린다. 코너별로 받았으면 각 폴더에 cpin_map.txt 로 두는 게 맞다.
+
 한 코너가 실패해도 멈추지 않고 끝까지 돈 뒤, 맨 아래에 코너별 결과를 표로
 보여 준다. 실패가 하나라도 있으면 종료 코드 1.
 """
@@ -162,6 +171,10 @@ def main():
     ap.add_argument("--spef", default=None,
                     help="모든 코너가 함께 쓸 SPEF. 코너 폴더에 design.spef 가 "
                          "있으면 그쪽이 우선한다")
+    ap.add_argument("--cpin-map", default=None,
+                    help="모든 코너가 함께 쓸 Cpin 표(2열 이상). 코너 폴더에 "
+                         "cpin_map.txt 가 있으면 그쪽이 우선한다. 안 주면 "
+                         "각 코너의 pin_attr.txt 를 쓴다")
     ap.add_argument("--phase", default="1", choices=["1", "2"],
                     help="1=2a~5a(기본), 2=5b~5c. 사이에 pt_shell 을 한 번 다녀온다")
     ap.add_argument("--only", default=None,
@@ -227,6 +240,16 @@ def main():
         if not os.path.isfile(spef):
             spef = args.spef
 
+        # Cpin 표 고르는 순서 (SPEF 와 같은 방식)
+        #   1) 코너 폴더 안의 cpin_map.txt        <- 코너마다 따로 받았을 때
+        #   2) 없으면 --cpin-map 으로 준 파일
+        #   3) 둘 다 없으면 안 준다 -> 2a 가 pin_attr.txt 를 쓴다
+        # Cpin 은 코너마다 다르므로(0.6V<->0.8V 에서 중앙값 6% 차이)
+        # 1) 이 있으면 그쪽이 맞다.
+        cmap = os.path.join(d, "cpin_map.txt")
+        if not os.path.isfile(cmap):
+            cmap = args.cpin_map
+
         codes = []
         for label, script, need_spef, product in steps:
             if args.skip_done and step_done(d, product):
@@ -242,6 +265,8 @@ def main():
             call = ["--dir", d]
             if need_spef:
                 call += ["--spef", spef]
+            if script == "2a_cpin.py" and cmap:
+                call += ["--cpin-map", cmap]
             if script in ("2c_merge.py", "5b_pairs.py", "5c_report.py"):
                 call += ["--corner", name]
             if script == "5b_pairs.py":
