@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 도착해서 제일 먼저 돌리는 정찰. config.yaml 의 root 를 그대로 쓴다.
+# The first thing to run on a new site. Uses the root from config.yaml as-is.
 #
-#   bash scripts/run.sh recon                 # config.yaml 의 root 사용
-#   bash scripts/run.sh recon /real/root      # root 만 임시로 지정
+#   bash scripts/run.sh recon                 # use the root from config.yaml
+#   bash scripts/run.sh recon /real/root      # override just the root
 #
-# 결과는 recon_out.txt 에 저장된다. 이 파일 내용을 보고 config.yaml 의
-#   root / designs / temps.levels / files.annotated_regex 를 확정하면 된다.
+# The output is saved to recon_out.txt. Read it to settle
+#   root / designs / temps.levels / files.annotated_regex in config.yaml.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 PY="${PY:-python3}"

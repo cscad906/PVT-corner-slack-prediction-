@@ -20,7 +20,7 @@ neural pieces only learn residuals. Scheme = "all-seen leave-one-out":
 
 Three fit modes, selected by ``base.weighting`` in the config:
   - ``plain``    : one global OLS fit               -> fit_base
-  - ``local``    : fixed-bandwidth locally-weighted -> fit_base_local  ("가중 OLS")
+  - ``local``    : fixed-bandwidth locally-weighted -> fit_base_local  (weighted OLS)
   - ``adaptive`` : per-corner bandwidth selection   -> fit_base_adaptive (best)
 
 Anchor = fitted intercept (Method B). Method A (measured ref anchor) is a
@@ -101,7 +101,7 @@ def fit_base_local(
     coords: np.ndarray,      # [C, A] scaled axis coords
     bw: "tuple[float, ...]",   # per-axis Gaussian kernel bandwidths
 ) -> np.ndarray:
-    """Locally-weighted variant of fit_base (the "가중 OLS"): each query corner
+    """Locally-weighted variant of fit_base (weighted OLS): each query corner
     fits its own weighted OLS with Gaussian weights over the seen corners, so
     nearby corners dominate and a global-misfit region cannot pollute the fit.
 

@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 #
 # If a deliverable puts the nominal value somewhere OTHER than first, these
 # regexes are the place to fix it (see docs/PARSING.md §4); `bash scripts/run.sh
-# check <파일>` reports which of them match how many lines.
+# check <file>` reports which of them match how many lines.
 _TAIL = r"(?:\s+\S+)*\s*$"
 # Skip anything that is not the start of a number. Lets a label sit BETWEEN the
 # keyword and its value -- the statistical case, e.g.

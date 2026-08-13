@@ -53,7 +53,7 @@ def slew_cap_of(path) -> "tuple[float, float]":
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
-    configure_cell_taxonomy(cfg)   # slack 빌더와 동일한 설정을 쓴다
+    configure_cell_taxonomy(cfg)   # same settings as the slack builder
     configure_pins(cfg)
     corners, ann_by = discover(cfg)
     assert ref_corner in corners, f"ref {ref_corner} not in {corners[:3]}..."

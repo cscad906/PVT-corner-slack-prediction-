@@ -127,11 +127,11 @@ def project_for(p: dict, design: str) -> dict:
     still ONE config file rather than a copy per circuit::
 
         designs:
-          chipA: {}                                  # 전역 그대로
+          chipA: {}                                  # globals unchanged
           chipB:
-            files: {subdir: reports}                 # 이 회로만 리포트 위치가 다름
+            files: {subdir: reports}                 # only this circuit's reports move
           chipC:
-            corners: {voltages: [0.5, 0.6, 0.685]}   # 이 회로만 전압이 3개
+            corners: {voltages: [0.5, 0.6, 0.685]}   # only this circuit has 3 voltages
             temps:
               - {tag: "125", token: 125, levels: [rcmax, cmax],
                  hidden_corners: [[0.5, rcmax]]}
@@ -203,7 +203,7 @@ def spread_hidden(volts, levels, n, ref_v, ref_lv) -> list:
             if lv in picked:
                 continue
             if abs(v - ref_v) < 1e-9 and lv == ref_lv:
-                continue                       # 앵커 코너는 숨기지 않는다
+                continue                       # never hide the anchor corner
             picked.append(lv)
         out += [[v, lv] for lv in picked]
     return out
@@ -263,7 +263,7 @@ def select_basis(y, sp, coords, cfg, verbose=True):
             c["base"]["cross_max_degree"] = cmd
             exps, names, _ = expand_terms(c, [nv, nlv])
             phi = design_matrix(coords, exps)
-            if len(S) - phi.shape[1] < 1:            # 자유도 0 -> seen-LOO 가 무의미
+            if len(S) - phi.shape[1] < 1:            # 0 dof -> seen-LOO is meaningless
                 continue
             loo, _ = fit_field(y, phi, sp, coords, c)
             err = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
@@ -307,10 +307,11 @@ def expand(p: dict) -> "list[dict]":
     """
     from si_model.parsing.keys import corner_label
 
-    # setup 과 hold 는 리포트 위치도 출력 위치도 갈라져야 한다. 예전에는 그 네
-    # 군데(files.subdir / files.crosstalk_subdir / out.cache / out.runs)를 각각
-    # 손으로 고쳐야 했고, subdir 만 바꾸고 out 을 잊으면 hold 결과가 setup 캐시와
-    # run 을 조용히 덮어썼다. 이제 `mode` 한 줄이 넷 다 정한다.
+    # setup and hold must split both where reports are read and where output is
+    # written. All four places (files.subdir / files.crosstalk_subdir / out.cache
+    # / out.runs) used to be edited by hand, and changing subdir while forgetting
+    # out let a hold run silently overwrite the setup cache and runs. One `mode`
+    # line now sets all four.
     mode = str(p.get("mode") or "setup")
     out_cache = _auto(p.get("out", {}).get("cache"), f"cache/{mode}")
     out_runs = _auto(p.get("out", {}).get("runs"), f"runs/{mode}")
@@ -459,9 +460,10 @@ def expand(p: dict) -> "list[dict]":
                 base["adaptive_grid"] = b["adaptive_grid"]
             if b.get("weighting") == "local":
                 assert b.get("bandwidth"), "base.weighting: local requires base.bandwidth"
-            # bandwidth 는 weighting 과 무관하게 넘긴다 -- run.sh base 의 weighting
-            # 비교표가 local 도 재려면 대역폭이 있어야 하는데, local 일 때만 넘기면
-            # local 은 영영 표에서 빠진다.
+            # Pass bandwidth regardless of weighting -- the comparison table in
+            # `run.sh base` can only score `local` if a bandwidth exists, and
+            # passing it only when weighting IS local would drop local from the
+            # table forever.
             if b.get("bandwidth"):
                 base["bandwidth"] = b["bandwidth"]
 
@@ -485,10 +487,12 @@ def select(models: list, design=None, temp=None) -> list:
 
 # --------------------------------------------------------------------- stages
 def stage_list(models: list, p: dict) -> None:
-    """무엇이 어떤 설정으로 돌지 전부 찍는다 -- 실행 전 검산용 (파일은 안 건드림).
+    """Print exactly what will run with which settings -- a pre-flight check
+    (touches no files).
 
-    특히 seen/hidden 코너를 실제로 세어 보여준다: 코너 선정이 config 의도대로
-    되었는지, 다항식 파라미터 수보다 seen 이 충분한지가 여기서 바로 보인다.
+    In particular it counts the seen/hidden corners for real, so whether the
+    corner selection matches the config's intent -- and whether there are more
+    seen corners than polynomial parameters -- is visible right here.
     """
     m0 = models[0]
     co = project_for(p, m0["design"])["corners"]
@@ -507,7 +511,8 @@ def stage_list(models: list, p: dict) -> None:
         print(f"     levels  : {d['rc_corners']}   ref: {d['ref_corner']}   temp token: {d['temp']!r}")
         print(f"     out     : {d['cache']}  |  {m['cfg']['train']['out_dir']}")
 
-        # 예상 코너 수 / 다항식 크기 -- 실제 파싱 전에 산수로 미리 검산
+        # expected corner count / polynomial size -- arithmetic check before
+        # anything is parsed
         from si_model.parsing.keys import corner_label as _lab
         dco = project_for(p, m["design"])["corners"]
         vs = [float(v) for v in dco["voltages"]]
@@ -558,11 +563,13 @@ def stage_list(models: list, p: dict) -> None:
 
 
 def stage_check(models: list, fp: "str | None" = None) -> int:
-    """리포트 파일 하나를 파서에 통과시켜 '어느 정규식이 몇 줄을 잡았는지' 보고한다.
+    """Push one report file through the parser and report which regex matched
+    how many lines.
 
-    본문 형식이 다를 때(SSTA 로 열이 늘었다든지) 무엇을 고쳐야 하는지 추측하지
-    않아도 되게 하는 것이 목적이다. 못 잡은 정규식에 대해서는 그 키워드가 들어간
-    실제 줄을 같이 찍어주므로, 기대 형식과 실제 형식을 나란히 놓고 볼 수 있다.
+    The point is that when the body format differs (SSTA adding columns, say)
+    nobody has to guess what to fix. For a regex that matched nothing, an actual
+    line containing its keyword is printed next to it, so the expected format and
+    the real one can be read side by side.
     """
     from si_model.parsing import annotated as A
     from si_model.parsing.discovery import discover_annotated
@@ -583,7 +590,7 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
         lines = f.readlines()
     print(f"lines: {len(lines)}\n")
 
-    # (이름, 정규식, 못 잡았을 때 보여줄 후보 줄을 고르는 키워드)
+    # (name, regex, keyword used to pick a sample line when nothing matched)
     checks = [
         ("FIXED_PATH", A.FIXED_PATH_RE, "FIXED_PATH"),
         ("Startpoint", A.STARTPOINT_RE, "Startpoint"),
@@ -649,11 +656,11 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
 
 
 def stage_sweep(m: dict, lambdas=(0.0, 0.1, 1.0, 10.0)) -> None:
-    """SI 보조손실 가중치 lambda_si 스윕 (slack 전용, 옛 sweep.sh).
+    """Sweep the SI auxiliary-loss weight lambda_si (slack only; was sweep.sh).
 
-    SI branch 를 얼마나 믿을지는 데이터마다 다르다. 같은 설정으로 lambda 만
-    바꿔 학습해 hidden MAE 를 비교한다. 결과는 runs/_sweep/<모델>/lam_<v>/ 로
-    따로 나가므로 본 run 을 덮어쓰지 않는다."""
+    How far the SI branch should be trusted varies per data drop. This trains
+    the same setup with lambda varied and compares hidden MAE. Results go to
+    runs/_sweep/<model>/lam_<v>/, so the main run is never overwritten."""
     import copy
     import json
 
@@ -787,7 +794,7 @@ BUNDLE_FORMAT = "si_corner_model/bundle/1"
 
 
 def bundle_path(m: dict) -> str:
-    """One circuit's single weight file: runs/<mode>/<회로>/model.pt."""
+    """One circuit's single weight file: runs/<mode>/<design>/model.pt."""
     return os.path.join(os.path.dirname(m["cfg"]["train"]["out_dir"]), BUNDLE_NAME)
 
 
@@ -799,7 +806,7 @@ def stage_bundle(models: list) -> None:
     interpolating polynomial. But that is an internal detail: from the outside a
     circuit should be one model, one file, one command. So training still writes
     a per-temperature ``best.pt`` (it needs somewhere to checkpoint mid-run) and
-    this stage collects them into ``runs/<mode>/<회로>/model.pt``, which is what
+    this stage collects them into ``runs/<mode>/<design>/model.pt``, which is what
     predict loads and what gets handed over.
     """
     import torch
@@ -839,8 +846,9 @@ def stage_predict(m: dict, corners: str) -> None:
 
     out_dir = m["cfg"]["train"]["out_dir"]
     tr = _trainer(m)
-    # 배포되는 단일 파일(model.pt)이 있으면 그걸 쓴다. 없으면 학습 직후의
-    # 온도별 체크포인트로 넘어간다 -- bundle 없이 train->predict 만 돌린 경우.
+    # Prefer the single shipped file (model.pt) when it exists; otherwise fall
+    # back to the per-temperature checkpoint left by training -- the case where
+    # train->predict was run without bundle.
     bundle = bundle_path(m)
     if os.path.exists(bundle):
         b = load_checkpoint(bundle, map_location=tr.dev)
@@ -904,10 +912,11 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         sfp, ckpt = os.path.join(d, "summary.json"), os.path.join(d, "best.pt")
         if not os.path.exists(sfp):
             continue
-        # train 이 중간에 끊기면 best.pt 는 갱신되지만 summary.json 은 학습이
-        # 끝까지 갔을 때만 쓰인다. 그래서 이전 실행의 요약이 새 체크포인트 옆에
-        # 남아 조용히 섞일 수 있다. by_corner 는 방금 만든 예측에서 뽑으므로
-        # 항상 맞지만, by_model 은 그 옛 파일이라 짚어준다.
+        # An interrupted train still updates best.pt, but summary.json is only
+        # written when training runs to the end. So a previous run's summary can
+        # sit next to a new checkpoint and be mixed in silently. by_corner comes
+        # from the predictions just made and is always right; by_model is that
+        # stale file, so it is called out.
         if os.path.exists(ckpt) and os.path.getmtime(sfp) < os.path.getmtime(ckpt):
             stale.append(m["name"])
         with open(sfp) as f:

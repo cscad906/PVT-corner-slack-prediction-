@@ -1,286 +1,326 @@
 # =============================================================================
-#  si_corner_model — 설정 파일은 이거 하나뿐이다.
+#  si_corner_model — this is the only config file.
 #
-#  회로(design) x 온도(temp) 조합마다 모델이 하나씩 자동으로 생성된다.
-#  회로 3개 x 온도 2개 = 모델 6개인데 고치는 파일은 여전히 이 파일 하나.
+#  One model is generated automatically per (design, temperature) pair.
+#  3 circuits x 2 temperatures = 6 models, still from this one file.
 #
-#    bash scripts/run.sh list      # 뭐가 만들어질지 먼저 확인 (아무것도 안 건드림)
-#    bash scripts/run.sh all       # 전부 실행
+#    bash scripts/run.sh list      # see what would be built (touches nothing)
+#    bash scripts/run.sh all       # run everything
 #
-#  키 하나하나 설명은 docs/CONFIG.md, base(OLS) 튜닝은 docs/OLS.md,
-#  리포트 파싱은 docs/PARSING.md.
-#  아래에서 [필수] 는 도착해서 꼭 확인할 것, 나머지는 기본값으로 둬도 된다.
+#  Every key is documented in docs/CONFIG.md; base (OLS) tuning in docs/OLS.md;
+#  report parsing in docs/PARSING.md.
+#  [REQUIRED] below marks what to check on arrival; the rest can stay default.
 # =============================================================================
 
-# ─── 1. 경로 ─────────────────────────────────────────────────────────────────
-#  배치가 아래와 같으면 이 두 줄은 그대로 두면 된다 (고칠 것 없음):
+# --- 1. Paths ----------------------------------------------------------------
+#  If the layout looks like this, leave these two lines alone:
 #
-#      academy_experiment/          <- root (auto 가 여기를 잡는다)
-#      ├── si_corner_model/         <- 이 repo. designs 에서 자동 제외됨
-#      ├── 회로1/  report.sspg_0p5000_125c_rcmax.rpt ...
-#      ├── 회로2/  ...
-#      └── 회로3/  ...
+#      academy_experiment/          <- root (this is what auto finds)
+#      |-- si_corner_model/         <- this repo. Excluded from designs
+#      |-- design1/  report.sspg_0p5000_125c_rcmax.rpt ...
+#      |-- design2/  ...
+#      +-- design3/  ...
 #
-root: auto                          # auto = 이 repo 의 부모 디렉토리
+root: auto                          # auto = this repo's parent directory
                                     #        = /user/s5e9965p5/academy_experiment
-                                    #   repo 가 회로들과 다른 곳에 있으면 절대경로로 적는다
-                                    #   환경변수 SI_ROOT 가 우선한다
+                                    #   If the repo lives elsewhere, give an
+                                    #   absolute path. SI_ROOT overrides this.
 
-designs:                            # ★ 회로만 적는다. auto 로 두면 pr_si / spice 까지
-  - MFC_Timing_Report               #   회로로 잘못 잡힌다.
+designs:                            # * List circuits only. With auto, pr_si and
+  - MFC_Timing_Report               #   spice would be mistaken for circuits.
   - MIF_Timing_Report
   - PERIC0_Timing_Report
 
-_designs_note: |                    # (참고) designs 는 세 가지 형태 중 하나:
+_designs_note: |                    # (FYI) designs takes one of three forms:
                                     #
-                                    #  ① auto  = root 밑 모든 하위폴더를 회로로 간주
-                                    #     (si_corner_model / cache / runs / 숨김폴더는 자동 제외)
-                                    #     root 에 회로가 아닌 폴더(lib, tmp ...)가 섞여 있으면 ② 로.
+                                    #  1. auto = every sub-folder of root is a
+                                    #     circuit (si_corner_model / cache / runs
+                                    #     / hidden folders are excluded). If root
+                                    #     also holds non-circuits (lib, tmp ...),
+                                    #     use form 2.
                                     #
-                                    #  ② 리스트 = 이 회로들만.  designs: [회로1, 회로2, 회로3]
+                                    #  2. list = only these. designs: [a, b, c]
                                     #
-                                    #  ③ 매핑  = 회로마다 설정을 다르게. 적은 키만 덮어쓰고
-                                    #     나머지는 아래 전역 설정을 그대로 물려받는다.
+                                    #  3. mapping = per-circuit settings. Keys
+                                    #     you write override; the rest inherit
+                                    #     the globals below.
                                     #       designs:
-                                    #         회로1: {}                                  # 전역 그대로
-                                    #         회로2: {files: {subdir: reports}}          # 리포트 위치만 다름
-                                    #         회로3:                                     # 코너 구성이 다름
+                                    #         design1: {}                                # globals unchanged
+                                    #         design2: {files: {subdir: reports}}        # only the report location differs
+                                    #         design3:                                   # different corner set
                                     #           corners: {voltages: [0.5, 0.6, 0.685]}
                                     #           temps:
                                     #             - {tag: "125", token: 125, levels: [rcmax, cmax],
                                     #                hidden_corners: [[0.5, rcmax]]}
                                     #
-                                    #   환경변수 SI_DESIGNS=회로1,회로2 가 우선한다
+                                    #   SI_DESIGNS=design1,design2 overrides this
 
-temps:                              # 온도 = 분리 차원(모델이 갈린다).
-  - tag: "125"                      #   tag    = 모델/폴더 이름
-    token: 125                      #   token  = 파일명 안의 온도 토큰
-    levels: [rcmax, cmax]           #   levels = 그 온도에 존재하는 BEOL 레벨
-    # 숨길 코너는 온도마다 따로 적는다. 온도별로 levels 가 다르므로 전역 목록
-    # 하나로는 표현 자체가 안 된다 (125C 엔 rcmin 이 없다).
-    # 아래 corners.* 의 홀드아웃 키를 여기에 쓰면 이 온도에만 적용된다.
+temps:                              # Temperature = split dimension (own model).
+  - tag: "125"                      #   tag    = model/folder name
+    token: 125                      #   token  = temperature token in filenames
+    levels: [rcmax, cmax]           #   levels = BEOL levels present at that temp
+    # Corners to hide are written per temperature. Levels differ per temp, so a
+    # single global list cannot express this (125C has no rcmin).
+    # Any holdout key from corners.* below applies to this temp only when
+    # written here.
     hidden_corners: [[0.54, rcmax], [0.6, cmax]]
   - tag: m25
     token: m25
     levels: [rcmax, cmax, rcmin]
     hidden_corners: [[0.5, cmax], [0.685, rcmin]]
 
-# ★ setup 이냐 hold 냐. 이 한 줄이 읽을 폴더와 쓸 폴더를 전부 정한다.
-#   mode: setup  ->  읽기 <root>/<회로>/setup/ , <root>/<회로>/setup/xtalk/
-#                    쓰기 cache/setup/ , runs/setup/
-#   mode: hold   ->  읽기 <root>/<회로>/hold/  , <root>/<회로>/hold/xtalk/
-#                    쓰기 cache/hold/  , runs/hold/
-#   setup 과 hold 는 분리 차원이라 한 번에 못 섞는다. 이 줄만 바꿔 다시 돌리면
-#   되고, 출력 경로가 같이 따라가므로 setup 결과를 덮어쓸 일이 없다.
+# * setup or hold. This one line sets every read and write location.
+#   mode: setup  ->  read  <root>/<design>/setup/ , <root>/<design>/setup/xtalk/
+#                    write cache/setup/ , runs/setup/
+#   mode: hold   ->  read  <root>/<design>/hold/  , <root>/<design>/hold/xtalk/
+#                    write cache/hold/  , runs/hold/
+#   setup and hold are split dimensions and cannot be mixed in one run. Change
+#   this line and re-run; the output paths follow, so setup results are never
+#   overwritten.
 mode: setup
 
-out:                                # 보통 손댈 일 없다. auto = mode 를 따라감.
-  cache: auto                       # cache/<mode>/<회로>/<온도>/dataset.npz
-  runs: auto                        # runs/<mode>/<회로>/<온도>/ + runs/<mode>/_all/
+out:                                # Rarely touched. auto = follows mode.
+  cache: auto                       # cache/<mode>/<design>/<temp>/dataset.npz
+  runs: auto                        # runs/<mode>/<design>/<temp>/ + runs/<mode>/_all/
 
 
-# ─── 2. 코너 정의 & 어떤 코너를 숨길지 ────────────────────────── [필수] ──────
+# --- 2. Corner definition and which corners to hide ------------- [REQUIRED] --
 corners:
-  process: SSPG                     # 공정 토큰. 공정도 분리 차원 -> 공정이 여러 개면
-                                    #   이 값을 바꿔가며 따로 돌린다
-  voltages: [0.5, 0.54, 0.6, 0.685] # 측정된 전압 전부
+  process: SSPG                     # Process token. Process is a split dimension
+                                    #   too -- for several processes, change this
+                                    #   and run each separately.
+  voltages: [0.5, 0.54, 0.6, 0.685] # Every measured voltage
 
-  ref_voltage: 0.685                # 앵커 코너 = 다항식 원점 + 경로 선택 기준.
-  ref_level: cmax                   #   반드시 SEEN 이어야 한다 (최고전압 x 중앙레벨 권장)
+  ref_voltage: 0.685                # Anchor corner = polynomial origin + the
+  ref_level: cmax                   #   path-selection reference. It MUST be
+                                    #   seen (highest voltage x middle level).
 
-  level_values:                     # BEOL 레벨 -> 축 좌표.
-    rcmin: -1                        #   절대값은 무의미(ref 를 빼므로), **간격만** 의미 있음.
-    cmax: 0                         #   회사 코너 정의상 심각도 순서/간격이 다르면 여기만 고친다
-    rcmax: 1
+  level_values:                     # BEOL level -> axis coordinate.
+    rcmin: -1                       #   Absolute values are meaningless (ref is
+    cmax: 0                         #   subtracted); only the SPACING matters.
+    rcmax: 1                        #   If your corner definition orders or
+                                    #   spaces severity differently, edit here.
 
-  # ── 숨길 코너 고르기 ─────────────────────────────────────────────────────
-  #  아래 키들은 전부 temps[] 안에 써서 "온도별로" 지정할 수 있다 (그쪽이 우선).
-  #  여기 corners: 아래 적으면 모든 온도 공통. 섞어 쓰면 합집합.
+  # -- Choosing which corners to hide ---------------------------------------
+  #  All of these keys can be written inside temps[] to apply PER TEMPERATURE
+  #  (which takes precedence). Written here under corners:, they apply to every
+  #  temperature. Mixing both takes the union.
   #
-  #  ★ 코너가 적을 땐 행/열을 통째로 빼지 말 것. 그 전압의 앵커가 전부 사라진다.
-  #    전압마다 한 칸씩 흩어 빼는 게 낫다 -> hidden_corners 또는 hidden_per_voltage
-  hidden_corners: []                # 콕 집어서 한 칸씩: [[0.6, rcmax], [0.54, rcmin]]
-                                    #   (이번 데이터는 temps[] 안에서 온도별로 지정)
-  hidden_per_voltage: 0             # 0 = 안 씀. 1 이면 "모든 전압에서 한 칸씩" 을
-                                    #   레벨을 돌아가며 자동 선택 (대각선으로 흩어짐).
-                                    #   앵커 코너는 절대 안 고른다.
-  hidden_voltages: []               # 이 전압의 "모든 레벨" 을 숨김 (행 통째로)
-  seen_voltages: []                 # 반대 방향: 이것만 seen, 나머지 전압은 전부 hidden
-                                    #   (촘촘한 전압 그리드를 성긴 것으로 학습할 때)
-  hidden_levels: []                 # 이 레벨의 "모든 전압" 을 숨김 (열 통째로), 예: [rcmin]
-                                    #   숨기면 ref_level 을 다른 레벨로 옮겨야 한다
+  #  * With few corners, do not remove a whole row or column: that voltage
+  #    loses its anchor entirely. Scatter one cell per voltage instead ->
+  #    hidden_corners or hidden_per_voltage
+  hidden_corners: []                # Pick cells explicitly: [[0.6, rcmax], [0.54, rcmin]]
+                                    #   (this data sets them per temp in temps[])
+  hidden_per_voltage: 0             # 0 = off. 1 means "one cell at every
+                                    #   voltage", chosen by rotating through the
+                                    #   levels (scattered diagonally). The anchor
+                                    #   corner is never chosen.
+  hidden_voltages: []               # Hide EVERY level of these voltages (whole row)
+  seen_voltages: []                 # The other direction: only these are seen,
+                                    #   every other voltage is hidden (for training
+                                    #   a dense voltage grid from a sparse one)
+  hidden_levels: []                 # Hide EVERY voltage of these levels (whole
+                                    #   column), e.g. [rcmin]. Hiding one means
+                                    #   moving ref_level to another level.
 
-  # 측정 자체가 없는 코너를 순수 예측만 하고 싶을 때 (정답 없음 -> truth 빈칸, 예측값만)
-  query_corners: []                 # 예: [[0.57, cmax], [0.62, rcmax]]
+  # For corners with no measurement at all, predicted only (no ground truth ->
+  # truth column left blank, prediction filled in)
+  query_corners: []                 # e.g. [[0.57, cmax], [0.62, rcmax]]
 
 split:
-  min_seen: auto                    # seen 코너 최소 개수 가드.
-                                    #   auto = seen전압수 x 레벨수 (= 그리드가 꽉 찼는지 검사)
-                                    #   -> 리포트가 하나라도 빠지면 조용히 넘어가지 않고 에러
-  path_split_seed: 42               # 경로 train/val/test(80/10/10) 분할 시드.
-                                    #   앙상블 멤버끼리는 반드시 같아야 한다
+  min_seen: auto                    # Guard on the minimum number of seen corners.
+                                    #   auto = seen voltages x levels (i.e. checks
+                                    #   the grid is full) -> a single missing
+                                    #   report errors instead of passing silently
+  path_split_seed: 42               # Seed for the path train/val/test (80/10/10)
+                                    #   split. Ensemble members must share it.
 
 
-# ─── 3. 파일 찾기 / 파싱 ──────────────────────────────────────── [필수] ──────
+# --- 3. Finding and parsing files ------------------------------- [REQUIRED] --
 files:
-  layout: flat                      # flat   = 코너가 전부 파일명에 있음 (이번 데이터)
-                                    # levels = <dir>/<레벨폴더>/<전압당 1파일> 배치
-  # 배치:  <root>/<회로>/setup/report.*.rpt
-  #        <root>/<회로>/setup/xtalk/xt.*.rpt
-  #        <root>/<회로>/hold/...                 <- hold 는 따로 돌린다(아래)
+  layout: flat                      # flat   = the corner is entirely in the
+                                    #          filename (this data)
+                                    # levels = <dir>/<level folder>/<one file per voltage>
+  # Layout:  <root>/<design>/setup/report.*.rpt
+  #          <root>/<design>/setup/xtalk/xt.*.rpt
+  #          <root>/<design>/hold/...              <- hold is a separate run (above)
   #
-  # auto = 맨 위 `mode` 를 그대로 씀 (setup -> setup/, hold -> hold/).
-  # 폴더 이름이 setup/hold 가 아니면(예: reports/) 여기에 직접 적는다.
-  subdir: auto                      # annotated 리포트가 있는 곳
+  # auto = follow the `mode` at the top (setup -> setup/, hold -> hold/).
+  # If the folders are not named setup/hold (e.g. reports/), write it here.
+  subdir: auto                      # where the annotated reports are
 
-  # ── layout: flat 일 때 ──────────────────────────────────────────────────
-  #   auto = 파일명을 토큰으로 쪼개 전압/레벨/온도/공정을 각각 알아서 찾는다.
-  #          순서·대소문자·구분자(. _ -)·온도의 c 유무에 전혀 영향받지 않는다.
-  #          report.sspg_0p5000_125c_rcmax.rpt / SSPG_RCMAX_125_0.5400.rpt 둘 다 OK
-  #   자동으로 안 되면(예: 파일명에 숫자가 잔뜩 섞여 애매할 때) 정규식을 직접 준다.
-  #     (?P<v>) (?P<level>) 필수 / (?P<temp>) (?P<proc>) 는 있으면 필터. 대소문자 무시됨.
+  # -- For layout: flat -----------------------------------------------------
+  #   auto = split the filename into tokens and find voltage/level/temp/process
+  #          independently. Order, case, separator (. _ -) and the trailing c on
+  #          the temperature make no difference.
+  #          report.sspg_0p5000_125c_rcmax.rpt / SSPG_RCMAX_125_0.5400.rpt both work.
+  #   If auto cannot do it (say the filename is crowded with other numbers),
+  #   give the regex yourself.
+  #     (?P<v>) and (?P<level>) are required; (?P<temp>) and (?P<proc>) filter
+  #     when present. Case-insensitive.
   #     annotated_regex: 'report\.(?P<proc>\w+)_(?P<v>0p\d+)_(?P<temp>m?\d+)c_(?P<level>\w+)\.'
   annotated_regex: auto
 
-  # ── layout: levels 일 때만 쓰임 ─────────────────────────────────────────
-  annotated_suffix: _fixed_annotated.txt   # 고를 파일 확장자
-  voltage_regex: '_tt(0p\d+)v'             # 그룹1 = 전압 토큰
+  # -- Used only for layout: levels -----------------------------------------
+  annotated_suffix: _fixed_annotated.txt   # file extension to select
+  voltage_regex: '_tt(0p\d+)v'             # group 1 = voltage token
   crosstalk_suffix: .by_path.rpt
 
-  # ── 크로스토크(SI) ───────────────────────────────────────────────────────
-  #  <root>/<회로>/<crosstalk_subdir>/ 밑 어디든(재귀). annotated 와 코너 집합이
-  #  정확히 일치해야 한다. 이 폴더는 annotated 탐색에서 자동 제외되므로
-  #  회로폴더 안에 두어도 "같은 코너가 두 파일에 매칭" 에러가 안 난다.
-  #  위치를 모르면 null -> SI 없이 학습 (나중에 두 줄만 채우면 켜짐)
+  # -- Crosstalk (SI) -------------------------------------------------------
+  #  Anywhere under <root>/<design>/<crosstalk_subdir>/ (searched recursively).
+  #  Its corner set must match the annotated one exactly. This folder is
+  #  excluded from the annotated search automatically, so keeping it inside the
+  #  design folder does not trigger "one corner matched two files".
+  #  Unknown location -> null -> train without SI (fill in two lines to enable).
   #  auto = <mode>/xtalk (setup -> setup/xtalk, hold -> hold/xtalk)
-  crosstalk_subdir: auto            # 크로스토크 리포트가 있는 곳
-  crosstalk_regex: auto             # annotated_regex 와 동일한 규칙 (파일명 접두사 무관)
+  crosstalk_subdir: auto            # where the crosstalk reports are
+  crosstalk_regex: auto             # same rules as annotated_regex (the filename
+                                    #   prefix does not matter)
 
-  # ── annotated 와 crosstalk 이 "같은 폴더" 에 있을 때 (pt_si_re 배치) ──────
-  #  <회로>/round2/<코너>/<코너>_fixed_annotated.txt
-  #                      <코너>.path_context_si_compact.by_path.rpt
-  #  둘 다 코너 토큰을 갖고 있어 파일명으로 구분해줘야 한다.
-  #  이때는 crosstalk_subdir: "" 로 두고 아래 두 줄을 채운다.
-  annotated_contains: null          # 예: _fixed_annotated
-  crosstalk_contains: null          # 예: by_path
+  # -- When annotated and crosstalk share ONE folder (pt_si_re layout) -------
+  #  <design>/round2/<corner>/<corner>_fixed_annotated.txt
+  #                           <corner>.path_context_si_compact.by_path.rpt
+  #  Both carry the corner token, so they must be told apart by filename.
+  #  Set crosstalk_subdir: "" and fill in the two lines below.
+  annotated_contains: null          # e.g. _fixed_annotated
+  crosstalk_contains: null          # e.g. by_path
 
 
 parsing:
-  # ── FF 핀 이름 (라이브러리마다 다르다) ───────────────────────────────────
-  #  안 적으면 아래 후보를 순서대로 시도한다. 못 찾아도 에러가 아니라
-  #  launch_clk/capture_clk 가 조용히 NaN 이 되므로 run.sh check 로 확인할 것.
-  #  (실제로 gt3 데이터가 /CLK 이라 294경로 전부 NaN 이었던 적이 있다)
-  clock_pins: [CK, CLK, CP, C]      # FF 클럭핀.   SAED14=CK, gt3=CLK
-  ff_output_pins: [Q, QN, QB, Z]    # FF 출력핀.   launch_clock -> data 전환 지점
+  # -- FF pin names (they differ per library) -------------------------------
+  #  Left unset, the candidates below are tried in order. Failing to find one
+  #  is not an error -- launch_clk/capture_clk quietly become NaN -- so check
+  #  with run.sh check. (gt3 data really did use /CLK, leaving all 294 paths NaN.)
+  clock_pins: [CK, CLK, CP, C]      # FF clock pin.  SAED14=CK, gt3=CLK
+  ff_output_pins: [Q, QN, QB, Z]    # FF output pin. launch_clock -> data handover
 
-  # ── 경로 키 ──────────────────────────────────────────────────────────────
-  strip_path_idx: auto              # 경로 키 끝의 '#<번호>' 를 뗄지.
-                                    #   auto = 떼봐서 중복이 생기면 '식별자' 로 보고 유지.
-                                    #   1_union.py 산출물은 같은 FF 쌍에 여러 경로가 있어
-                                    #   #번호가 식별자다 (실제로 294 -> 210 으로 병합될 뻔).
-                                    #   코너마다 번호가 제각각인 리포트면 true 로 강제.
+  # -- Path keys ------------------------------------------------------------
+  strip_path_idx: auto              # Whether to drop the trailing '#<n>' of a
+                                    #   path key.
+                                    #   auto = try it; if duplicates appear, treat
+                                    #   it as an identifier and keep it. Output of
+                                    #   1_union.py has several paths per FF pair,
+                                    #   where #n IS the identifier (294 nearly
+                                    #   collapsed to 210). Force true when the
+                                    #   numbering differs per corner.
 
-  # ── 셀 이름 규칙 ─────────────────────────────────────────────────────────
-  # 비워두면 build 가 알아서 정한다 (권장). 실제 셀 이름을 보고:
-  #   SAED14 내장 표가 60% 이상 맞으면      -> 그 표를 쓴다 (패밀리가 진짜 함수명)
-  #   아니면                                -> 이름에서 규칙을 유도한다
-  #                                            ('_' 토큰 중 변별력 최대인 위치 = 패밀리,
-  #                                             drive 는 후보 패턴 중 가장 잘 맞는 것)
-  # 어느 쪽을 썼는지 build 로그의 [CELLS] 줄에 찍힌다.
-  # 아래처럼 직접 적으면 자동 판정을 끄고 그것만 쓴다.
-  # 셀명 분포 확인:  docs/PARSING.md §3 의 스니펫
+  # -- Cell name rules ------------------------------------------------------
+  # Leave empty and build decides (recommended). Looking at the real cell names:
+  #   built-in SAED14 table matches >= 60%  -> use it (families are real functions)
+  #   otherwise                             -> derive the rules from the names
+  #                                            (family = the '_' token position
+  #                                             with the most distinct labels;
+  #                                             drive = whichever candidate
+  #                                             pattern fits best)
+  # Which one was used is printed on the [CELLS] line of the build log.
+  # Writing the block below turns the automatic choice off and uses only that.
+  # To inspect the cell-name spread: the snippet in docs/PARSING.md section 3
   cell_taxonomy: {}
-  #  실제로 쓰는 형태 (gt3_6t_buf_x12_rvt 같은 이름을 잡는 예):
+  #  A realistic form (catching names like gt3_6t_buf_x12_rvt):
   # cell_taxonomy:
-  #   strip_prefixes: [gt3_6t_, gt3_, SEC9T_]   # 이름 앞에서 떼어낼 접두사
-  #   family_rules:                             # 첫 매치 승. 정규식은 대소문자 무시.
-  #     - ['^dff|^sdff|ff', DFF]                #   순서 중요: 긴 것/구체적인 것 먼저
+  #   strip_prefixes: [gt3_6t_, gt3_, SEC9T_]   # prefixes stripped from the front
+  #   family_rules:                             # first match wins. Case-insensitive.
+  #     - ['^dff|^sdff|ff', DFF]                #   order matters: longer/more specific first
   #     - ['^inv|^iv',      INV]
   #     - ['^buf|^bf|^dly', BUF]
   #     - ['^nand|^nd',     NAND]
   #     - ['^nor|^nr',      NOR]
-  #     - ['^aoi',          AOI]                #   aoi 를 ao 보다 먼저
+  #     - ['^aoi',          AOI]                #   aoi before ao
   #     - ['^oai',          OAI]
   #     - ['^ao',           AO]
   #     - ['^oa',           OA]
-  #     - ['^xnor',         XNOR]               #   xnor 를 xor 보다 먼저
+  #     - ['^xnor',         XNOR]               #   xnor before xor
   #     - ['^xor',          XOR]
   #     - ['^mux',          MUX]
-  #   drive_regex: '_x(\d+)_'                   # 그룹1 = 드라이브. 대소문자 무시.
-  #                                             #   SAED 식이면 '_X(\d+P?\d*)$' (P=소수점)
+  #   drive_regex: '_x(\d+)_'                   # group 1 = drive. Case-insensitive.
+  #                                             #   SAED style: '_X(\d+P?\d*)$' (P = decimal point)
 
 
 # =============================================================================
-#  아래는 기본값으로 둬도 된다. 튜닝하려면 docs/OLS.md.
+#  Everything below can stay at its default. To tune, see docs/OLS.md.
 # =============================================================================
 
 task: slack                         # slack | slew
 
-# ─── 4. OLS base (예측의 뼈대) ───────────────────────────────────────────────
+# --- 4. OLS base (the backbone of the prediction) ----------------------------
 base:
-  v_order: auto                     # 전압 다항식 차수. auto = min(3, seen 전압 수 - 1)
-  level_order: auto                 # BEOL  다항식 차수. auto = min(2, 레벨 수 - 1)
-  cross_terms: true                 # 교차항(dv*dlevel ...) 사용
-  cross_max_degree: 2               # 교차항 총차수 상한 (코너가 적으면 2, 넉넉하면 3)
+  v_order: auto                     # Voltage polynomial order.
+                                    #   auto = min(3, seen voltages - 1)
+  level_order: auto                 # BEOL polynomial order.
+                                    #   auto = min(2, levels - 1)
+  cross_terms: true                 # Use cross terms (dv*dlevel ...)
+  cross_max_degree: 2               # Cap on cross-term total degree (2 with few
+                                    #   corners, 3 when there are plenty)
 
-  weighting: plain                  # plain    = 전역 OLS 1회 (권장)
-                                    # local    = 고정 대역폭 가중 OLS (bandwidth 필요)
-                                    # adaptive = 코너별 대역폭 자동 선택
+  weighting: plain                  # plain    = one global OLS (recommended)
+                                    # local    = fixed-bandwidth weighted OLS
+                                    #            (needs bandwidth)
+                                    # adaptive = per-corner bandwidth, auto-selected
                                     #
-                                    # base 단독 성적만 보면 adaptive 가 나아 보일 수
-                                    # 있다. 그런데 base 는 혼자 쓰는 게 아니라 그 위에
-                                    # 신경망이 잔차를 배운다. adaptive base 위에서는
-                                    # 그 학습이 아예 안 됐다 (14nm 실측):
-                                    #    125C  adaptive base 3.151 -> 학습해도 3.08 에서 정지
-                                    #          plain    base 2.148 -> 학습으로 0.94 까지
-                                    #    m25   adaptive base 11.20 -> 30 epoch 내내 11.19
-                                    #          plain    base 11.00 -> 24 epoch 에 10.25
-                                    # m25 는 base 단독으로는 adaptive 가 worst 에서 앞서는데
-                                    # (13.5 vs 19.6) 최종은 plain 이 이긴다. 즉 base 만
-                                    # 보고 고르면 안 된다.
-  bandwidth: [0.05, 1.0]            # weighting: local 일 때의 (dv, dlevel) 대역폭
-  adaptive_grid: null               # adaptive 후보 대역폭. null = seen 간격에서 자동 유도
-                                    #   직접 줄 때: [[0.02, 1.0], [0.05, 1.0], null]
-                                    #   (null 항목 = 전역 피팅도 후보에 포함)
-  adaptive_k: 6                     # 대역폭 고를 때 볼 이웃 seen 코너 수
-  adaptive_amp_ratio: 1.5           # 외삽 가드: 분산이 전역의 1.5배 넘는 대역폭 거부
-  adaptive_clip_frac: 0.3           # 후보 예측을 측정범위 ±0.3×range 로 clip
+                                    # Judged on base error alone, adaptive can
+                                    # look better. But the base is not used on its
+                                    # own: a network learns a residual on top of
+                                    # it, and on an adaptive base that learning
+                                    # did not happen at all (measured, 14nm):
+                                    #    125C  adaptive base 3.151 -> stuck at 3.08
+                                    #          plain    base 2.148 -> down to 0.94
+                                    #    m25   adaptive base 11.20 -> 11.19 after 30 epochs
+                                    #          plain    base 11.00 -> 10.25 by epoch 24
+                                    # At m25 adaptive is genuinely the better base
+                                    # on worst case (13.5 vs 19.6) and still loses
+                                    # end to end. Do not select on base alone.
+  bandwidth: [0.05, 1.0]            # (dv, dlevel) bandwidth for weighting: local
+  adaptive_grid: null               # Candidate bandwidths for adaptive.
+                                    #   null = derived from the seen spacing
+                                    #   Explicit: [[0.02, 1.0], [0.05, 1.0], null]
+                                    #   (a null entry = global fit is a candidate too)
+  adaptive_k: 6                     # Neighbouring seen corners used to pick a bandwidth
+  adaptive_amp_ratio: 1.5           # Extrapolation guard: reject a bandwidth whose
+                                    #   variance exceeds 1.5x the global one
+  adaptive_clip_frac: 0.3           # Clip candidate predictions to the measured
+                                    #   range +/- 0.3 x range
 
-  # 축 좌표 스케일 (거의 안 건드림)
-  v_fit_scale: 1.0                  # 피팅 전에 좌표를 이 값으로 나눔 (온도축이면 100)
+  # Axis coordinate scales (rarely touched)
+  v_fit_scale: 1.0                  # Coordinates are divided by this before
+                                    #   fitting (100 for a temperature axis)
   level_fit_scale: 1.0
-  v_token_scale: 0.1                # 신경망 feature 의 좌표 단위
+  v_token_scale: 0.1                # Coordinate unit for the network features
   level_token_scale: 1.0
-  v_gap_cap: 2.5                    # 외삽 gap feature 상한
+  v_gap_cap: 2.5                    # Cap on the extrapolation gap feature
   level_gap_cap: 2.0
 
-# ─── 5. 신경망 ───────────────────────────────────────────────────────────────
+# --- 5. Network --------------------------------------------------------------
 model:
-  enc_blocks: 3                     # 경로 인코더 ChainMP+BiGRU 블록 수 (GNN 홉)
-  enc_dim: 128                      # 인코더 폭
-  d_model: 64                       # attention head 폭
+  enc_blocks: 3                     # Path-encoder ChainMP+BiGRU blocks (GNN hops)
+  enc_dim: 128                      # Encoder width
+  d_model: 64                       # Attention head width
   n_heads: 4
   dropout: 0.10
-  aggr_slots: 12                    # aggressor 슬롯 최대치
-  si_n_time: 16                     # SI worst-instant 시간 샘플 수
-  si_elec_thresh: 0.01              # PT F6 전기적 필터 임계 (bump/VDD)
+  aggr_slots: 12                    # Maximum aggressor slots
+  si_n_time: 16                     # SI worst-instant time samples
+  si_elec_thresh: 0.01              # PT F6 electrical filter threshold (bump/VDD)
 
-# ─── 6. 학습 ─────────────────────────────────────────────────────────────────
+# --- 6. Training -------------------------------------------------------------
 train:
   seed: 42
   lr: 2.0e-3
   weight_decay: 1.0e-4
   batch_paths: 256
-  epochs: 40                        # 여기 숫자만 바꾸면 된다.
-                                    #   best.pt 는 val 모니터 최고점에서 저장되므로
-                                    #   더 돌린다고 나빠지진 않는다(시간만 더 든다).
-                                    #   처음엔 5~10 으로 짧게 돌려 파이프라인부터 확인.
-  lambda_si: 1.0                    # SI 보조손실 가중치 (SI 자료 없으면 자동 0)
-                                    #   bash scripts/run.sh sweep 으로 0/0.1/1/10 비교 가능
-  si_w_ns0: 0.05                    # SI 담금질 스케줄 (soft -> hard)
+  epochs: 40                        # Change this number and nothing else.
+                                    #   best.pt is saved at the best HIDDEN-corner
+                                    #   score, evaluated every epoch, so running
+                                    #   longer costs time but not quality.
+                                    #   Note that this makes the reported hidden
+                                    #   number optimistic -- the epoch was chosen
+                                    #   on it. Training prints that caveat.
+                                    #   Start with 5-10 to check the pipeline.
+  lambda_si: 1.0                    # SI auxiliary-loss weight (forced to 0 when
+                                    #   there is no SI data)
+                                    #   bash scripts/run.sh sweep compares 0/0.1/1/10
+  si_w_ns0: 0.05                    # SI annealing schedule (soft -> hard)
   si_w_ns1: 0.005
   si_tau_ps0: 8.0
   si_tau_ps1: 0.5
   si_w_elec0: 0.004
   si_w_elec1: 0.001
-  device: cuda                      # GPU 없으면 자동 CPU
+  device: cuda                      # Falls back to CPU when there is no GPU

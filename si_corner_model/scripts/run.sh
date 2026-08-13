@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# si_corner_model — 실행 스크립트는 이거 하나뿐이다. 설정은 config.yaml 하나뿐이다.
+# si_corner_model — this is the only run script. config.yaml is the only config.
 #
-#   bash scripts/run.sh recon               # 데이터 정찰 (제일 먼저)
-#   bash scripts/run.sh list                # 뭐가 돌아갈지 확인 (아무것도 안 건드림)
+#   bash scripts/run.sh recon               # scout the data (do this first)
+#   bash scripts/run.sh list                # see what would run (touches nothing)
 #   bash scripts/run.sh all                 # build -> base -> train -> predict -> merge
-#   bash scripts/run.sh build               # 단계별로도 가능
-#   bash scripts/run.sh base                # OLS base 점검 (numpy만, GPU 불필요)
-#   bash scripts/run.sh train --design cpu  # 특정 회로/온도만
+#   bash scripts/run.sh build               # one stage at a time also works
+#   bash scripts/run.sh base                # OLS base check (numpy only, no GPU)
+#   bash scripts/run.sh train --design cpu  # one circuit / one temperature
 #   bash scripts/run.sh predict --corners all
 #
-# 다른 파이썬을 쓰려면:  env PY=/path/to/python bash scripts/run.sh all
-#   (`PY=... bash ...` 접두 문법은 bash/zsh 전용이다. csh/tcsh 에서는 안 먹으므로
-#    위처럼 env 를 쓰거나 `setenv PY /path/to/python` 을 먼저 한다.)
-# 경로만 임시로 바꾸려면: env SI_ROOT=/real/path bash scripts/run.sh list
+# To use a different python:  env PY=/path/to/python bash scripts/run.sh all
+#   (the `PY=... bash ...` prefix form is bash/zsh only. It does not work in
+#    csh/tcsh -- use env as above, or `setenv PY /path/to/python` first.)
+# To change paths temporarily: env SI_ROOT=/real/path bash scripts/run.sh list
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="${PY:-python3}"

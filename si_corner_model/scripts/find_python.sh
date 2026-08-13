@@ -1,15 +1,17 @@
 #!/bin/sh
-# 이 패키지를 돌릴 수 있는 python 을 찾는다.  (sh 로 도는 POSIX 스크립트 — 2.7 환경에서도 안전)
+# Find a python that can run this package. (POSIX sh -- safe even where
+# `python` is 2.7)
 #
 #   sh scripts/find_python.sh
 #
-# `python` 이 2.7 이어도 상관없다. RHEL/CentOS 계열은 `python3` 이나
-# /usr/libexec/platform-python 으로 3.6 이 거의 항상 같이 깔려 있고, EDA 툴 설치본도
-# 각자 python3 을 들고 있다. 이 스크립트가 그걸 전부 훑어서 "이걸 쓰면 된다" 를 찍어준다.
+# It does not matter if `python` is 2.7. On RHEL/CentOS a 3.6 is almost always
+# present as `python3` or /usr/libexec/platform-python, and EDA tool installs
+# ship their own python3. This script sweeps all of them and prints which one
+# to use.
 #
-# 필요 조건
-#   필수 : python >= 3.6  +  numpy  +  pyyaml     -> recon/check/list/build/base 전부 가능
-#   추가 : torch                                   -> train 까지 가능
+# Requirements
+#   required : python >= 3.6 + numpy + pyyaml  -> recon/check/list/build/base
+#   optional : torch                           -> train as well
 set -u
 
 MIN_MAJOR=3
@@ -20,22 +22,22 @@ echo " si_corner_model - find a python"
 echo "=================================================================="
 echo ""
 
-# ---- 후보 모으기 -------------------------------------------------------------
+# ---- collect candidates -------------------------------------------------------------
 CANDS=""
 add() { [ -n "$1" ] && CANDS="$CANDS $1"; }
 
-# 1) PATH 에 있는 흔한 이름들
+# 1) common names on PATH
 for n in python3 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3.7 python3.6 python; do
     p=`command -v $n 2>/dev/null`
     add "$p"
 done
 
-# 2) RHEL/CentOS 기본 위치 (python 이 2.7 이어도 여기 3.6 이 있다)
+# 2) RHEL/CentOS default locations (3.6 lives here even when python is 2.7)
 for p in /usr/libexec/platform-python /usr/bin/python3 /usr/local/bin/python3; do
     [ -x "$p" ] && add "$p"
 done
 
-# 3) conda / venv 흔적
+# 3) conda / venv traces
 for base in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/miniforge3" /opt/conda; do
     [ -x "$base/bin/python" ] && add "$base/bin/python"
     if [ -d "$base/envs" ]; then
@@ -43,7 +45,7 @@ for base in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/miniforge3" /opt/conda; 
     fi
 done
 
-# 4) EDA 툴 번들 (Synopsys / Cadence / Mentor 는 자체 python3 을 들고 다닌다)
+# 4) EDA tool bundles (Synopsys / Cadence / Mentor ship their own python3)
 PTBIN=`command -v pt_shell 2>/dev/null`
 if [ -n "$PTBIN" ]; then
     PTROOT=`dirname "$PTBIN"`/..
@@ -58,14 +60,14 @@ for root in /usr/synopsys /opt/synopsys /tools/synopsys /usr/cadence /opt/cadenc
     done
 done
 
-# ---- 검사 -------------------------------------------------------------------
+# ---- check each -------------------------------------------------------------------
 echo "checking each candidate (>= $MIN_MAJOR.$MIN_MINOR, numpy, pyyaml, torch)"
 echo ""
 printf "  %-46s %-10s %-8s %-8s %-8s\n" "interpreter" "version" "numpy" "pyyaml" "torch"
 printf "  %-46s %-10s %-8s %-8s %-8s\n" "----------------------------------------------" "--------" "------" "------" "------"
 
-BEST_FULL=""     # 학습까지 가능
-BEST_CORE=""     # build/base 까지 가능
+BEST_FULL=""     # can train too
+BEST_CORE=""     # can build/base only
 SEEN=""
 for p in $CANDS; do
     rp=`readlink -f "$p" 2>/dev/null || echo "$p"`

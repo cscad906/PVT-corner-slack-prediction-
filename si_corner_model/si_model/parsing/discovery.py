@@ -310,7 +310,7 @@ def _levels_scan_crosstalk(cfg: dict) -> dict:
 def discover_annotated(cfg: dict) -> dict:
     """{corner_label: annotated report path}."""
     if layout(cfg) == "flat":
-        rx = _patterns(cfg).get("annotated_regex")     # None/"auto" -> 토큰 방식
+        rx = _patterns(cfg).get("annotated_regex")     # None/"auto" -> token mode
         return _flat_scan(cfg["data"]["annotated_dir"], rx, cfg, "annotated",
                           exclude=cfg["data"].get("crosstalk_dir"),
                           contains=_patterns(cfg).get("annotated_contains"))
@@ -323,7 +323,7 @@ def discover_crosstalk(cfg: dict) -> "dict | None":
     if not cfg["data"].get("crosstalk_dir"):
         return None
     if layout(cfg) == "flat":
-        rx = _patterns(cfg).get("crosstalk_regex")     # None/"auto" -> 토큰 방식
+        rx = _patterns(cfg).get("crosstalk_regex")     # None/"auto" -> token mode
         return _flat_scan(cfg["data"]["crosstalk_dir"], rx, cfg, "crosstalk",
                           contains=_patterns(cfg).get("crosstalk_contains"))
     return _levels_scan_crosstalk(cfg)

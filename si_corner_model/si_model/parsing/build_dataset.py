@@ -398,8 +398,8 @@ def stage_sequence(stages):
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
-    configure_cell_taxonomy(cfg)   # 비-SAED 셀 이름 규칙 (data.cell_taxonomy)
-    configure_pins(cfg)            # FF 클럭/출력 핀 이름 (data.clock_pins 등)
+    configure_cell_taxonomy(cfg)   # explicit cell-name rules (data.cell_taxonomy)
+    configure_pins(cfg)            # FF clock/output pin names (data.clock_pins, ...)
 
     corners, ann_by_corner, xt_by_corner = discover(cfg)
     if xt_by_corner is None:
