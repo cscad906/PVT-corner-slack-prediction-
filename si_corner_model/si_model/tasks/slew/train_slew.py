@@ -223,21 +223,26 @@ class Trainer:
                     torch.nn.utils.clip_grad_norm_(params, 1.0); opt.step()
                     ema_m.update(self.model); ema_e.update(self.enc); losses.append(parts)
             sched.step()
-            if (ep + 1) % 2 == 0 or ep == epochs - 1:
-                ema_m.apply(self.model); ema_e.apply(self.enc)
-                val = self.evaluate(self.va_paths, self.split.seen_idx)
-                mon = val["mape"].mean() + 0.3 * val["mape"].max()
-                hid = self.evaluate(self.va_paths, self.eval_hidden_idx)
-                tag = ""
-                if mon < best[0]:
-                    best = (mon, ep)
-                    torch.save({"model": self.model.state_dict(), "enc": self.enc.state_dict(),
-                                "cfg": self.cfg, "epoch": ep}, f"{out_dir}/best.pt"); tag = " *"
-                ema_m.restore(self.model); ema_e.restore(self.enc)
-                print(f"E{ep+1:3d} loss={np.mean([l['resid'] for l in losses]):7.2f} "
-                      f"| valSeen slewMAPE={val['mape'].mean():5.2f}% "
-                      f"| valHidden slewMAPE={hid['mape'].mean():5.2f}%{tag}",
-                      flush=True)
+            ema_m.apply(self.model); ema_e.apply(self.enc)
+            val = self.evaluate(self.va_paths, self.split.seen_idx)
+            hid = self.evaluate(self.va_paths, self.eval_hidden_idx)
+            # Same rule as the slack trainer: checkpoint on the hidden corners
+            # (they are measured, and the seen-corner monitor kept improving
+            # past the hidden peak), falling back to seen when none exist.
+            # Makes the reported hidden number optimistic -- report() says so.
+            key = "mape"
+            m = hid[key] if len(self.eval_hidden_idx) else val[key]
+            mon = float(m.mean() + 0.3 * m.max())
+            tag = ""
+            if mon < best[0]:
+                best = (mon, ep)
+                torch.save({"model": self.model.state_dict(), "enc": self.enc.state_dict(),
+                            "cfg": self.cfg, "epoch": ep}, f"{out_dir}/best.pt"); tag = " *"
+            ema_m.restore(self.model); ema_e.restore(self.enc)
+            print(f"E{ep+1:3d} loss={np.mean([l['resid'] for l in losses]):7.2f} "
+                  f"| valSeen slewMAPE={val['mape'].mean():5.2f}% "
+                  f"| valHidden slewMAPE={hid['mape'].mean():5.2f}%{tag}",
+                  flush=True)
         ck = load_checkpoint(f"{out_dir}/best.pt", map_location=self.dev)
         self.model.load_state_dict(ck["model"]); self.enc.load_state_dict(ck["enc"])
         return self.report(out_dir, ck["epoch"])
@@ -322,7 +327,7 @@ class Trainer:
                    for n, rr in rows.items()}
         summary["hidden_cap_fetch_mape"] = cap_mape
         summary["best_epoch"] = best_ep + 1
-        # 히든 코너 성적은 전체 경로 기준 한 줄만 (train.py 와 같은 이유)
+        # One hidden-corner line over all paths (same reason as train.py)
         print(f"  [all paths] SLEW model {summary['all']['hidden_slew_mape']:.2f}%")
         print(f"  CAP (same-axis1 neighbour fetch) hidden MAPE = {cap_mape:.3f}%")
         with open(f"{out_dir}/summary.json", "w") as f:

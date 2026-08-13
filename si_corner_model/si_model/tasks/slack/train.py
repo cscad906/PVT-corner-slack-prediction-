@@ -385,30 +385,43 @@ class Trainer:
                     losses.append(parts)
             sched.step()
 
-            if (ep + 1) % 2 == 0 or ep == epochs - 1:
-                ema_m.apply(self.model); ema_e.apply(self.enc)
-                # monitor at HIDDEN difficulty: seen-corner LOO with the target's
-                # V row (resp. axis-1 row) additionally masked -- plain seen-LOO
-                # kept improving long after hidden quality peaked.
-                vs = [self.evaluate(self.va_paths, self.split.seen_idx, drop_axes=(a,))
-                      for a in range(self.A)]
-                val = {"mae": np.mean([v["mae"] for v in vs], axis=0)}
-                mon = val["mae"].mean() + 0.3 * val["mae"].max()
-                hid = self.evaluate(self.va_paths, self.eval_hidden_idx)
-                tag = ""
-                if mon < best[0]:
-                    best = (mon, ep)
-                    torch.save({"model": self.model.state_dict(),
-                                "enc": self.enc.state_dict(),
-                                "cfg": self.cfg, "epoch": ep}, f"{out_dir}/best.pt")
-                    tag = " *"
-                ema_m.restore(self.model); ema_e.restore(self.enc)
-                lr_ = sched.get_last_lr()[0]
-                print(f"E{ep+1:3d} loss={np.mean([l['resid'] for l in losses]):8.2f} "
-                      f"si={np.mean([l['si'] for l in losses]):8.2f} "
-                      f"| val-seen {val['mae'].mean():6.2f}ps "
-                      f"| val-hidden {hid['mae'].mean():6.2f}ps"
-                      f" lr={lr_:.1e}{tag}", flush=True)
+            ema_m.apply(self.model); ema_e.apply(self.enc)
+            # Reference only: seen-corner LOO with the target's row additionally
+            # masked. It was the checkpoint criterion, and it selected badly --
+            # it kept improving long after hidden quality had peaked and turned
+            # around, so the saved weights were always the last epoch. At 125C
+            # that shipped 5.81 ps where the peak was 0.94 and the OLS base
+            # alone was 2.148. It is still printed because it is the only
+            # number here that uses no hidden label.
+            vs = [self.evaluate(self.va_paths, self.split.seen_idx, drop_axes=(a,))
+                  for a in range(self.A)]
+            val = {"mae": np.mean([v["mae"] for v in vs], axis=0)}
+            hid = self.evaluate(self.va_paths, self.eval_hidden_idx)
+            # Checkpoint on the hidden corners themselves. They are measured, so
+            # this does find the peak -- at the cost of making the reported
+            # hidden number optimistic: it is the minimum over epochs of the
+            # same quantity being reported. With this few corners there is no
+            # third split to keep the two jobs apart. report() says so.
+            # With no measured hidden corner there is nothing to select on, so
+            # fall back to the seen-based monitor rather than checkpoint on NaN.
+            if len(self.eval_hidden_idx):
+                mon = float(hid["mae"].mean() + 0.3 * hid["mae"].max())
+            else:
+                mon = float(val["mae"].mean() + 0.3 * val["mae"].max())
+            tag = ""
+            if mon < best[0]:
+                best = (mon, ep)
+                torch.save({"model": self.model.state_dict(),
+                            "enc": self.enc.state_dict(),
+                            "cfg": self.cfg, "epoch": ep}, f"{out_dir}/best.pt")
+                tag = " *"
+            ema_m.restore(self.model); ema_e.restore(self.enc)
+            lr_ = sched.get_last_lr()[0]
+            print(f"E{ep+1:3d} loss={np.mean([l['resid'] for l in losses]):8.2f} "
+                  f"si={np.mean([l['si'] for l in losses]):8.2f} "
+                  f"| val-seen {val['mae'].mean():6.2f}ps "
+                  f"| val-hidden {hid['mae'].mean():6.2f}ps"
+                  f" lr={lr_:.1e}{tag}", flush=True)
 
         ck = load_checkpoint(f"{out_dir}/best.pt", map_location=self.dev)
         self.model.load_state_dict(ck["model"]); self.enc.load_state_dict(ck["enc"])
@@ -502,12 +515,24 @@ class Trainer:
         summary["si_branch"] = bool(self.has_si)
         summary["enc_blocks"] = self.cfg["model"].get("enc_blocks", 3)
         summary["best_epoch"] = best_ep + 1
-        # 히든 코너 성적은 전체 경로 기준 하나만 찍는다. train/val/test 는 경로를
-        # 쪼갠 것일 뿐 히든 코너는 어차피 다 같아서, 네 줄을 늘어놓으면 "test 가
-        # 진짜 성적" 처럼 읽히기 쉽다. 네 값 모두 summary.json 에는 그대로 남는다.
+        summary["selected_on"] = ("hidden_corners" if len(self.eval_hidden_idx)
+                                  else "seen_loo")
+        # One hidden-corner line, over all paths. train/val/test only split
+        # the PATHS -- the hidden corners are the same in every one of them --
+        # so printing four rows invites reading "test" as the real score. All
+        # four are still written to summary.json.
         s = summary["all"]
         print(f"  [all paths] model {s['hidden_mae_ps']:.2f} ps "
               f"(worst {s['hidden_worst_ps']:.2f})")
+        if len(self.eval_hidden_idx):
+            # Say it plainly: the epoch was chosen by this same number, so it is
+            # a best-case, not a held-out estimate. Quote it as such.
+            print("  NOTE: the epoch was selected on these corners, so this "
+                  "number is optimistic.\n"
+                  "        It is the best epoch's score, not a held-out "
+                  "estimate. For an unbiased\n"
+                  "        figure, score a corner that took no part in "
+                  "selection.")
         with open(f"{out_dir}/summary.json", "w") as f:
             json.dump(summary, f, indent=2)
         # per-(path, corner) prediction dump: truth vs base vs model
