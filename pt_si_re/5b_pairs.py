@@ -27,20 +27,23 @@ force_utf8()
 HERE = os.path.dirname(os.path.abspath(__file__))
 XTALK = os.path.join(HERE, "_engine", "xtalk")
 
+# 화면에 나가는 문장은 영어로 쓴다. 현장 터미널이 한글을 깨뜨려서, 정작
+# 필요할 때 진단문을 못 읽는다. 주석과 docstring 은 화면에 안 나오므로 한국어.
 CODE_INFO = {
-    "E-NOENGINE": ("패키지 파일(_engine/xtalk/)이 없습니다",
-                   "pt_si_re 폴더를 통째로 옮기세요. _engine/ 이 빠지면 "
-                   "crosstalk 단계가 돌지 않습니다."),
-    "E-NORAW":    ("PT 출력(context_raw.rpt)이 없습니다",
-                   "pt_shell 에서 pt/xtalk_calc.tcl 을 먼저 돌려 주세요."),
-    "E-PARSE":    ("PT 출력을 읽다가 실패했습니다",
-                   "xtalk/context_raw.rpt 을 열어 앞부분이 정상인지 보세요."),
-    "E-NOPAIR":   ("victim-aggressor 쌍이 하나도 안 나왔습니다",
-                   "SI 가 꺼져 있거나 SPEF 에 coupling 이 없을 수 있습니다. "
-                   "PT 에서 si_enable_analysis 와 read_parasitics "
-                   "-keep_capacitive_coupling 을 확인해 주세요."),
-    "W-NOACTIVE": ("실제로 영향을 준 aggressor 가 하나도 없습니다",
-                   "값이 전부 0 인 리포트가 됩니다. SI 설정을 확인해 보세요."),
+    "E-NOENGINE": ("Package files (_engine/xtalk/) are missing",
+                   "Copy the whole pt_si_re folder. Without _engine/ the "
+                   "crosstalk steps cannot run."),
+    "E-NORAW":    ("PT output (context_raw.rpt) is missing",
+                   "Run pt/xtalk_calc.tcl in pt_shell first."),
+    "E-PARSE":    ("Failed while reading the PT output",
+                   "Open xtalk/context_raw.rpt and check that the top of the "
+                   "file looks normal."),
+    "E-NOPAIR":   ("No victim-aggressor pair was produced",
+                   "SI may be off, or the SPEF may carry no coupling. Check "
+                   "si_enable_analysis and read_parasitics "
+                   "-keep_capacitive_coupling in PT."),
+    "W-NOACTIVE": ("No aggressor actually had any effect",
+                   "The report will be all zeros. Check the SI settings."),
 }
 
 
@@ -50,17 +53,17 @@ def code(c, *msg):
     print("")
     print("=" * 66)
     if c.startswith("OK-"):
-        print("  정상 종료           [ %s ]" % c)
+        print("  DONE                [ %s ]" % c)
         print("=" * 66)
         return
     what, todo = CODE_INFO.get(c, ("", ""))
-    print("  %s" % ("문제 발생" if c.startswith("E-") else "확인 필요"))
+    print("  %s" % ("PROBLEM" if c.startswith("E-") else "CHECK NEEDED"))
     if what:
-        print("    무엇이   : %s" % what)
-        print("    하실 일  : %s" % todo)
+        print("    What  : %s" % what)
+        print("    To do : %s" % todo)
     print("")
-    print("    에러 코드: %s" % c)
-    print("    (해결이 안 되면 이 코드를 알려주세요)")
+    print("    Error code: %s" % c)
+    print("    (If this does not help, tell us this code)")
     print("=" * 66)
     sys.exit(1 if c.startswith("E-") else 0)
 
@@ -98,19 +101,22 @@ def need_parser(name):
     p = os.path.join(XTALK, name)
     if not os.path.isfile(p):
         code("E-NOENGINE",
-             "[ 실패 ] 패키지 파일이 없습니다: %s" % p,
-             "         _engine/xtalk/ 폴더가 통째로 필요합니다.",
-             "         패키지를 옮길 때 _engine/ 을 빠뜨리지 않았는지 보세요.")
+             "[ FAILED ] Package file not found: %s" % p,
+             "           The whole _engine/xtalk/ folder is required.",
+             "           _engine/ starts with an underscore, so copying with",
+             "           'cp *.py' or 'scp *' silently leaves it behind.",
+             "           Copy the folder itself:  cp -r <src>/_engine <dst>/")
 
 def main():
     ap = argparse.ArgumentParser(
-        description="crosstalk 쌍 리포트 3단계 - PT 출력에서 쌍을 뽑는다.")
+        description="crosstalk pair report, step 3 - extract pairs from the "
+                    "PT output.")
     ap.add_argument("--dir", default=".",
-                    help="**코너 폴더 하나** (안에 xtalk/ 이 있는 폴더)")
+                    help="ONE corner folder (the one that contains xtalk/)")
     ap.add_argument("--corner", default=None,
-                    help="코너 이름. 안 주면 폴더 이름을 쓴다")
+                    help="Corner name. Defaults to the folder name")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
-                    help="setup(max) / hold(min). xtalk_calc.tcl 과 같아야 한다")
+                    help="setup(max) / hold(min). Must match xtalk_calc.tcl")
     args = ap.parse_args()
 
     for _p in ['parse_path_context_delay_calculation.py', 'prepare_compact_timing_window_requests.py']:
@@ -121,7 +127,7 @@ def main():
     corner = args.corner or os.path.basename(os.path.abspath(d))
 
     print("=" * 68)
-    print("5b - crosstalk 쌍 뽑기")
+    print("5b - extract crosstalk victim-aggressor pairs")
     print("=" * 68)
 
     victim = os.path.join(work, "path_victim_nets.tsv")
@@ -131,9 +137,9 @@ def main():
     feats = os.path.join(work, "active_features.tsv")
 
     if not os.path.isfile(raw):
-        code("E-NORAW", "[ 실패 ] PT 출력이 없습니다: %s" % raw)
+        code("E-NORAW", "[ FAILED ] PT output not found: %s" % raw)
 
-    print("  PT 출력 : %s  (%.1fMB)" % (raw, os.path.getsize(raw) / 1048576.0))
+    print("  PT output : %s  (%.1fMB)" % (raw, os.path.getsize(raw) / 1048576.0))
 
     ok, out = run("parse_path_context_delay_calculation.py",
                   victim, ctx, raw, summary, feats,
@@ -142,13 +148,14 @@ def main():
                        "PT_FEATURE_VOLTAGE": "",
                        "PT_FEATURE_TEMPERATURE": ""})
     if not ok:
-        code("E-PARSE", "[ 실패 ] PT 출력 파싱 실패", out[-800:])
+        code("E-PARSE", "[ FAILED ] Could not parse the PT output", out[-800:])
 
     vpins = os.path.join(work, "victim_load_pins.txt")
     anets = os.path.join(work, "aggressor_nets.txt")
     ok, out = run("prepare_compact_timing_window_requests.py", feats, vpins, anets)
     if not ok:
-        code("E-PARSE", "[ 실패 ] 다음 단계 목록 만들기 실패", out[-800:])
+        code("E-PARSE",
+             "[ FAILED ] Could not build the list for the next step", out[-800:])
 
     n_row = count_rows(feats)
     n_vp = count_lines(vpins)
@@ -156,17 +163,17 @@ def main():
 
     print("")
     print("-" * 68)
-    print("  쌍(줄)              : %d" % n_row)
-    print("  물어볼 victim 핀    : %d" % n_vp)
-    print("  물어볼 aggressor 넷 : %d" % n_an)
+    print("  pairs (rows)          : %d" % n_row)
+    print("  victim pins to ask PT : %d" % n_vp)
+    print("  aggressor nets to ask : %d" % n_an)
     print("-" * 68)
 
     if n_row == 0:
-        code("E-NOPAIR", "[ 실패 ] 쌍이 0개입니다.")
+        code("E-NOPAIR", "[ FAILED ] Zero pairs.")
     if n_an == 0:
-        code("W-NOACTIVE", "[ 주의 ] 실제로 영향을 준 aggressor 가 0개입니다.")
+        code("W-NOACTIVE", "[ WARNING ] Zero aggressors actually had an effect.")
 
-    print("[ 정상 ] 쌍 %d줄. 다음은 pt_shell 에서:" % n_row)
+    print("[ OK ] %d pair rows. Next, in pt_shell:" % n_row)
     print("           cd %s" % os.path.abspath(d))
     print("           source %s" % os.path.join(HERE, "pt", "xtalk_windows.tcl"))
     code("OK-XPAIR")
