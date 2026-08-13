@@ -22,6 +22,7 @@ from si_model.parsing.annotated import configure_pins, parse_annotated
 from si_model.parsing.build_dataset import (EDGE_FEAT_NAMES, NODE_FEAT_NAMES,
                                             SIG_NAMES, _assert_parsed,
                                             choose_key_mode,
+                                            autofit_cell_taxonomy,
                                             configure_cell_taxonomy,
                                             path_signature, stage_sequence)
 from si_model.parsing.discovery import corner_levels, discover as _discover
@@ -72,6 +73,8 @@ def build(cfg: dict) -> str:
         # every corner needs full stages (launch slew + endpoint cap are per-corner)
         ann = parse_annotated(ann_by[corner], with_stages=True)
         _assert_parsed(ann, ann_by[corner])
+        if ci == 0:
+            autofit_cell_taxonomy(ann)   # same rule as the slack builder
         if strip_idx is None:
             strip_idx = choose_key_mode(ann, cfg)
         keyf = norm_path_key if strip_idx else (lambda k: k.strip())

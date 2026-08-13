@@ -107,6 +107,14 @@ def cell_family(cell: str) -> str:
         for pat, fam in _CUSTOM_TAX["rules"]:
             if pat.search(ct):
                 return fam
+        if _CUSTOM_TAX.get("auto_token") is not None:
+            # the derived position, letters only: 'SEC9T_NAND2_X4' -> 'NAND'.
+            # Not guaranteed to be the vendor's function name, but the same
+            # function always lands on the same label, which is all the
+            # embedding needs.
+            toks = ct.split("_")
+            i = _CUSTOM_TAX["auto_token"]
+            return _token_label(toks[i] if i < len(toks) else toks[-1]) or "<unk>"
         return "<unk>"
     for pre in _VT_PREFIXES:
         ct = ct.replace(pre, "")
@@ -142,6 +150,105 @@ def cell_drive(cell: str) -> float:
         return max(0.5, float(tok.replace("P", ".")))
     except ValueError:
         return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Automatic taxonomy: derive the rules from the cell names actually present.
+#
+# Without this, an unrecognised library degrades silently -- every cell becomes
+# '<unk>' with drive 1.0, so the family embedding carries no information and the
+# drive feature is a constant. Nothing errors; the model just trains on less.
+# The families are dataset-internal labels (the vocab is built from the data),
+# so they only have to be CONSISTENT, not semantically right -- which is exactly
+# what can be read off the names themselves.
+# ---------------------------------------------------------------------------
+_DRIVE_CANDIDATES = (r"_X(\d+(?:P\d+)?)$", r"_(\d+(?:P\d+)?)$", r"X(\d+(?:P\d+)?)$")
+_AUTO_MIN_DRIVE_RATE = 0.30    # below this, a drive rule is noise; keep 1.0
+_SAED_MIN_COVERAGE = 0.60      # SAED table explains this much -> keep it
+
+
+def _cell_names(blocks) -> "dict[str, int]":
+    """Cell name -> occurrence count, over every parsed stage."""
+    out: "dict[str, int]" = {}
+    for b in blocks.values():
+        for st in (getattr(b, "stages", None) or ()):
+            if st.kind != "net" and st.cell:
+                out[st.cell] = out.get(st.cell, 0) + 1
+    return out
+
+
+def _token_label(tok: str) -> str:
+    """One ``_``-separated token reduced to its letters: 'ND3B' -> 'NDB'."""
+    return re.sub(r"\d+", "", tok.upper())
+
+
+def _family_token_index(names: "list[str]") -> int:
+    """Which ``_``-separated position carries the function.
+
+    Stripping a shared prefix only works when there IS one; 'LIB_NAND2_X4'
+    beside 'OTHER_DFF_X2' has none, and the head token would make every cell
+    look like its vendor. Picking the most discriminative position handles both:
+    the vendor token repeats (low diversity), the drive token is mostly digits
+    (low diversity), and the function token is what varies. Ties go to the
+    earliest position so an arbitrarily unique suffix cannot win by a hair."""
+    toks = [n.upper().split("_") for n in names]
+    div = []
+    for i in range(max(len(t) for t in toks)):
+        labs = {_token_label(t[i] if i < len(t) else t[-1]) for t in toks}
+        labs.discard("")
+        div.append(len(labs))
+    top = max(div)
+    return next(i for i, d in enumerate(div) if d >= 0.9 * top)
+
+
+def _derive_taxonomy(names: "list[str]") -> dict:
+    """Read the family position and the drive pattern off the names."""
+    best_rx, best_rate = None, 0.0
+    for pat in _DRIVE_CANDIDATES:
+        rx = re.compile(pat, re.IGNORECASE)
+        rate = sum(1 for n in names if rx.search(n)) / float(len(names))
+        if rate > best_rate:
+            best_rx, best_rate = rx, rate
+    return {"strip": (), "rules": [], "auto_token": _family_token_index(names),
+            "drive": best_rx if best_rate >= _AUTO_MIN_DRIVE_RATE else None,
+            "_drive_rate": best_rate}
+
+
+def autofit_cell_taxonomy(blocks) -> None:
+    """Choose the cell taxonomy from the parsed reference corner.
+
+    An explicit ``data.cell_taxonomy`` always wins -- this only fills the gap
+    where there is none. The built-in SAED14 table is kept when it explains most
+    of the names (its families are real functions, which beats anything derived);
+    otherwise the rules are read off the names. Prints which one is in effect,
+    because "every cell is <unk>" is otherwise invisible."""
+    global _CUSTOM_TAX
+    if _CUSTOM_TAX is not None:
+        return                               # config was explicit; respect it
+    counts = _cell_names(blocks)
+    if not counts:
+        return
+    names = sorted(counts)
+    known = sum(counts[n] for n in names if cell_family(n) != "<unk>")
+    total = sum(counts.values())
+    cov = known / float(total)
+    if cov >= _SAED_MIN_COVERAGE:
+        print(f"[CELLS] {len(names)} distinct cell names; built-in SAED14 "
+              f"taxonomy covers {cov * 100:.0f}% -- using it", flush=True)
+        return
+    tax = _derive_taxonomy(names)
+    _CUSTOM_TAX = tax
+    fams = {cell_family(n) for n in names}
+    fams.discard("<unk>")
+    drv = (f"drive from {tax['drive'].pattern!r} "
+           f"({tax['_drive_rate'] * 100:.0f}% of names)") if tax["drive"] else \
+          "no drive pattern found -- drive stays 1.0"
+    ex = ", ".join(f"{n} -> {cell_family(n)}/{cell_drive(n):g}" for n in names[:3])
+    print(f"[CELLS] {len(names)} distinct cell names; SAED14 taxonomy covers "
+          f"only {cov * 100:.0f}% -- deriving rules from the names instead\n"
+          f"        family from '_'-token #{tax['auto_token']}, {len(fams)} families; {drv}\n"
+          f"        e.g. {ex}\n"
+          f"        (set data.cell_taxonomy to override)", flush=True)
 
 
 def load_config(fp: str) -> dict:
@@ -323,6 +430,11 @@ def build(cfg: dict) -> str:
     for ci, corner in enumerate(corners):
         ann_all = parse_annotated(ann_by_corner[corner], with_stages=(corner == ref_corner))
         _assert_parsed(ann_all, ann_by_corner[corner])
+        if corner == ref_corner:
+            # Stages exist only here, and stage_sequence() below is the first
+            # thing to call cell_family/cell_drive -- so the taxonomy has to be
+            # settled now, from the names this corner just yielded.
+            autofit_cell_taxonomy(ann_all)
         # Blocks with no timing result at this corner stay in `ann_all` with
         # slack = NaN; they are dropped after the loop (see the intersection
         # pass below), not here, so the same path list can be walked everywhere.
