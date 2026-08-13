@@ -35,9 +35,18 @@ CODE_INFO = {
                    "crosstalk steps cannot run."),
     "E-NORAW":    ("PT output (context_raw.rpt) is missing",
                    "Run pt/xtalk_calc.tcl in pt_shell first."),
+    "E-NO5A":     ("An input made by 5a_contexts.py is missing or empty",
+                   "Run 5a_contexts.py --dir <corner folder> first. 5b needs "
+                   "path_victim_nets.tsv and unique_contexts.tsv, not just "
+                   "the PT output."),
+    "E-MODE":     ("The PT output was made with setup/hold the other way round",
+                   "Re-run 5b with the other --mode, or re-make the PT output "
+                   "with DELAY_TYPE set to the one you want. See above."),
     "E-PARSE":    ("Failed while reading the PT output",
-                   "Open xtalk/context_raw.rpt and check that the top of the "
-                   "file looks normal."),
+                   "The parser's own message is printed above -- read that "
+                   "first. If it says nothing useful, open "
+                   "xtalk/context_raw.rpt and check the top of the file for "
+                   "PT error lines."),
     "E-NOPAIR":   ("No victim-aggressor pair was produced",
                    "SI may be off, or the SPEF may carry no coupling. Check "
                    "si_enable_analysis and read_parasitics "
@@ -139,7 +148,30 @@ def main():
     if not os.path.isfile(raw):
         code("E-NORAW", "[ FAILED ] PT output not found: %s" % raw)
 
+    # 5a 가 만든 두 파일도 파서에 넘어간다. 예전에는 이걸 확인하지 않아서,
+    # 5a 를 안 돌렸을 때도 "PT 출력 앞부분을 보라"는 엉뚱한 안내가 나왔다.
+    for label, p in (("path_victim_nets.tsv", victim),
+                     ("unique_contexts.tsv", ctx)):
+        if not os.path.isfile(p):
+            code("E-NO5A",
+                 "[ FAILED ] 5a output not found: %s" % p,
+                 "           5b reads this together with the PT output.")
+        if os.path.getsize(p) == 0:
+            code("E-NO5A",
+                 "[ FAILED ] 5a output is empty: %s" % p,
+                 "           5a ran but produced nothing.")
+
+    if os.path.getsize(raw) == 0:
+        code("E-NORAW",
+             "[ FAILED ] PT output is empty: %s" % raw,
+             "           xtalk_calc.tcl created the file but wrote nothing.",
+             "           Usually the design was not loaded in that pt_shell.")
+
     print("  PT output : %s  (%.1fMB)" % (raw, os.path.getsize(raw) / 1048576.0))
+    print("  5a input  : %s (%d rows), %s (%d rows)"
+          % (os.path.basename(victim), count_rows(victim),
+             os.path.basename(ctx), count_rows(ctx)))
+    print("  mode      : %s   (must match the xtalk_calc.tcl run)" % args.mode)
 
     ok, out = run("parse_path_context_delay_calculation.py",
                   victim, ctx, raw, summary, feats,
@@ -148,6 +180,25 @@ def main():
                        "PT_FEATURE_VOLTAGE": "",
                        "PT_FEATURE_TEMPERATURE": ""})
     if not ok:
+        # 파서가 알려 주는 실패 중 하나는 원인이 딱 정해져 있다. 그건 일반
+        # "파싱 실패" 로 뭉뚱그리지 말고 무엇을 고치면 되는지 바로 말한다.
+        if "delta mode mismatch" in out:
+            other = "hold" if args.mode == "setup" else "setup"
+            code("E-MODE",
+                 "[ FAILED ] The PT output was made with a different mode.",
+                 "",
+                 "           5b was told  --mode %s" % args.mode,
+                 "           but %s holds the other kind of delta delay."
+                 % os.path.basename(raw),
+                 "",
+                 "           Either re-run 5b with:   --mode %s" % other,
+                 "           or re-make the PT output with the mode you want:",
+                 "             pt_shell> set DELAY_TYPE \"%s\""
+                 % ("min" if args.mode == "hold" else "max"),
+                 "             pt_shell> source pt/xtalk_all.tcl",
+                 "",
+                 "           Parser said:",
+                 out[-500:])
         code("E-PARSE", "[ FAILED ] Could not parse the PT output", out[-800:])
 
     vpins = os.path.join(work, "victim_load_pins.txt")
