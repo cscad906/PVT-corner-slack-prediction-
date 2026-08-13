@@ -477,6 +477,63 @@ MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
 `model_ps` 가 최종 예측값이다. **base 수치는 여기 안 나온다** — 모델 수치와
 헷갈리지 않게 분리했다. base 는 `run.sh base` 로만 본다.
 
+`merge` 는 끝에 **코너별 성적표**를 찍고 같은 내용을 `summary.json` 의
+`by_corner` 에 넣는다. 모델(회로x온도)은 내부 분할일 뿐이라, 넘길 때 궁금한
+"이 코너가 얼마나 잘 맞았나" 를 코너 기준 한 표로 본다:
+
+```
+  코너별 성적 (모델이 아니라 코너 기준)
+    회로                    온도    코너                       경로       MAE     worst
+    MFC_Timing_Report     125   SSPG_0p54V_rcmax       3000   14.00ps   24.65ps
+    MFC_Timing_Report     125   SSPG_0p6V_cmax         3000    6.15ps   14.81ps
+    MFC_Timing_Report     m25   SSPG_0p5V_cmax         3000   13.78ps   27.46ps
+    MFC_Timing_Report     m25   SSPG_0p685V_rcmin      3000    8.99ps   18.42ps
+    전체                                                12000   10.73ps   27.46ps
+```
+
+`summary.json` 은 두 부분이다:
+
+| 키 | 내용 |
+|---|---|
+| `by_corner` | ★ 위 표. 코너마다 `mae_ps` / `worst_ps` / `n_paths` |
+| `by_model` | 모델별 상세 (`hidden_mae_ps`, `best_epoch`, `si_branch` ...) |
+
+정답이 없는 `query_corners` 는 `n_paths` 만 세고 `mae_ps` 는 비어 있다.
+
+
+### 학습을 중간에 끊었을 때
+
+**끊어도 된다. 그때까지의 최선이 남아 있다.** `best.pt` 는 2 epoch 마다,
+성적이 좋아질 때만 덮어쓰므로 언제 끊든 마지막 개선 지점이 파일로 남는다.
+
+```bash
+# Ctrl-C 로 끊은 뒤 -- 학습을 다시 할 필요 없다
+bash scripts/run.sh bundle       # 그때까지의 best.pt 를 model.pt 로
+bash scripts/run.sh predict      # 예측 다시 뽑기  ★ 반드시 다시 돌릴 것
+bash scripts/run.sh merge        # 코너별 성적표
+```
+
+**`predict` 를 꼭 다시 돌려야 한다.** `predictions_*.csv` 는 학습이 끝까지
+갔을 때만 자동으로 쓰인다. 안 돌리면 이전 실행의 예측이 그대로 남아 있고,
+새 체크포인트와 아귀가 안 맞는다.
+
+같은 이유로 `summary.json`(모델별)도 끝까지 간 실행에서만 갱신된다. `merge` 가
+이걸 감지해서 짚어준다:
+
+```
+(!) by_model 이 오래됨 (best.pt 보다 이전): ['MFC_Timing_Report/125']
+    학습을 중간에 끊었으면 그 모델의 by_model 수치는 이전 실행 것이다.
+    코너별 성적(by_corner)은 방금 예측에서 뽑은 값이라 정확하다.
+```
+
+**`by_corner` 를 보면 된다** — 방금 만든 예측 CSV 에서 뽑으므로 항상 맞다.
+
+이어서 학습하는(resume) 기능은 없다. `run.sh train` 을 다시 치면 **처음부터**
+다시 학습한다. 지금 결과가 마음에 들면 위 세 단계로 마무리하고, 더 돌리고
+싶으면 `train` 을 다시 치면 된다 (기존 `best.pt` 는 더 좋아질 때만 덮인다 --
+정확히는 새 실행이 자기 기준으로 처음부터 비교하므로, 지금 것을 지키려면
+`model.pt` 를 먼저 만들어 두거나 `best.pt` 를 복사해 둔다).
+
 ### 실전 예측 — 측정 안 한 코너
 
 ```yaml
@@ -573,6 +630,7 @@ bash scripts/run.sh sweep      # lambda_si {0,0.1,1,10} 비교
 [ ]                                        + runs/<mode>/<회로>/model.pt
 [ ] STEP 7  파싱 0개면: 코너 간 경로 집합 동일한지 확인
 [ ] STEP 8  SI: crosstalk_subdir 채우고 재빌드 -> S=... 확인
+[ ] 학습을 중간에 끊었다면: bundle -> predict -> merge (predict 를 꼭 다시)
 [ ] hold 도 돌린다면: config 의 mode: setup -> hold 로 바꾸고 위를 반복
 ```
 

@@ -453,6 +453,10 @@ def expand(p: dict) -> "list[dict]":
                 base["adaptive_grid"] = b["adaptive_grid"]
             if b.get("weighting") == "local":
                 assert b.get("bandwidth"), "base.weighting: local 이면 base.bandwidth 필요"
+            # bandwidth 는 weighting 과 무관하게 넘긴다 -- run.sh base 의 weighting
+            # 비교표가 local 도 재려면 대역폭이 있어야 하는데, local 일 때만 넘기면
+            # local 은 영영 표에서 빠진다.
+            if b.get("bandwidth"):
                 base["bandwidth"] = b["bandwidth"]
 
             models.append({
@@ -712,8 +716,46 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (정답 없어 건너뜀: {skipped})")
+    if hid and field == "slack":
+        _print_weighting_comparison(y, phi, split, coords, cfg, hid)
 
 
+def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
+    """What each base.weighting would have scored at the hidden corners.
+
+    Printed only -- never written to summary.json or any file. The mode in
+    effect is already chosen (config, plus the small-grid downgrade in
+    ``loo._effective_mode``); this is here so the choice can be sanity-checked
+    at a glance instead of taken on faith.
+
+    Do NOT turn it into an automatic selector. Picking by these numbers is
+    selection against held-out data over very few corners, and the label-free
+    alternatives were measured and found unreliable: plain seen-LOO ranks the
+    modes backwards, and the row-masked variant cannot be computed at all when a
+    voltage has a single seen corner."""
+    import copy
+
+    import numpy as np
+
+    from si_model.training.loo import _effective_mode, fit_field
+
+    cur = _effective_mode(cfg, split)
+    print(f"    ── weighting 별 히든 (참고용, 저장 안 함) ──")
+    for w in ("plain", "local", "adaptive"):
+        c = copy.deepcopy(cfg)
+        c["base"]["weighting"] = w
+        if w == "local" and not c["base"].get("bandwidth"):
+            print(f"       {w:9s} (bandwidth 미설정)")
+            continue
+        try:
+            loo, _ = fit_field(y, phi, split, coords, c, force_mode=w)
+        except Exception as e:
+            print(f"       {w:9s} (못 잼: {repr(e)[:40]})")
+            continue
+        e = np.array([float(np.nanmean(np.abs(loo[:, ci] - y[:, ci])) * 1000.0)
+                      for ci in hid])
+        print(f"       {w:9s} {e.mean():8.3f} ps  (worst {e.max():7.3f})"
+              f"{'  <- 지금 이것' if w == cur else ''}")
 def _trainer(m: dict):
     if m["task"] == "slew":
         from si_model.tasks.slew.train_slew import Trainer
@@ -841,17 +883,81 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         print(f"  (!) 빠진 모델: {missing}")
     print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
 
-    summ = {}
+    summ = {"by_corner": _corner_table(out_fp), "by_model": {}}
+    stale = []
     for m in models:
-        sfp = os.path.join(m["cfg"]["train"]["out_dir"], "summary.json")
-        if os.path.exists(sfp):
-            with open(sfp) as f:
-                summ[m["name"]] = json.load(f)
-    if summ:
-        with open(os.path.join(out_dir, "summary.json"), "w") as f:
-            json.dump(summ, f, indent=2)
-        print(f"  wrote {out_dir}/summary.json ({len(summ)} models)")
+        d = m["cfg"]["train"]["out_dir"]
+        sfp, ckpt = os.path.join(d, "summary.json"), os.path.join(d, "best.pt")
+        if not os.path.exists(sfp):
+            continue
+        # train 이 중간에 끊기면 best.pt 는 갱신되지만 summary.json 은 학습이
+        # 끝까지 갔을 때만 쓰인다. 그래서 이전 실행의 요약이 새 체크포인트 옆에
+        # 남아 조용히 섞일 수 있다. by_corner 는 방금 만든 예측에서 뽑으므로
+        # 항상 맞지만, by_model 은 그 옛 파일이라 짚어준다.
+        if os.path.exists(ckpt) and os.path.getmtime(sfp) < os.path.getmtime(ckpt):
+            stale.append(m["name"])
+        with open(sfp) as f:
+            summ["by_model"][m["name"]] = json.load(f)
+    if stale:
+        print(f"  (!) by_model 이 오래됨 (best.pt 보다 이전): {stale}\n"
+              f"      학습을 중간에 끊었으면 그 모델의 by_model 수치는 이전 실행 것이다. "
+              f"코너별 성적(by_corner)은 방금 예측에서 뽑은 값이라 정확하다.")
+    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        json.dump(summ, f, indent=2)
+    print(f"  wrote {out_dir}/summary.json "
+          f"(코너 {len(summ['by_corner'])}개, 모델 {len(summ['by_model'])}개)")
+    _print_corner_table(summ["by_corner"])
     return out_fp
+
+
+def _corner_table(csv_fp: str) -> list:
+    """One row per CORNER, read back from the merged predictions.
+
+    The per-model summaries answer "how did model X do"; this answers "how well
+    is each corner predicted", which is the question the deliverable is actually
+    about -- a corner is a corner regardless of which circuit/temperature model
+    happened to produce it. Rows with no truth (query corners) are counted but
+    carry no error.
+    """
+    acc = {}
+    with open(csv_fp, newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            key = (row["design"], row["temp"], row["corner"])
+            a = acc.setdefault(key, {"n": 0, "n_truth": 0, "sum": 0.0, "worst": 0.0})
+            a["n"] += 1
+            if row.get("truth_ps") in (None, ""):
+                continue
+            e = abs(float(row["model_err_ps"]))
+            a["n_truth"] += 1
+            a["sum"] += e
+            a["worst"] = max(a["worst"], e)
+    out = []
+    for (design, temp, corner), a in sorted(acc.items()):
+        out.append({
+            "design": design, "temp": temp, "corner": corner,
+            "n_paths": a["n"],
+            "mae_ps": round(a["sum"] / a["n_truth"], 3) if a["n_truth"] else None,
+            "worst_ps": round(a["worst"], 3) if a["n_truth"] else None,
+        })
+    return out
+
+
+def _print_corner_table(rows: list) -> None:
+    if not rows:
+        return
+    print("\n  코너별 성적 (모델이 아니라 코너 기준)")
+    print(f"    {'회로':<22}{'온도':<6}{'코너':<20}{'경로':>7}{'MAE':>10}{'worst':>10}")
+    for r in rows:
+        mae = "-" if r["mae_ps"] is None else f"{r['mae_ps']:.2f}ps"
+        wst = "-" if r["worst_ps"] is None else f"{r['worst_ps']:.2f}ps"
+        print(f"    {r['design']:<22}{r['temp']:<6}{r['corner']:<20}"
+              f"{r['n_paths']:>7}{mae:>10}{wst:>10}")
+    scored = [r for r in rows if r["mae_ps"] is not None]
+    if scored:
+        print(f"    {'전체':<48}{sum(r['n_paths'] for r in rows):>7}"
+              f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
+              f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
 
 
 # ----------------------------------------------------------------------- main

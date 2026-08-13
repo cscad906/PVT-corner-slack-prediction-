@@ -197,10 +197,47 @@ def _mode(cfg: dict) -> str:
     return cfg["base"].get("weighting", cfg["base"].get("local_bandwidth", "adaptive"))
 
 
-def fit_field(y, phi, split, coords, cfg):
+_ADAPTIVE_WARNED = set()
+
+
+def _effective_mode(cfg: dict, split: Split) -> str:
+    """base.weighting, downgraded to ``plain`` when the grid is too small for
+    ``adaptive`` to mean anything.
+
+    ``adaptive`` picks a per-corner bandwidth by scoring candidates against the
+    ``adaptive_k`` nearest seen corners. When there are no more seen corners than
+    that, the "neighbourhood" IS the whole grid, so every candidate is scored on
+    identical data and the winner is noise. Measured on the real 14nm drop at
+    125C (6 seen, adaptive_k=6): adaptive gave 3.151 ps at the hidden corners
+    where plain gave 2.148 (worst 5.269 vs 2.555). At m25 (10 seen) the
+    neighbourhood is a real subset and adaptive holds its own -- better worst
+    case (13.5 vs 19.6 ps) at a slightly worse mean -- so it is kept there.
+
+    This is a structural rule, not a fit to held-out error: it fires on the
+    corner count alone, which is known before any label is read."""
+    mode = cfg["base"].get("weighting", cfg["base"].get("local_bandwidth", "adaptive"))
+    if mode != "adaptive":
+        return mode
+    n_seen = int(split.seen.sum())
+    k = int(cfg["base"].get("adaptive_k", 6))
+    if n_seen > k:
+        return mode
+    key = (n_seen, k, tuple(split.corners[:2]))
+    if key not in _ADAPTIVE_WARNED:
+        _ADAPTIVE_WARNED.add(key)
+        print(f"[BASE] seen 코너 {n_seen}개 <= adaptive_k {k} -- adaptive 는 이웃이 "
+              f"전체와 같아져 대역폭을 고를 수 없다. plain 으로 적합한다.", flush=True)
+    return "plain"
+
+
+def fit_field(y, phi, split, coords, cfg, force_mode: "str | None" = None):
     """Fit one per-corner field (slack / SI / slew) under base.weighting.
-    Returns (loo_field [N,C], picks-or-None)."""
-    mode = _mode(cfg)
+    Returns (loo_field [N,C], picks-or-None).
+
+    ``force_mode`` bypasses ``_effective_mode`` so a caller can measure what a
+    mode WOULD have produced -- used by the comparison print in ``run.stage_base``,
+    which must show adaptive's real numbers even where the rule downgrades it."""
+    mode = force_mode or _effective_mode(cfg, split)
     if mode == "adaptive":
         return fit_base_adaptive(y, phi, split.seen, coords, **_adaptive_kwargs(cfg))
     if mode == "local":

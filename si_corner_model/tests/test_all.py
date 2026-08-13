@@ -193,6 +193,80 @@ def test_bundle_skips_untrained_temperatures_instead_of_failing(project, tmp_pat
     assert set(b["temps"]) == {str(models[0]["temp"])}
 
 
+def test_corner_table_is_keyed_by_corner_not_by_model(tmp_path):
+    """요약은 '모델별' 이 아니라 '코너별' 이어야 한다.
+
+    모델(회로x온도)은 내부 분할일 뿐이고, 넘길 때 궁금한 건 "이 코너가 얼마나
+    잘 맞았나" 다. 정답이 없는 query 코너는 경로 수만 세고 오차는 비운다."""
+    from si_model.run import _corner_table
+
+    fp = tmp_path / "predictions_hidden.csv"
+    fp.write_text(
+        "design,temp,path_key,corner,truth_ps,model_ps,model_err_ps\n"
+        "cpu,125,A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n"
+        "cpu,125,B,SSPG_0p54V_rcmax,10.0,6.0,-4.0\n"
+        "cpu,m25,A,SSPG_0p5V_cmax,10.0,11.0,1.0\n"
+        "cpu,m25,A,SSPG_0p57V_cmax,,11.0,\n")          # query 코너 (정답 없음)
+
+    rows = {(r["temp"], r["corner"]): r for r in _corner_table(str(fp))}
+    assert len(rows) == 3
+    assert rows[("125", "SSPG_0p54V_rcmax")]["mae_ps"] == 3.0      # (2+4)/2
+    assert rows[("125", "SSPG_0p54V_rcmax")]["worst_ps"] == 4.0
+    assert rows[("125", "SSPG_0p54V_rcmax")]["n_paths"] == 2
+    # query 코너: 경로는 세지만 오차는 없다 -- 0.0 으로 세면 평균이 좋아 보인다
+    q = rows[("m25", "SSPG_0p57V_cmax")]
+    assert q["n_paths"] == 1 and q["mae_ps"] is None and q["worst_ps"] is None
+
+
+def test_merge_flags_a_summary_older_than_its_checkpoint(project, tmp_path, capsys):
+    """학습을 중간에 끊으면 best.pt 만 갱신되고 summary.json 은 이전 실행 것이
+    남는다. 그게 조용히 by_model 로 실려 나가면 안 된다."""
+    import json as _json
+
+    from si_model.run import stage_merge
+
+    models = expand(project)[:1]
+    d = models[0]["cfg"]["train"]["out_dir"] = str(tmp_path / "m")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "predictions_hidden.csv"), "w") as f:
+        f.write("path_key,corner,truth_ps,model_ps,model_err_ps\n"
+                "A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n")
+    with open(os.path.join(d, "summary.json"), "w") as f:
+        _json.dump({"all": {"hidden_mae_ps": 1.0}}, f)
+    open(os.path.join(d, "best.pt"), "w").close()          # summary 보다 나중
+    os.utime(os.path.join(d, "summary.json"), (1, 1))
+
+    project["out"] = {"runs": str(tmp_path / "out"), "cache": str(tmp_path / "c")}
+    stage_merge(models, project, "hidden")
+    assert "오래됨" in capsys.readouterr().out
+
+
+def test_adaptive_downgrades_to_plain_on_a_grid_too_small_for_it(project):
+    """adaptive 는 이웃 adaptive_k 개로 대역폭을 고른다. seen 코너가 그보다 많지
+    않으면 이웃 = 전체가 되어 후보들이 같은 데이터로 채점되고, 승자는 잡음이다.
+
+    실측(14nm, 125C: seen 6 / adaptive_k 6): adaptive 3.151 ps vs plain 2.148 ps.
+    코너 수만 보고 정하므로 라벨을 읽기 전에 결정된다."""
+    import numpy as np
+
+    from si_model.training.loo import Split, _effective_mode
+
+    cfg = expand(project)[0]["cfg"]
+    cfg["base"]["weighting"] = "adaptive"
+    cfg["base"]["adaptive_k"] = 6
+
+    def split_with(n_seen):
+        C = n_seen + 2
+        seen = np.zeros(C, bool); seen[:n_seen] = True
+        return Split([f"c{i}" for i in range(C)], np.zeros((C, 2)), seen, ~seen, 0)
+
+    assert _effective_mode(cfg, split_with(6)) == "plain"     # 6 <= 6
+    assert _effective_mode(cfg, split_with(10)) == "adaptive"  # 10 > 6
+    # 명시적으로 고른 모드는 건드리지 않는다
+    cfg["base"]["weighting"] = "plain"
+    assert _effective_mode(cfg, split_with(10)) == "plain"
+
+
 def test_mode_switches_every_path_at_once(project):
     """`mode` 한 줄이 읽을 폴더와 쓸 폴더를 전부 갈라야 한다.
 
