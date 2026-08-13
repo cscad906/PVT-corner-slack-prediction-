@@ -167,25 +167,39 @@ def read_name_value_rows(path):
 
     def num(tok):
         # 숫자 뒤에 단위가 붙어 있어도 받는다(0.0012pF). 이름 같은 토큰은 뺀다.
-        m = NUM.match(tok.strip("{}\"'"))
+        #
+        # 빠른 길을 먼저 본다. 값 열은 거의 전부 순수한 숫자인데, 거기에 매번
+        # 정규식을 걸면 70만 줄 x 열 수만큼 돈다(실측 2.1M 회, 1.5초).
+        # float() 는 C 안에서 끝나므로 훨씬 싸다. 단위가 붙은 것만 정규식으로
+        # 넘어간다. 돌려주는 값은 양쪽 다 원문 문자열이라 결과가 같다.
+        t = tok.strip("{}\"'")
+        c = t[:1]
+        if c and (c.isdigit() or c in "+-."):
+            try:
+                float(t)
+                return t
+            except ValueError:
+                pass                # 1e, 0.0012pF 같은 것은 아래로
+        m = NUM.match(t)
         return m.group(1) if m else None
 
     rows = []
     ncol = 0
+    sep = None                      # 구분자는 처음 한 번만 정한다
     with open(path, "r", errors="ignore") as f:
         for raw in f:
             line = raw.strip()
             if not line or line.startswith("#") or line.startswith("*"):
                 continue
-            if "\t" in line:
-                parts = line.split("\t")
-            elif "," in line:
-                parts = line.split(",")
-            elif ":" in line:
-                parts = line.split(":")
-            else:
-                parts = line.split()
-            parts = [q.strip() for q in parts if q.strip() != ""]
+            # 예전에는 줄마다 탭/쉼표/콜론이 있는지 세 번씩 훑었다. 한 파일
+            # 안에서 구분자가 바뀌지는 않으므로 첫 줄에서 정하고 재사용한다.
+            if sep is None:
+                sep = ("\t" if "\t" in line else
+                       "," if "," in line else
+                       ":" if ":" in line else "")
+            parts = line.split(sep) if sep else line.split()
+            # strip 을 한 번만 한다(예전에는 조건과 값에서 두 번 돌았다).
+            parts = [s for s in (q.strip() for q in parts) if s]
             if len(parts) < 2:
                 continue
             # Tcl 로 뽑으면 이름에 중괄호/따옴표가 붙는다.
