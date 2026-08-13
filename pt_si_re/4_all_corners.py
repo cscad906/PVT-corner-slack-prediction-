@@ -235,18 +235,25 @@ def step_done(work_dir, product):
     return os.path.isfile(os.path.join(work_dir, product))
 
 
-def show(line):
+def show(line, sink=None):
     """하위 스크립트 출력 한 줄을 찍는다.
+
+    sink 를 주면 화면에 바로 안 찍고 거기에 모은다. --jobs 로 코너를 동시에
+    돌릴 때 여러 코너의 출력이 한 줄씩 뒤섞이면 못 읽기 때문이다. 코너가
+    끝날 때 그 코너 것만 한 덩어리로 찍는다.
 
     python2 에서는 파이프로 읽은 줄이 unicode 라, 그대로 print 하면 터미널
     인코딩에 따라 한글에서 죽는다. 그래서 2 에서만 utf-8 로 되돌려 찍는다.
     """
     if sys.version_info[0] < 3:
         line = line.encode("utf-8")
-    print("      " + line)
+    if sink is None:
+        print("      " + line)
+    else:
+        sink.append("      " + line)
 
 
-def run_step(script, args, quiet):
+def run_step(script, args, quiet, sink=None):
     """하위 스크립트를 지금 python 으로 돌린다. (성공여부, 마지막코드) 반환."""
     cmd = [sys.executable, os.path.join(HERE, script)] + args
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -254,7 +261,7 @@ def run_step(script, args, quiet):
     for raw in p.stdout:
         line = raw.decode("utf-8", "replace").rstrip("\n")
         if not quiet:
-            show(line)
+            show(line, sink)
         tail.append(line)
         # 정상은 "  정상 종료   [ OK-CPIN ]", 문제/주의는 "    에러 코드: W-NA"
         # 두 형식 다 잡아야 한다.
@@ -269,8 +276,56 @@ def run_step(script, args, quiet):
     if not last_code:
         # 코드가 안 찍혔으면 마지막 몇 줄이라도 보여 준다
         for line in tail[-3:]:
-            show(line)
+            show(line, sink)
     return p.returncode == 0, (last_code or "?")
+
+
+def run_corner(name, d, steps, args, spef, cmap, sink):
+    """코너 하나를 단계 순서대로 돈다. -> (코드들, 걸린 것들, 걸린 시간)
+
+    코너끼리는 서로 안 건드린다. 각자 자기 폴더에만 쓰고, SPEF 와 Cpin 표는
+    읽기만 한다. 그래서 --jobs 로 동시에 돌려도 된다.
+    """
+    t_corner = time.time()
+    codes, trouble = [], []
+    for label, script, need_spef, product in steps:
+        if args.skip_done and step_done(d, product):
+            sink.append("  %-12s 건너뜀 (%s 이미 있음)" % (label, product))
+            codes.append("SKIP")
+            continue
+        if need_spef and not (spef and os.path.isfile(spef)):
+            sink.append("  %-12s 건너뜀 (SPEF 없음)" % label)
+            codes.append("NOSPEF")
+            continue
+
+        call = ["--dir", d]
+        if need_spef:
+            call += ["--spef", spef]
+        if script == "2a_cpin.py" and cmap:
+            call += ["--cpin-map", cmap]
+        # 2c 는 SPEF 가 없어도 돌지만, N/A 가 나면 원인 진단에 쓴다.
+        if script == "2c_merge.py" and spef and os.path.isfile(spef):
+            call += ["--spef", spef]
+        if script in ("2c_merge.py", "5b_pairs.py", "5c_report.py"):
+            call += ["--corner", name]
+        if script == "5b_pairs.py":
+            call += ["--mode", args.mode]
+
+        sink.append("  %-12s 실행" % label)
+        t0 = time.time()
+        ok, c = run_step(script, call, args.quiet, sink)
+        codes.append(c)
+        took = fmt_dur(time.time() - t0)
+        if not ok:
+            sink.append("  %-12s 실패 (%s) -> 이 코너의 남은 단계는 건너뜁니다"
+                        % (label, took))
+            trouble.append((name, label, c))
+            codes += ["-"] * (len(steps) - len(codes))
+            break
+        sink.append("  %-12s 끝 (%s) [ %s ]" % (label, took, c))
+        if c.startswith("W-"):
+            trouble.append((name, label, c))
+    return codes, trouble, time.time() - t_corner
 
 
 def main():
@@ -297,6 +352,11 @@ def main():
                     help="setup / hold. 5b 에 넘긴다")
     ap.add_argument("--skip-done", action="store_true",
                     help="결과 파일이 이미 있으면 그 단계는 건너뛴다")
+    ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
+                    help="코너를 동시에 몇 개 돌릴지. **기본 1(하나씩)**. "
+                         "코너끼리는 자기 폴더에만 쓰므로 나눠도 결과가 같다. "
+                         "다만 2b 가 코너마다 SPEF 를 따로 읽으므로 메모리가 "
+                         "N배로 늘어난다. SPEF 가 크면 2~4 부터 올려 볼 것")
     ap.add_argument("--quiet", action="store_true",
                     help="각 단계의 화면 출력을 숨기고 결과 표만 본다")
     args = ap.parse_args()
@@ -383,23 +443,23 @@ def main():
     # 진행 상황을 눈으로 쫓을 수 있게 한다. 코너 16개 x 4단계면 화면이 길어져서,
     # 어디까지 왔고 어디서 걸렸는지가 스크롤에 묻힌다. 코너마다 걸린 시간을
     # 재서, 남은 시간도 대충 가늠할 수 있게 한다.
+    # ---- 코너 돌리기 --------------------------------------------------
+    # --jobs 로 코너를 동시에 돌린다. 코너끼리는 자기 폴더에만 쓰고 SPEF /
+    # Cpin 표는 읽기만 하므로 서로 안 건드린다. 실제 계산은 하위 프로세스가
+    # 하므로 스레드로 나눠도 GIL 에 안 걸린다.
+    #
+    # 동시에 돌릴 때는 코너 출력을 모아 뒀다가 그 코너가 끝날 때 한 덩어리로
+    # 찍는다. 한 줄씩 뒤섞이면 어느 코너 것인지 알 수 없다.
+    jobs = max(1, args.jobs)
+    if jobs > len(corners):
+        jobs = len(corners)
     results = []   # (코너, [코드...])
-    trouble = []   # (코너, 단계, 코드) -- 맨 끝에 한 번에 모아 보여 준다
+    trouble = []   # (코너, 단계, 코드)
     t_start = time.time()
-    for idx, (name, d) in enumerate(corners, 1):
-        t_corner = time.time()
-        done_n = idx - 1
-        eta = ""
-        if done_n:
-            per = (t_corner - t_start) / done_n
-            left = per * (len(corners) - done_n)
-            eta = "   남은 시간 약 %s" % fmt_dur(left)
-        print("-" * 68)
-        print("[%d/%d] %s%s" % (idx, len(corners), name, eta))
-        print("-" * 68)
 
+    def prep(name, d):
+        """그 코너가 쓸 SPEF 와 Cpin 표를 정한다."""
         spef = spef_of.get(name)
-
         # Cpin 표 고르는 순서 (SPEF 와 같은 방식)
         #   1) 코너 폴더 안의 cpin_map.txt        <- 코너마다 따로 받았을 때
         #   2) 없으면 --cpin-map 으로 준 파일
@@ -409,51 +469,74 @@ def main():
         cmap = os.path.join(d, CPIN_MAP_NAME)
         if not os.path.isfile(cmap):
             cmap = args.cpin_map
+        return spef, cmap
 
-        codes = []
-        for label, script, need_spef, product in steps:
-            if args.skip_done and step_done(d, product):
-                print("  %-12s 건너뜀 (%s 이미 있음)" % (label, product))
-                codes.append("SKIP")
-                continue
-            if need_spef and not (spef and os.path.isfile(spef)):
-                print("  %-12s 건너뜀 (SPEF 없음. --spef 로 주거나 "
-                      "폴더에 design.spef 를 두세요)" % label)
-                codes.append("NOSPEF")
-                continue
+    if jobs == 1:
+        for idx, (name, d) in enumerate(corners, 1):
+            done_n = idx - 1
+            eta = ""
+            if done_n:
+                per = (time.time() - t_start) / done_n
+                eta = "   남은 시간 약 %s" % fmt_dur(per * (len(corners) - done_n))
+            print("-" * 68)
+            print("[%d/%d] %s%s" % (idx, len(corners), name, eta))
+            print("-" * 68)
+            spef, cmap = prep(name, d)
+            sink = []
+            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink)
+            for line in sink:
+                print(line)
+            results.append((name, codes))
+            trouble += tr
+            print("  -> %s 끝. 걸린 시간 %s" % (name, fmt_dur(took)))
+            print("")
+    else:
+        import threading
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+        except ImportError:
+            ThreadPoolExecutor = None
+        if ThreadPoolExecutor is None:
+            print("  [ 알림 ] 이 파이썬에는 concurrent.futures 가 없어 1개씩 돕니다.")
+            jobs = 1
 
-            call = ["--dir", d]
-            if need_spef:
-                call += ["--spef", spef]
-            if script == "2a_cpin.py" and cmap:
-                call += ["--cpin-map", cmap]
-            # 2c 는 SPEF 가 없어도 돌지만, N/A 가 나면 원인 진단에 쓴다.
-            # 있을 때만 넘긴다(없다고 건너뛰면 안 된다).
-            if script == "2c_merge.py" and spef and os.path.isfile(spef):
-                call += ["--spef", spef]
-            if script in ("2c_merge.py", "5b_pairs.py", "5c_report.py"):
-                call += ["--corner", name]
-            if script == "5b_pairs.py":
-                call += ["--mode", args.mode]
-
-            print("  %-12s 실행" % label)
-            t0 = time.time()
-            ok, c = run_step(script, call, args.quiet)
-            codes.append(c)
-            took = fmt_dur(time.time() - t0)
-            if not ok:
-                print("  %-12s 실패 (%s) -> 이 코너의 남은 단계는 건너뜁니다"
-                      % (label, took))
-                trouble.append((name, label, c))
-                codes += ["-"] * (len(steps) - len(codes))
-                break
-            print("  %-12s 끝 (%s) [ %s ]" % (label, took, c))
-            if c.startswith("W-"):
-                trouble.append((name, label, c))
-        results.append((name, codes))
-        print("  -> %s 끝. 걸린 시간 %s"
-              % (name, fmt_dur(time.time() - t_corner)))
+    if jobs > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        print("  동시에 %d개 코너씩 돕니다. 코너가 끝나는 대로 출력이 나옵니다." % jobs)
         print("")
+        lock = threading.Lock()
+        state = {"done": 0}
+
+        def work(item):
+            name, d = item
+            spef, cmap = prep(name, d)
+            sink = []
+            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink)
+            with lock:
+                state["done"] += 1
+                n = state["done"]
+                eta = ""
+                if n < len(corners):
+                    per = (time.time() - t_start) / n
+                    eta = "   남은 시간 약 %s" % fmt_dur(per * (len(corners) - n))
+                print("-" * 68)
+                print("[%d/%d] %s   (%s)%s"
+                      % (n, len(corners), name, fmt_dur(took), eta))
+                print("-" * 68)
+                for line in sink:
+                    print(line)
+                print("")
+                sys.stdout.flush()
+            return name, codes, tr
+
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            out = list(ex.map(work, corners))
+        # 표는 항상 폴더 이름 순으로 낸다. 끝난 순서로 내면 돌릴 때마다 달라진다.
+        order = {n: i for i, (n, _d) in enumerate(corners)}
+        out.sort(key=lambda r: order[r[0]])
+        for name, codes, tr in out:
+            results.append((name, codes))
+            trouble += tr
 
     # ---- 결과 표 ----------------------------------------------------
     print("=" * 68)
