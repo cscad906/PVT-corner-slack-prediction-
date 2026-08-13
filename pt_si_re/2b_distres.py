@@ -2,7 +2,21 @@
 # -*- coding: utf-8 -*-
 """2b - Dist / Res 표를 만든다.
 
-    python3 2b_distres.py --dir ./work
+    python3 2b_distres.py --dir <코너폴더> --spef-dir <SPEF폴더>   # 보통 이것
+    python3 2b_distres.py --dir <코너폴더> --spef <SPEF파일>       # 직접 지정
+    python3 2b_distres.py --dir <코너폴더>                          # 폴더의 design.spef
+
+--spef-dir : SPEF 가 여러 개 든 폴더를 주면 이 코너에 맞는 것을 골라 쓴다.
+    **온도와 RC 코너(BEOL)로만 맞춘다. 전압은 안 본다** -- 기생 RC 는 배선
+    형상과 온도로 정해지고 전원 전압과는 무관하다.
+
+        코너 이름  tt0p6v25c_Cnom          ->  25C, Cnom
+        SPEF 이름  ....Cnom_model_25.spef  ->  25C, Cnom     ... 짝
+
+    이름으로 안 갈리면 SPEF 머리말을 읽는다(StarRC/ICC2 가 찍어 준다).
+        // PARASITIC_TECH Cnom_model at 25.000 degree
+    못 고르면 아무거나 집지 않고 멈춘다(E-SPEFPICK). 돌리기 전에 짝만 보려면:
+        python3 _engine/spef_match.py --spef-dir <SPEF폴더> --dir <상위폴더>
 
 입력   timing.rpt     어느 넷의 어느 구간인지
        design.spef    좌표와 저항

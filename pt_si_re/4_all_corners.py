@@ -2,7 +2,14 @@
 # -*- coding: utf-8 -*-
 """4 - round2 아래 코너 폴더 전부에 같은 단계를 돌린다.
 
-    python3 4_all_corners.py --root round2 --spef /경로/design.spef
+    python3 4_all_corners.py --root setup --spef-root setup            # 묶음 1
+    python3 4_all_corners.py --root setup --phase 2                    # 묶음 2
+    python3 4_all_corners.py --root hold  --spef-root setup --mode hold
+    python3 4_all_corners.py --root setup --only 2b --spef-root setup  # 한 단계만
+    python3 4_all_corners.py --root setup --skip-done --spef-root setup # 이어서
+
+--spef-root 는 SPEF 가 여러 개 든 폴더다. --root 와 같은 폴더여도 된다
+(코너 탐색은 .rpt 를 가진 하위 폴더만 보므로 .spef 와 섞이지 않는다).
 
 코너가 10개 넘어가면 폴더 이름을 하나씩 치는 게 일이라 만든 것이다.
 하는 일은 아래를 코너마다 반복하는 것뿐이고, 새로 계산하는 것은 없다.
@@ -58,6 +65,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
@@ -68,6 +76,43 @@ from find_rpt import find_rpt
 # 코너 폴더에서 이 이름을 찾으면 그것을 Cpin 표로 쓴다.
 # 현장에서 받는 파일 이름이 정해져 있으면 여기만 바꾸면 된다.
 CPIN_MAP_NAME = "cpin_map.txt"
+
+# 코드 -> 무슨 뜻인가. 맨 끝 '문제 있는 코너' 표에서 코드만 보고 코드표.md 를
+# 뒤지지 않아도 되게, 한 줄 설명을 같이 찍는다.
+CODE_MEANS = {
+    "E-NOFILE":   "입력 파일이 없음",
+    "E-NORPT":    "코너 폴더에 .rpt 가 없음",
+    "E-RPTMANY":  ".rpt 가 여러 개라 어느 것인지 모름",
+    "E-NONET":    "리포트에 (net) 줄이 없음 -- report_timing 에 -nets 누락",
+    "E-NOATTR":   "Cpin 표에서 값을 못 읽음",
+    "E-PINNAME":  "리포트의 핀 이름이 Cpin 표와 안 맞음",
+    "E-RES0":     "SPEF 에서 Res 를 하나도 못 구함 -- SPEF 가 이 코너 것이 맞는지",
+    "E-NOENGINE": "_engine/xtalk/ 가 없음 -- 폴더째 복사했는지",
+    "E-NORAW":    "PT 출력(context_raw.rpt)이 없거나 빔 -- xtalk_all.tcl 먼저",
+    "E-NO5A":     "5a 결과가 없거나 빔 -- 5a 를 먼저",
+    "E-MODE":     "PT 출력의 setup/hold 가 --mode 와 반대",
+    "E-PARSE":    "PT 출력을 읽다가 실패",
+    "E-NOPAIR":   "victim-aggressor 쌍이 0개 -- SI 설정 확인",
+    "W-CPIN":     "Cpin 이 비어 있는 줄이 많음",
+    "W-RES":      "Dist/Res 가 비어 있는 줄이 많음",
+    "W-NA":       "결과에 N/A 가 남아 있음",
+    "W-NOACTIVE": "영향을 준 aggressor 가 0개",
+    "W-CPINCOL":  "Cpin 열을 잘못 집었을 수 있음",
+    "NOSPEF":     "SPEF 가 없어 건너뜀",
+    "SKIP":       "--skip-done 으로 건너뜀",
+    "-":          "앞 단계가 실패해 안 돎",
+    "?":          "코드를 못 읽음 -- 그 단계를 직접 돌려 화면을 보세요",
+}
+
+
+def fmt_dur(sec):
+    """초 -> '3분 12초' 처럼. 진행 상황에 쓰므로 대충이면 된다."""
+    sec = int(sec)
+    if sec < 60:
+        return "%d초" % sec
+    if sec < 3600:
+        return "%d분 %d초" % (sec // 60, sec % 60)
+    return "%d시간 %d분" % (sec // 3600, (sec % 3600) // 60)
 
 
 def resolve_spefs(corners, args):
@@ -335,10 +380,22 @@ def main():
         print("=" * 68)
         sys.exit(1)
 
+    # 진행 상황을 눈으로 쫓을 수 있게 한다. 코너 16개 x 4단계면 화면이 길어져서,
+    # 어디까지 왔고 어디서 걸렸는지가 스크롤에 묻힌다. 코너마다 걸린 시간을
+    # 재서, 남은 시간도 대충 가늠할 수 있게 한다.
     results = []   # (코너, [코드...])
+    trouble = []   # (코너, 단계, 코드) -- 맨 끝에 한 번에 모아 보여 준다
+    t_start = time.time()
     for idx, (name, d) in enumerate(corners, 1):
+        t_corner = time.time()
+        done_n = idx - 1
+        eta = ""
+        if done_n:
+            per = (t_corner - t_start) / done_n
+            left = per * (len(corners) - done_n)
+            eta = "   남은 시간 약 %s" % fmt_dur(left)
         print("-" * 68)
-        print("[%d/%d] %s" % (idx, len(corners), name))
+        print("[%d/%d] %s%s" % (idx, len(corners), name, eta))
         print("-" * 68)
 
         spef = spef_of.get(name)
@@ -380,18 +437,27 @@ def main():
                 call += ["--mode", args.mode]
 
             print("  %-12s 실행" % label)
+            t0 = time.time()
             ok, c = run_step(script, call, args.quiet)
             codes.append(c)
+            took = fmt_dur(time.time() - t0)
             if not ok:
-                print("  %-12s 실패 -> 이 코너의 남은 단계는 건너뜁니다" % label)
+                print("  %-12s 실패 (%s) -> 이 코너의 남은 단계는 건너뜁니다"
+                      % (label, took))
+                trouble.append((name, label, c))
                 codes += ["-"] * (len(steps) - len(codes))
                 break
+            print("  %-12s 끝 (%s) [ %s ]" % (label, took, c))
+            if c.startswith("W-"):
+                trouble.append((name, label, c))
         results.append((name, codes))
+        print("  -> %s 끝. 걸린 시간 %s"
+              % (name, fmt_dur(time.time() - t_corner)))
         print("")
 
     # ---- 결과 표 ----------------------------------------------------
     print("=" * 68)
-    print("코너별 결과")
+    print("코너별 결과   (전체 %s 걸림)" % fmt_dur(time.time() - t_start))
     print("-" * 68)
     head = "  %-24s" % "코너" + "".join("%-14s" % s[0] for s in steps)
     print(head)
@@ -404,6 +470,29 @@ def main():
         if any(c.startswith("E-") or c in ("-", "?") for c in codes):
             bad.append(name)
     print("")
+    print("  정상 %d / 문제 %d / 전체 %d 코너"
+          % (len(results) - len(bad), len(bad), len(corners)))
+    print("")
+
+    # ---- 어느 코너 어느 단계에서 무엇이 걸렸나 -----------------------
+    # 위 표는 코드만 있어 코드표.md 를 뒤져야 한다. 걸린 것만 모아서 뜻까지
+    # 같이 찍는다. 화면이 길어도 여기만 보면 다음에 뭘 할지 정해진다.
+    if trouble:
+        print("=" * 68)
+        print("걸린 곳  (%d건)" % len(trouble))
+        print("-" * 68)
+        for cname, label, cd in trouble:
+            print("  %-24s %-12s %-12s %s"
+                  % (cname, label, cd, CODE_MEANS.get(cd, "")))
+        print("-" * 68)
+        print("  그 코너만 따로 돌려 화면을 보려면:")
+        c0, l0, _ = trouble[0]
+        s0 = [s for s in steps if s[0] == l0]
+        if s0:
+            print("    %s %s --dir %s"
+                  % (sys.executable, os.path.join(HERE, s0[0][1]),
+                     os.path.join(args.root, c0)))
+        print("")
 
     if bad:
         print("  실패한 코너 %d개: %s" % (len(bad), ", ".join(bad)))
