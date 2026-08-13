@@ -230,13 +230,27 @@ def load_cpin_map(path, rpt, col=None, recv=None, netcap=None, pin2cell=None):
         recv, netcap, _pc = scan_report(rpt)
     nets = set(net for _i, net, _p in recv)
 
+    # 점수는 **리포트를 얼마나 덮는가** 로 잰다. 표를 얼마나 썼는가가 아니다.
+    #
+    # 예전에는 (맞은 수 / 표의 줄 수) 였다. 그런데 현장에서 받는 표는 디자인
+    # 전체 핀을 담아 70만 줄인데 리포트에는 그중 수만 개만 나온다. 이름이
+    # 완벽히 맞아도 2만/70만 = 3% 라 5% 문턱에 걸려 unknown 이 됐다.
+    # 즉 표가 클수록 불리해지는 방향이었다. 정작 필요한 것은 "리포트에 있는
+    # 핀을 이 표가 갖고 있느냐" 이므로, 리포트 쪽을 분모로 둔다.
+    kset = set(k for k, _ in rows)
+    kset_nolib = set(drop_lib(k) for k in kset)
     keys = [k for k, _ in rows]
-    n = float(len(keys))
-    hit_net = sum(1 for k in keys if k in nets) / n
-    hit_design = sum(1 for k in keys if k in design_pins) / n
-    hit_cellpin = sum(1 for k in keys if k in cell_pins) / n
-    hit_cell = sum(1 for k in keys if k in cells) / n
-    hit_libpin = sum(1 for k in keys if drop_lib(k) in cell_pins) / n
+
+    def cov(report_side, table_side):
+        if not report_side:
+            return 0.0
+        return len(report_side & table_side) / float(len(report_side))
+
+    hit_net = cov(nets, kset)
+    hit_design = cov(design_pins, kset)
+    hit_cellpin = cov(cell_pins, kset)
+    hit_cell = cov(cells, kset)
+    hit_libpin = cov(cell_pins, kset_nolib)
 
     note = []
     # 동점이면 앞쪽을 고른다. 2단(cell/pin)은 drop_lib 가 그대로 두므로
@@ -270,9 +284,15 @@ def load_cpin_map(path, rpt, col=None, recv=None, netcap=None, pin2cell=None):
 
     if best[0] < 0.05:
         note.append("1열이 리포트의 핀 이름과도, 셀 이름과도 안 맞습니다.")
+        note.append("  표 %d줄, 리포트 핀 %d개 중 겹치는 것이 거의 없습니다."
+                    % (len(rows), len(design_pins)))
+        note.append("  덮은 비율 - 설계핀 %.1f%%  cell/pin %.1f%%  셀 %.1f%%  넷 %.1f%%"
+                    % (hit_design * 100, hit_cellpin * 100,
+                       hit_cell * 100, hit_net * 100))
         note.append("  읽은 예: %s" % ", ".join(keys[:3]))
         note.append("  리포트 핀 예: %s" % ", ".join(sorted(design_pins)[:2]))
         note.append("  리포트 셀 예: %s" % ", ".join(sorted(cells)[:2]))
+        note.append("  위 두 예의 모양이 같아 보이면 구분자나 접두어 차이입니다.")
         return {}, "unknown", note
 
     kind = best[1]
