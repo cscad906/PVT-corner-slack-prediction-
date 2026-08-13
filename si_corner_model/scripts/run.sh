@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# si_corner_model — this is the only run script. config.yaml is the only config.
+# si_corner_model -- this is the only run script. config.yaml is the only config.
 #
 #   bash scripts/run.sh recon               # scout the data (do this first)
 #   bash scripts/run.sh list                # see what would run (touches nothing)

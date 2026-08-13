@@ -43,7 +43,7 @@ STAGES = ("help", "recon", "check", "list", "build", "base", "train", "sweep",
 _ALL_STAGES = ("build", "base", "train", "bundle", "predict", "merge")
 
 HELP = """\
-si_corner_model — there is one command: `bash scripts/run.sh <stage>`.
+si_corner_model -- there is one command: `bash scripts/run.sh <stage>`.
 There is one config: config.yaml. If this is your first time, read
 docs/START.md top to bottom.
 
@@ -98,7 +98,7 @@ docs/START.md top to bottom.
 
 # ------------------------------------------------------------------ expansion
 def load_project(fp: str) -> dict:
-    with open(fp) as f:
+    with open(fp, encoding="utf-8") as f:
         p = yaml.safe_load(f) or {}
     root = os.environ.get("SI_ROOT") or p.get("root") or "auto"
     if str(root) == "auto":
@@ -506,7 +506,7 @@ def stage_list(models: list, p: dict) -> None:
     for m in models:
         d, s, ax = m["cfg"]["data"], m["cfg"]["split"], m["cfg"]["base"]["axes"]
         si = "SI:on " if d.get("crosstalk_dir") else "SI:off"
-        print(f"\n  ── {m['name']}  [{si}]")
+        print(f"\n  -- {m['name']}  [{si}]")
         print(f"     reports : {d['annotated_dir']}")
         print(f"     levels  : {d['rc_corners']}   ref: {d['ref_corner']}   temp token: {d['temp']!r}")
         print(f"     out     : {d['cache']}  |  {m['cfg']['train']['out_dir']}")
@@ -586,7 +586,7 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
                 break
     assert fp, "no report found to check -- pass a file path directly or fix the config"
     print(f"file : {fp}")
-    with open(fp, errors="ignore") as f:
+    with open(fp, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
     print(f"lines: {len(lines)}\n")
 
@@ -684,7 +684,7 @@ def stage_sweep(m: dict, lambdas=(0.0, 0.1, 1.0, 10.0)) -> None:
         print(f"  lambda={lam:>5}  {v}")
     fp = os.path.join("runs", "_sweep", m["design"], m["temp"], "sweep.json")
     os.makedirs(os.path.dirname(fp), exist_ok=True)
-    with open(fp, "w") as f:
+    with open(fp, "w", encoding="utf-8") as f:
         json.dump(rows, f, indent=2)
     print(f"  wrote {fp}  (the main run stays at {base_out})")
 
@@ -882,14 +882,14 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
     header = None
     rows = 0
     missing = []
-    with open(out_fp, "w", newline="") as out:
+    with open(out_fp, "w", newline="", encoding="utf-8") as out:
         w = csv.writer(out)
         for m in models:
             fp = os.path.join(m["cfg"]["train"]["out_dir"], f"predictions_{corners}.csv")
             if not os.path.exists(fp):
                 missing.append(m["name"])
                 continue
-            with open(fp, newline="") as f:
+            with open(fp, newline="", encoding="utf-8") as f:
                 r = csv.reader(f)
                 head = next(r)
                 if header is None:
@@ -919,14 +919,14 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         # stale file, so it is called out.
         if os.path.exists(ckpt) and os.path.getmtime(sfp) < os.path.getmtime(ckpt):
             stale.append(m["name"])
-        with open(sfp) as f:
+        with open(sfp, encoding="utf-8") as f:
             summ["by_model"][m["name"]] = json.load(f)
     if stale:
         print(f"  (!) by_model is stale (older than best.pt): {stale}\n"
               f"      if training was interrupted, that model's by_model numbers "
               f"are from the previous run. The per-corner scores (by_corner) "
               f"come from the predictions just made, so they are correct.")
-    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summ, f, indent=2)
     print(f"  wrote {out_dir}/summary.json "
           f"({len(summ['by_corner'])} corners, {len(summ['by_model'])} models)")
@@ -944,7 +944,7 @@ def _corner_table(csv_fp: str) -> list:
     carry no error.
     """
     acc = {}
-    with open(csv_fp, newline="") as f:
+    with open(csv_fp, newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
             key = (row["design"], row["temp"], row["corner"])

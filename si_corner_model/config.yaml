@@ -1,5 +1,5 @@
 # =============================================================================
-#  si_corner_model — this is the only config file.
+#  si_corner_model -- this is the only config file.
 #
 #  One model is generated automatically per (design, temperature) pair.
 #  3 circuits x 2 temperatures = 6 models, still from this one file.

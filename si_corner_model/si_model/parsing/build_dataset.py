@@ -304,7 +304,7 @@ def _assert_parsed(ann: dict, fp: str) -> None:
         return
     head = ""
     try:
-        with open(fp, errors="ignore") as f:
+        with open(fp, encoding="utf-8", errors="ignore") as f:
             head = "".join(next(f, "") for _ in range(4)).rstrip()
     except OSError:
         pass

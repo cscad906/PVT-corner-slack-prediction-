@@ -90,7 +90,7 @@ def parse_crosstalk(fp: str) -> "dict[int, CrosstalkPath]":
             raise ValueError(f"path idx={path.idx}: missing '# Slack:' header")
         out[path.idx] = path
 
-    with open(fp) as f:
+    with open(fp, encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith("### FIXED_PATH"):
                 finish()

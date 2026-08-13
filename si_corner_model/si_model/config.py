@@ -106,13 +106,13 @@ def load_config(path: str) -> dict:
     (``python -m si_model.parsing.build_dataset --config mine.yaml``). A
     ``_defaults.yaml`` sitting next to the file, or one directory up, is
     deep-merged underneath it if present."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     here = os.path.dirname(os.path.abspath(path))
     for cand in (os.path.join(here, _DEFAULTS_NAME),
                  os.path.join(os.path.dirname(here), _DEFAULTS_NAME)):
         if os.path.exists(cand) and os.path.abspath(cand) != os.path.abspath(path):
-            with open(cand) as f:
+            with open(cand, encoding="utf-8") as f:
                 defaults = yaml.safe_load(f) or {}
             cfg = _deep_merge(defaults, cfg)
             break

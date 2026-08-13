@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 # taken -- i.e. the nominal/mean number -- and anything after it is dropped.
 #
 # If a deliverable puts the nominal value somewhere OTHER than first, these
-# regexes are the place to fix it (see docs/PARSING.md §4); `bash scripts/run.sh
+# regexes are the place to fix it (see docs/PARSING.md section 4); `bash scripts/run.sh
 # check <file>` reports which of them match how many lines.
 _TAIL = r"(?:\s+\S+)*\s*$"
 # Skip anything that is not the start of a number. Lets a label sit BETWEEN the
@@ -255,7 +255,7 @@ def parse_annotated(fp: str, with_stages: bool = False) -> "dict[int, AnnotatedP
     cmap: "ColumnMap | None" = None      # current table's column layout
     prev = ""                          # previous line (the group header, if any)
 
-    with open(fp, errors="ignore") as f:
+    with open(fp, encoding="utf-8", errors="ignore") as f:
         for line in f:
             m = FIXED_PATH_RE.match(line)
             if m:
