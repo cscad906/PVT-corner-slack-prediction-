@@ -16,7 +16,7 @@ MIN_MAJOR=3
 MIN_MINOR=6
 
 echo "=================================================================="
-echo " si_corner_model - python 찾기"
+echo " si_corner_model - find a python"
 echo "=================================================================="
 echo ""
 
@@ -59,9 +59,9 @@ for root in /usr/synopsys /opt/synopsys /tools/synopsys /usr/cadence /opt/cadenc
 done
 
 # ---- 검사 -------------------------------------------------------------------
-echo "후보를 하나씩 검사한다 (>= $MIN_MAJOR.$MIN_MINOR, numpy, pyyaml, torch)"
+echo "checking each candidate (>= $MIN_MAJOR.$MIN_MINOR, numpy, pyyaml, torch)"
 echo ""
-printf "  %-46s %-10s %-8s %-8s %-8s\n" "인터프리터" "버전" "numpy" "pyyaml" "torch"
+printf "  %-46s %-10s %-8s %-8s %-8s\n" "interpreter" "version" "numpy" "pyyaml" "torch"
 printf "  %-46s %-10s %-8s %-8s %-8s\n" "----------------------------------------------" "--------" "------" "------" "------"
 
 BEST_FULL=""     # 학습까지 가능
@@ -74,7 +74,7 @@ for p in $CANDS; do
 
     ver=`"$p" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])' 2>/dev/null` || continue
     ok=`"$p" -c "import sys;print(1 if sys.version_info[:2]>=($MIN_MAJOR,$MIN_MINOR) else 0)" 2>/dev/null`
-    [ "$ok" = "1" ] || { printf "  %-46s %-10s %s\n" "$p" "$ver" "(너무 낮음)"; continue; }
+    [ "$ok" = "1" ] || { printf "  %-46s %-10s %s\n" "$p" "$ver" "(too old)"; continue; }
 
     np=`"$p" -c 'import numpy;print(numpy.__version__)' 2>/dev/null` || np="-"
     yl=`"$p" -c 'import yaml;print(yaml.__version__)' 2>/dev/null` || yl="-"
@@ -82,7 +82,7 @@ for p in $CANDS; do
     dc=`"$p" -c 'import dataclasses' 2>/dev/null && echo ok || echo "-"`
 
     printf "  %-46s %-10s %-8s %-8s %-8s%s\n" "$p" "$ver" "$np" "$yl" "$tc" \
-        "`[ "$dc" = "-" ] && echo '  (dataclasses 없음)'`"
+        "`[ "$dc" = "-" ] && echo '  (no dataclasses)'`"
 
     [ "$np" = "-" ] && continue
     [ "$yl" = "-" ] && continue
@@ -94,34 +94,34 @@ done
 echo ""
 echo "=================================================================="
 if [ -n "$BEST_FULL" ]; then
-    echo " [ 전부 가능 ] 학습까지 이걸로 하면 된다:"
+    echo " [ ALL OK ] use this one, training included:"
     echo ""
     echo "     env PY=$BEST_FULL bash scripts/run.sh all"
     echo ""
-    echo " 매번 치기 싫으면 (쉘에 따라 다르다 -- \`echo \$SHELL\` 로 확인):"
+    echo " to avoid typing it every time (depends on your shell -- check with \`echo \$SHELL\`):"
     echo "     bash/zsh :  export PY=$BEST_FULL"
     echo "     csh/tcsh :  setenv PY $BEST_FULL"
 elif [ -n "$BEST_CORE" ]; then
-    echo " [ 일부 가능 ] torch 가 없다. 데이터 확인까지는 이걸로 다 된다:"
+    echo " [ PARTIAL ] no torch. Everything up to checking the data works with this:"
     echo ""
     echo "     env PY=$BEST_CORE bash scripts/run.sh recon"
     echo "     env PY=$BEST_CORE bash scripts/run.sh list"
     echo "     env PY=$BEST_CORE bash scripts/run.sh build"
-    echo "     env PY=$BEST_CORE bash scripts/run.sh base   # OLS base 오차 확인"
+    echo "     env PY=$BEST_CORE bash scripts/run.sh base   # check OLS base error"
     echo ""
-    echo " train(학습) 만 torch 가 필요하다:"
-    echo "     $BEST_CORE -m pip install --user torch     # 인터넷 되면"
-    echo "     (3.6 이면 torch==1.10.2 가 마지막 지원 버전)"
-    echo "     인터넷이 막혔으면 docs/START.md 'python 이 아예 없을 때' 참고"
+    echo " only train needs torch:"
+    echo "     $BEST_CORE -m pip install --user torch     # if you have internet"
+    echo "     (on 3.6, torch==1.10.2 is the last supported version)"
+    echo "     if internet is blocked, see docs/START.md (the no-python-at-all case)"
 else
-    echo " [ 없음 ] 쓸만한 python 을 못 찾았다."
+    echo " [ NONE ] no usable python found."
     echo ""
-    echo " 1) 먼저 아래를 직접 쳐본다 (스크립트가 못 본 곳에 있을 수 있다):"
+    echo " 1) try these by hand first (it may live somewhere this script did not look):"
     echo "      python3 --version ; ls /usr/bin/python3*"
-    echo "      module avail 2>&1 | head -30        # module 시스템이 있으면"
+    echo "      module avail 2>&1 | head -30        # if there is a module system"
     echo "      ls ~/miniconda3 ~/anaconda3 2>/dev/null"
     echo ""
-    echo " 2) 그래도 없으면 python 을 들고 와야 한다 -> docs/START.md STEP 0"
-    echo "      (miniconda 오프라인 설치본 + 미리 받아둔 wheel. root 권한 불필요)"
+    echo " 2) still nothing: you have to bring a python in -> docs/START.md STEP 0"
+    echo "      (offline miniconda installer + pre-downloaded wheels. No root needed)"
 fi
 echo "=================================================================="

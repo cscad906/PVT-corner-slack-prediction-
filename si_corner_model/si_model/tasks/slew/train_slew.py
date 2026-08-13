@@ -1,6 +1,6 @@
 """Slew training CLI -- adaptive-bandwidth OLS base + neural residual (no SI).
 
-    bash scripts/run.sh train            # config.yaml 에 task: slew 일 때
+    bash scripts/run.sh train            # when config.yaml has task: slew
 
 Target = launch slew (ns). Base = per-corner weighted OLS (base.weighting); the
 neural CornerSetHead learns the base residual (all-seen leave-one-out). CAP is

@@ -5,8 +5,8 @@ setup/hold check. Those are *split* dimensions, fixed here; the corner grid this
 builds spans only the two continuous axes, voltage x BEOL level. ``si_model.run``
 expands ``config.yaml`` into one call of ``build()`` per instance:
 
-    bash scripts/run.sh build            # 정상 경로 (config.yaml 이 모델을 펼친다)
-    python -m si_model.parsing.build_dataset --config <engine-schema.yaml>   # 탈출구
+    bash scripts/run.sh build            # the normal path (config.yaml expands the models)
+    python -m si_model.parsing.build_dataset --config <engine-schema.yaml>   # escape hatch
 
 Report discovery (both directory layouts) lives in ``parsing/discovery.py``.
 Crosstalk is OPTIONAL: with no ``data.crosstalk_dir`` the dataset is built
@@ -181,9 +181,10 @@ def choose_key_mode(ann: dict, cfg: dict) -> bool:
     stripped = {norm_path_key(p.key) for p in ann.values()}
     if len(stripped) == len(ann):
         return True
-    print(f"[KEYS] '#idx' 를 떼면 경로 {len(ann)}개가 {len(stripped)}개로 합쳐진다 "
-          f"-> 같은 FF 쌍의 서로 다른 경로를 구분하는 식별자로 보고 keep. "
-          f"(고정경로 재측정 리포트의 정상 동작. 강제하려면 data.strip_path_idx)",
+    print(f"[KEYS] dropping '#idx' collapses {len(ann)} paths into {len(stripped)} "
+          f"-> treating it as the identifier that distinguishes different paths "
+          f"between the same FF pair, so it is kept. (Normal for a fixed-path "
+          f"re-measurement report. Override with data.strip_path_idx)",
           flush=True)
     return False
 
@@ -201,15 +202,17 @@ def _assert_parsed(ann: dict, fp: str) -> None:
     except OSError:
         pass
     raise AssertionError(
-        f"파싱된 경로가 0개: {fp}\n"
-        f"  파일은 찾았지만 본문이 파서 형식과 다르다. 파서는 각 경로가\n"
-        f"  '### FIXED_PATH idx=<i> key=<start>-><end>' 헤더로 시작한다고 가정한다.\n"
-        f"  - 헤더가 없다면: 코너마다 경로 집합이 같은지부터 확인 (README '주의' ①).\n"
-        f"    같으면 파서에 헤더 없는 모드를 추가하면 되고, 다르면 고정경로\n"
-        f"    재-annotate 가 필요하다 -- 파서로 우회할 수 있는 문제가 아니다.\n"
-        f"  - 헤더는 있는데 slack/열 형식이 다르면: si_model/parsing/annotated.py\n"
-        f"    상단 정규식 (docs/PARSING.md §4).\n"
-        f"  파일 앞부분:\n    " + head.replace("\n", "\n    "))
+        f"0 paths parsed: {fp}\n"
+        f"  The file was found, but its body does not match the parser format.\n"
+        f"  The parser assumes each path starts with a header:\n"
+        f"  '### FIXED_PATH idx=<i> key=<start>-><end>'\n"
+        f"  - No header: first check whether every corner has the same path set\n"
+        f"    (README 'caveats' 1). If it does, add a header-less mode to the\n"
+        f"    parser; if it does not, the fixed paths must be re-annotated --\n"
+        f"    that is not something the parser can work around.\n"
+        f"  - Header present but slack/column format differs: see the regexes at\n"
+        f"    the top of si_model/parsing/annotated.py (docs/PARSING.md section 4).\n"
+        f"  Head of the file:\n    " + head.replace("\n", "\n    "))
 
 
 # per-segment aggregate path signature (ref corner) --------------------------
@@ -436,14 +439,15 @@ def build(cfg: dict) -> str:
         per_corner = np.isnan(slack).sum(axis=0)
         worst = int(np.argmax(per_corner))
         examples = [ref_keys[idx_order[r]] for r in np.where(~resolved)[0][:3]]
-        print(f"[PATHS] 전 코너에서 측정된 경로만 남긴다: "
-              f"{n_before} -> {len(keep)} (제외 {n_before - len(keep)}). "
-              f"코너별 미해결 최대 = {corners[worst]} {int(per_corner[worst])}개. "
-              f"예: {examples}", flush=True)
+        print(f"[PATHS] keeping only paths measured at every corner: "
+              f"{n_before} -> {len(keep)} (dropped {n_before - len(keep)}). "
+              f"Worst corner = {corners[worst]} with {int(per_corner[worst])} "
+              f"unresolved. e.g. {examples}", flush=True)
         assert len(keep) > 0, (
-            "모든 코너에서 측정된 경로가 하나도 없다.\n"
-            "  고정경로 목록이 코너마다 다르게 풀렸다는 뜻이다 -- 2회차 재측정이\n"
-            "  같은 fixed_paths 목록으로 모든 코너에 대해 돌았는지 확인할 것.")
+            "not a single path was measured at every corner.\n"
+            "  That means the fixed-path list resolved differently per corner --\n"
+            "  check that the second-pass re-measurement ran over every corner\n"
+            "  with the same fixed_paths list.")
 
         old2new = np.full(len(idx_order), -1, np.int64)
         old2new[keep] = np.arange(len(keep))

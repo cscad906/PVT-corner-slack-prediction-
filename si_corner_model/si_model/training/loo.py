@@ -225,8 +225,9 @@ def _effective_mode(cfg: dict, split: Split) -> str:
     key = (n_seen, k, tuple(split.corners[:2]))
     if key not in _ADAPTIVE_WARNED:
         _ADAPTIVE_WARNED.add(key)
-        print(f"[BASE] seen 코너 {n_seen}개 <= adaptive_k {k} -- adaptive 는 이웃이 "
-              f"전체와 같아져 대역폭을 고를 수 없다. plain 으로 적합한다.", flush=True)
+        print(f"[BASE] {n_seen} seen corners <= adaptive_k {k} -- the neighbourhood "
+              f"becomes the whole grid, so adaptive cannot select a bandwidth. "
+              f"Fitting plain instead.", flush=True)
     return "plain"
 
 

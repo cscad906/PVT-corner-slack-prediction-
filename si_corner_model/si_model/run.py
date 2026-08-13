@@ -19,9 +19,9 @@ Stages
   train    cache          -> runs/<design>/<temp>/best.pt + summary.json
   bundle   per-temp best.pt -> runs/<design>/model.pt  (ONE file per circuit)
   predict  model.pt       -> runs/<design>/<temp>/predictions_<corners>.csv
-  sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack 전용, 비교용)
+  sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack only, for comparison)
   merge    all members    -> runs/_all/predictions_<corners>.csv + summary.json
-  all      build, base, train, bundle, predict, merge  (sweep 은 명시할 때만)
+  all      build, base, train, bundle, predict, merge  (sweep only when named explicitly)
 
 A failing member does not silently vanish: it is recorded, reported at the end,
 and makes the run exit non-zero -- a merged file that looks complete but is
@@ -43,50 +43,56 @@ STAGES = ("help", "recon", "check", "list", "build", "base", "train", "sweep",
 _ALL_STAGES = ("build", "base", "train", "bundle", "predict", "merge")
 
 HELP = """\
-si_corner_model — 명령은 `bash scripts/run.sh <단계>` 하나뿐이다.
-설정은 config.yaml 하나뿐이다. 처음이면 docs/START.md 를 위에서 아래로.
+si_corner_model — there is one command: `bash scripts/run.sh <stage>`.
+There is one config: config.yaml. If this is your first time, read
+docs/START.md top to bottom.
 
-  단계 (보통 이 순서)
-    recon      데이터 정찰. 폴더/파일명/본문을 훑어 recon_out.txt 로 저장
-               -> 여기 값을 config.yaml 에 옮겨 적는다
-    check      리포트 한 개를 파서에 통과시켜 어느 줄이 잡히고 안 잡히는지 보고
-               -> 본문 형식이 다를 때(SSTA 로 열/행이 늘었을 때) 여기부터
-    list       config 를 펼쳐 "뭐가 어떤 설정으로 돌지" 출력. 파일 안 건드림
-               -> 코너 수, seen/hidden, 다항식 파라미터 수까지 검산해줌
-    build      리포트 -> cache/<회로>/<온도>/dataset.npz          (numpy만 필요)
-    base       OLS base 오차만 출력. base 수치는 여기서만 나온다  (numpy만, 수 초)
-               -> 학습 전에 데이터가 제대로 파싱됐는지 확인하는 단계
-    train      학습 -> runs/<회로>/<온도>/best.pt + summary.json   (torch/GPU)
-    bundle     온도별 가중치를 회로당 한 파일로 -> runs/<회로>/model.pt
-    predict    저장된 가중치로 예측만 -> predictions_<corners>.csv
-    merge      전 회로·전 온도 예측을 runs/_all/ 로 합침
+  Stages (usually in this order)
+    recon      scout the data. Walks folders/filenames/contents into recon_out.txt
+               -> copy the values from there into config.yaml
+    check      push one report through the parser and report which lines were
+               matched and which were not
+               -> start here when the body format differs (SSTA adding
+                  columns/rows)
+    list       expand the config and print what runs with which settings.
+               Touches no files
+               -> also checks corner counts, seen/hidden, and the polynomial
+                  parameter count
+    build      reports -> cache/<design>/<temp>/dataset.npz        (numpy only)
+    base       print OLS base error only. Base numbers appear ONLY here
+                                                               (numpy only, seconds)
+               -> the step that confirms the data parsed correctly before training
+    train      train -> runs/<design>/<temp>/best.pt + summary.json  (torch/GPU)
+    bundle     per-temp weights into one file per circuit -> runs/<design>/model.pt
+    predict    predict only, from saved weights -> predictions_<corners>.csv
+    merge      merge every circuit and temp prediction into runs/_all/
     all        build -> base -> train -> bundle -> predict -> merge
-    sweep      lambda_si {0, 0.1, 1, 10} 비교 -> runs/_sweep/ (slack 전용)
+    sweep      compare lambda_si {0, 0.1, 1, 10} -> runs/_sweep/ (slack only)
 
-  옵션
-    --design <회로>          그 회로만
-    --temp <온도tag>         그 온도만
-    --corners hidden|seen|all   predict/merge 대상 코너 (기본 hidden)
-    --config <파일>          다른 프로젝트 config (기본 config.yaml)
+  Options
+    --design <circuit>       that circuit only
+    --temp <temp tag>        that temperature only
+    --corners hidden|seen|all   corners for predict/merge (default hidden)
+    --config <file>          a different project config (default config.yaml)
 
-  예시
+  Examples
     bash scripts/run.sh recon
-    bash scripts/run.sh check                  # 형식이 의심스러우면 build 전에
-    bash scripts/run.sh check --file <리포트>
+    bash scripts/run.sh check                  # before build, if the format looks off
+    bash scripts/run.sh check --file <report>
     bash scripts/run.sh list
     bash scripts/run.sh all
     bash scripts/run.sh base --design cpu
     bash scripts/run.sh train --design cpu --temp 125
     bash scripts/run.sh predict --corners all
 
-  파일 고치지 않고 경로만 바꾸기
+  Changing paths without editing files
     env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
 
-  문서
-    docs/START.md    도착해서 처음부터 (폴더 구조 케이스별)
-    docs/CONFIG.md   config.yaml 키 전부 + 코너 선정 + 에러표
-    docs/OLS.md      base 튜닝
-    docs/PARSING.md  리포트 파싱 / FIXED_PATH 문제 / npz 직접 만들기
+  Docs
+    docs/START.md    from the very beginning (per folder-structure case)
+    docs/CONFIG.md   every config.yaml key + corner selection + error table
+    docs/OLS.md      base tuning
+    docs/PARSING.md  report parsing / FIXED_PATH issues / building npz by hand
 """
 
 
@@ -186,8 +192,8 @@ def spread_hidden(volts, levels, n, ref_v, ref_lv) -> list:
     The reference corner is never selected -- it must stay seen.
     """
     assert 0 < n < len(levels), (
-        f"corners.hidden_per_voltage={n} 는 1 이상, 레벨 수({len(levels)}) 미만이어야 한다 "
-        f"-- 그 전압의 모든 레벨을 숨기면 앵커가 남지 않는다")
+        f"corners.hidden_per_voltage={n} must be >= 1 and less than the level "
+        f"count ({len(levels)}) -- hiding every level of a voltage leaves no anchor")
     out = []
     for i, v in enumerate(sorted(float(x) for x in volts)):
         picked, j = [], 0
@@ -265,15 +271,15 @@ def select_basis(y, sp, coords, cfg, verbose=True):
             if best is None or err < best[0]:
                 best = (err, vo, cross, cmd, names)
     assert best is not None, (
-        "쓸 수 있는 기저가 없다 -- seen 코너가 너무 적다. 홀드아웃을 줄이거나 "
-        "코너를 늘릴 것")
+        "no usable basis -- too few seen corners. Reduce the holdout or add "
+        "more corners")
     err, vo, cross, cmd, names = best
     if verbose:
-        print(f"[BASIS] seen-LOO 로 선택: v^{vo} cross={cross}"
+        print(f"[BASIS] picked by seen-LOO: v^{vo} cross={cross}"
               + (f"(deg{cmd})" if cross else "")
-              + f" -> {len(names) + 1} 파라미터, seen-LOO {err * 1000:.2f} ps", flush=True)
+              + f" -> {len(names) + 1} params, seen-LOO {err * 1000:.2f} ps", flush=True)
         for e, v, cr, cd, k in sorted(tried):
-            print(f"          v^{v} cross={str(cr):5s} {k}파라미터  {e * 1000:8.2f} ps", flush=True)
+            print(f"          v^{v} cross={str(cr):5s} {k} params  {e * 1000:8.2f} ps", flush=True)
     cfg["base"]["axes"][0]["order"] = vo
     cfg["base"]["cross_terms"] = cross
     cfg["base"]["cross_max_degree"] = cmd
@@ -330,40 +336,40 @@ def expand(p: dict) -> "list[dict]":
                 assert lv in lvals, \
                     f"temp {tag}: level {lv!r} missing from corners.level_values {sorted(lvals)}"
             assert ref_lv in levels, (
-                f"temp {tag}: corners.ref_level {ref_lv!r} 가 이 온도의 levels {levels} 에 없다 "
-                f"-- 모든 온도에 존재하는 레벨을 앵커로 쓸 것")
+                f"temp {tag}: corners.ref_level {ref_lv!r} is not in this temp's levels "
+                f"{levels} -- use a level that exists at every temp as the anchor")
 
             # ---- holdout, resolved PER TEMPERATURE ----------------------
             ho = holdout_for(co, t)
             seen_decl = [float(v) for v in ho.get("seen_voltages") or []]
             hidden_v = [float(v) for v in ho.get("hidden_voltages") or []]
             assert not (seen_decl and hidden_v), (
-                f"temp {tag}: seen_voltages 와 hidden_voltages 중 하나만 쓸 것")
+                f"temp {tag}: use either seen_voltages or hidden_voltages, not both")
             seen_v = seen_decl or [v for v in volts
                                    if not any(abs(v - h) < 1e-9 for h in hidden_v)]
             assert any(abs(ref_v - v) < 1e-9 for v in seen_v), (
-                f"temp {tag}: corners.ref_voltage {ref_v} 가 숨겨졌다 (seen = {seen_v}). "
-                f"앵커 전압은 항상 seen 이어야 한다")
+                f"temp {tag}: corners.ref_voltage {ref_v} is hidden (seen = {seen_v}). "
+                f"the anchor voltage must always be seen")
             hidden_lv = [str(x) for x in ho.get("hidden_levels") or []]
             assert ref_lv not in hidden_lv, (
-                f"temp {tag}: ref_level {ref_lv!r} 는 hidden_levels 에 넣을 수 없다")
+                f"temp {tag}: ref_level {ref_lv!r} cannot be listed in hidden_levels")
             for lv in hidden_lv:
                 assert lv in levels, (
-                    f"temp {tag}: hidden_levels 의 {lv!r} 가 이 온도의 levels {levels} 에 없다")
+                    f"temp {tag}: hidden_levels entry {lv!r} is not in this temp's levels {levels}")
             hidden_corners = [list(x) for x in ho.get("hidden_corners") or []]
             if ho.get("hidden_per_voltage"):
                 assert not hidden_corners, (
-                    f"temp {tag}: hidden_per_voltage 와 hidden_corners 는 같이 쓰지 않는다")
+                    f"temp {tag}: hidden_per_voltage and hidden_corners cannot be used together")
                 hidden_corners = spread_hidden(seen_v if seen_decl else volts,
                                                levels, int(ho["hidden_per_voltage"]),
                                                ref_v, ref_lv)
             for hv, hl in hidden_corners:
                 assert str(hl) in levels, (
-                    f"temp {tag}: hidden_corners 의 레벨 {hl!r} 가 이 온도의 "
-                    f"levels {levels} 에 없다 -- 온도마다 레벨이 다르므로 "
-                    f"holdout 도 temps[] 안에서 따로 적어야 한다")
+                    f"temp {tag}: hidden_corners level {hl!r} is not in this temp's "
+                    f"levels {levels} -- levels differ per temp, so the holdout "
+                    f"must be written per temp inside temps[]")
                 assert not (abs(float(hv) - ref_v) < 1e-9 and str(hl) == ref_lv), (
-                    f"temp {tag}: 앵커 코너 ({ref_v}, {ref_lv}) 는 숨길 수 없다")
+                    f"temp {tag}: the anchor corner ({ref_v}, {ref_lv}) cannot be hidden")
 
             # ---- file discovery / parsing -------------------------------
             layout = fi.get("layout", "flat")
@@ -452,7 +458,7 @@ def expand(p: dict) -> "list[dict]":
             if b.get("adaptive_grid"):
                 base["adaptive_grid"] = b["adaptive_grid"]
             if b.get("weighting") == "local":
-                assert b.get("bandwidth"), "base.weighting: local 이면 base.bandwidth 필요"
+                assert b.get("bandwidth"), "base.weighting: local requires base.bandwidth"
             # bandwidth 는 weighting 과 무관하게 넘긴다 -- run.sh base 의 weighting
             # 비교표가 local 도 재려면 대역폭이 있어야 하는데, local 일 때만 넘기면
             # local 은 영영 표에서 빠진다.
@@ -489,9 +495,10 @@ def stage_list(models: list, p: dict) -> None:
     print(f"root    : {p['root']}")
     print(f"task    : {m0['task']}    models: {len(models)}    process: {co['process']}")
     print(f"voltages: {co['voltages']}    levels: {co['level_values']}")
-    print(f"anchor  : {co['ref_voltage']}V x {co['ref_level']}  (항상 seen)")
+    print(f"anchor  : {co['ref_voltage']}V x {co['ref_level']}  (always seen)")
     if isinstance(p.get("designs"), dict):
-        print("(designs 가 회로별 override 로 선언됨 -- 아래 값은 회로마다 다를 수 있다)")
+        print("(designs declares per-circuit overrides -- the values below may\n"
+              " differ per circuit)")
     for m in models:
         d, s, ax = m["cfg"]["data"], m["cfg"]["split"], m["cfg"]["base"]["axes"]
         si = "SI:on " if d.get("crosstalk_dir") else "SI:off"
@@ -519,32 +526,35 @@ def stage_list(models: list, p: dict) -> None:
         hid = [c for c in grid if _is_hidden(*c)]
         total = len(grid)
         if hid:
-            print(f"     hidden  : {len(hid)}개 "
+            print(f"     hidden  : {len(hid)} "
                   + ", ".join(_lab(v, lv, dco["process"]) for v, lv in hid[:6])
                   + (" ..." if len(hid) > 6 else ""))
         else:
-            print("     hidden  : 없음 (query_corners 만 예측 대상)")
+            print("     hidden  : none (query_corners is the only predict target)")
         from si_model.config import expand_terms
         n_lv = len({lv for _, lv in seen})
         n_v = len({v for v, _ in seen})
         exps, names, dropped = expand_terms(m["cfg"], [n_v, n_lv])
         npar = len(exps) + 1
-        flag = "  ⚠ seen 이 파라미터 수 이하 -- 차수를 낮추거나 홀드아웃을 줄일 것" \
+        flag = ("  (!) seen <= parameter count -- lower the order or shrink "
+                "the holdout") \
             if len(seen) <= npar else ""
-        print(f"     corners : 전체 {total} = seen {len(seen)} + hidden {total - len(seen)}"
-              f"   (min_seen 가드 {s['min_seen']})")
-        print(f"     basis   : v^{ax[0]['order']} x level^{ax[1]['order']} 까지 "
-              f"-> 최대 {npar} 파라미터 {names}{flag}")
-        print("               (최종 기저는 build 때 seen-LOO 로 선택된다 -- run.sh base 로 확인)")
+        print(f"     corners : total {total} = seen {len(seen)} + hidden {total - len(seen)}"
+              f"   (min_seen guard {s['min_seen']})")
+        print(f"     basis   : up to v^{ax[0]['order']} x level^{ax[1]['order']} "
+              f"-> at most {npar} params {names}{flag}")
+        print("               (the final basis is picked by seen-LOO at build "
+              "time -- check with run.sh base)")
         if dropped:
-            print(f"               (레벨 부족으로 자동 제거: {dropped})")
+            print(f"               (dropped automatically, too few levels: {dropped})")
         print(f"     base    : weighting={m['cfg']['base']['weighting']}"
               f"  cross_max_degree={m['cfg']['base']['cross_max_degree']}")
         if os.path.isdir(d["annotated_dir"]):
             n = sum(len(f) for _, _, f in os.walk(d["annotated_dir"]))
-            print(f"     files   : 디렉토리 존재, 파일 {n}개")
+            print(f"     files   : directory exists, {n} files")
         else:
-            print("     files   : (!) 디렉토리 없음 — root / designs / files.subdir 확인")
+            print("     files   : (!) directory not found -- check root / designs "
+                  "/ files.subdir")
 
 
 def stage_check(models: list, fp: "str | None" = None) -> int:
@@ -562,12 +572,12 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
             try:
                 found = discover_annotated(m["cfg"])
             except Exception as e:
-                print(f"  ({m['name']}: 탐색 실패 {e})")
+                print(f"  ({m['name']}: discovery failed {e})")
                 continue
             if found:
                 fp = sorted(found.values())[0]
                 break
-    assert fp, "검사할 리포트를 찾지 못했다 -- 파일 경로를 직접 주거나 config 를 고칠 것"
+    assert fp, "no report found to check -- pass a file path directly or fix the config"
     print(f"file : {fp}")
     with open(fp, errors="ignore") as f:
         lines = f.readlines()
@@ -590,25 +600,25 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
     for name, rx, kw in checks:
         hit = [l.rstrip("\n") for l in lines if rx.match(l)]
         if hit:
-            print(f"  {name:14s} {len(hit):6d} 줄 ✓   예: {hit[0].strip()[:90]}")
+            print(f"  {name:14s} {len(hit):6d} lines OK   e.g. {hit[0].strip()[:90]}")
         else:
             cand = [l.rstrip("\n") for l in lines if kw in l][:3]
-            print(f"  {name:14s} {0:6d} 줄 ✗")
+            print(f"  {name:14s} {0:6d} lines MISS")
             for c in cand:
-                print(f"                        실제: {c[:100]}")
+                print(f"                        actual: {c[:100]}")
             if not cand:
-                print(f"                        ('{kw}' 가 들어간 줄 자체가 없음)")
+                print(f"                        (no line contains '{kw}' at all)")
             bad.append(name)
 
     blocks = A.parse_annotated(fp, with_stages=True)
     ok = A.resolved(blocks)
-    print(f"\n  블록 {len(blocks)}개 중 slack 이 읽힌 경로 {len(ok)}개")
+    print(f"\n  {len(ok)} of {len(blocks)} blocks yielded a path with slack")
     if ok:
         p = next(iter(ok.values()))
         segs = {}
         for s in p.stages:
             segs[s.segment] = segs.get(s.segment, 0) + 1
-        print(f"  예시 경로 idx={p.idx} key={p.key}")
+        print(f"  example path idx={p.idx} key={p.key}")
         print(f"    slack={p.slack} arrival={p.arrival} required={p.required}")
         print(f"    launch_clk={p.launch_clk} capture_clk={p.capture_clk} "
               f"lib_check={p.lib_check_time}")
@@ -618,20 +628,23 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
                                   ("capture_clk", p.capture_clk),
                                   ("lib_check_time", p.lib_check_time)) if v != v]
         if missing:
-            print(f"    (!) NaN 인 필드: {missing} -- 학습은 되지만 토큰 정보가 빈다")
+            print(f"    (!) NaN fields: {missing} -- training still runs, but the token "
+                  f"information is empty")
         if not p.stages:
-            print("    (!) stage 가 0개 -- 경로 인코더 입력이 비어 학습이 무의미해진다")
+            print("    (!) 0 stages -- the path-encoder input is empty, which "
+                  "makes training meaningless")
 
     print()
     if not ok:
-        print("  판정: ✗ 경로를 하나도 못 읽었다.")
-        print("        위에서 ✗ 인 정규식의 '실제' 줄을 보고")
-        print("        si_model/parsing/annotated.py 상단을 그 형식에 맞춘다 (docs/PARSING.md §4).")
+        print("  verdict: FAIL -- not a single path was read.")
+        print("        look at the 'actual' lines of the MISS regexes above")
+        print("        and match the top of si_model/parsing/annotated.py to "
+              "that format (docs/PARSING.md section 4).")
         return 1
     if bad:
-        print(f"  판정: △ 경로는 읽히지만 못 잡은 항목이 있다: {bad}")
+        print(f"  verdict: PARTIAL -- paths are read, but these were not matched: {bad}")
         return 0
-    print("  판정: ✓ 전부 정상. build 로 진행해도 된다.")
+    print("  verdict: OK -- everything parsed. Safe to proceed to build.")
     return 0
 
 
@@ -645,7 +658,8 @@ def stage_sweep(m: dict, lambdas=(0.0, 0.1, 1.0, 10.0)) -> None:
     import json
 
     if m["task"] != "slack":
-        print("  (slew 모델은 SI branch 가 없어 sweep 대상이 아님 -- 건너뜀)")
+        print("  (the slew model has no SI branch, so it is not a sweep target "
+              "-- skipped)")
         return
     base_out = m["cfg"]["train"]["out_dir"]
     rows = {}
@@ -665,7 +679,7 @@ def stage_sweep(m: dict, lambdas=(0.0, 0.1, 1.0, 10.0)) -> None:
     os.makedirs(os.path.dirname(fp), exist_ok=True)
     with open(fp, "w") as f:
         json.dump(rows, f, indent=2)
-    print(f"  wrote {fp}  (본 run 은 {base_out} 그대로)")
+    print(f"  wrote {fp}  (the main run stays at {base_out})")
 
 
 def stage_build(m: dict) -> None:
@@ -715,7 +729,7 @@ def stage_base(m: dict) -> None:
     print(f"    [seen-LOO   ] {sv.mean():8.3f} {unit}  (worst {sv.max():.3f})")
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
-        print(f"    (정답 없어 건너뜀: {skipped})")
+        print(f"    (skipped, no ground truth: {skipped})")
     if hid and field == "slack":
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
 
@@ -740,22 +754,22 @@ def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
     from si_model.training.loo import _effective_mode, fit_field
 
     cur = _effective_mode(cfg, split)
-    print(f"    ── weighting 별 히든 (참고용, 저장 안 함) ──")
+    print(f"    -- hidden error per weighting (for reference, not stored) --")
     for w in ("plain", "local", "adaptive"):
         c = copy.deepcopy(cfg)
         c["base"]["weighting"] = w
         if w == "local" and not c["base"].get("bandwidth"):
-            print(f"       {w:9s} (bandwidth 미설정)")
+            print(f"       {w:9s} (bandwidth not set)")
             continue
         try:
             loo, _ = fit_field(y, phi, split, coords, c, force_mode=w)
         except Exception as e:
-            print(f"       {w:9s} (못 잼: {repr(e)[:40]})")
+            print(f"       {w:9s} (could not measure: {repr(e)[:40]})")
             continue
         e = np.array([float(np.nanmean(np.abs(loo[:, ci] - y[:, ci])) * 1000.0)
                       for ci in hid])
         print(f"       {w:9s} {e.mean():8.3f} ps  (worst {e.max():7.3f})"
-              f"{'  <- 지금 이것' if w == cur else ''}")
+              f"{'  <- in effect' if w == cur else ''}")
 def _trainer(m: dict):
     if m["task"] == "slew":
         from si_model.tasks.slew.train_slew import Trainer
@@ -807,14 +821,14 @@ def stage_bundle(models: list) -> None:
             temps[str(m["temp"])] = {"model": ck["model"], "enc": ck["enc"],
                                      "cfg": ck["cfg"], "epoch": ck["epoch"]}
         if not temps:
-            print(f"  {design}: 학습된 온도가 없어 건너뜀 (train 먼저)", flush=True)
+            print(f"  {design}: no trained temperature, skipped (run train first)", flush=True)
             continue
         out = bundle_path(ms[0])
         os.makedirs(os.path.dirname(out), exist_ok=True)
         torch.save({"format": BUNDLE_FORMAT, "design": design,
                     "temps": temps}, out)
-        note = f"  (미학습: {', '.join(missing)})" if missing else ""
-        print(f"  {out}  <- 온도 {len(temps)}개 [{', '.join(sorted(temps))}]{note}",
+        note = f"  (not trained: {', '.join(missing)})" if missing else ""
+        print(f"  {out}  <- {len(temps)} temps [{', '.join(sorted(temps))}]{note}",
               flush=True)
 
 
@@ -832,12 +846,12 @@ def stage_predict(m: dict, corners: str) -> None:
         b = load_checkpoint(bundle, map_location=tr.dev)
         key = str(m["temp"])
         assert key in b["temps"], (
-            f"{bundle} 에 온도 {key} 가 없다 (있는 것: {sorted(b['temps'])}). "
-            f"run.sh bundle 을 다시 돌릴 것")
+            f"{bundle} has no temperature {key} (it has: {sorted(b['temps'])}). "
+            f"Re-run run.sh bundle")
         ck = b["temps"][key]
     else:
         ckpt = os.path.join(out_dir, "best.pt")
-        assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (train 먼저)"
+        assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (run train first)"
         ck = load_checkpoint(ckpt, map_location=tr.dev)
     tr.model.load_state_dict(ck["model"])
     tr.enc.load_state_dict(ck["enc"])
@@ -878,9 +892,9 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
                     w.writerow([m["design"], m["temp"]] + row)
                     rows += 1
     assert header is not None, \
-        f"합칠 예측 파일이 없다 (predictions_{corners}.csv). predict 먼저 돌릴 것."
+        f"nothing to merge (predictions_{corners}.csv). Run predict first."
     if missing:
-        print(f"  (!) 빠진 모델: {missing}")
+        print(f"  (!) missing models: {missing}")
     print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
 
     summ = {"by_corner": _corner_table(out_fp), "by_model": {}}
@@ -899,13 +913,14 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         with open(sfp) as f:
             summ["by_model"][m["name"]] = json.load(f)
     if stale:
-        print(f"  (!) by_model 이 오래됨 (best.pt 보다 이전): {stale}\n"
-              f"      학습을 중간에 끊었으면 그 모델의 by_model 수치는 이전 실행 것이다. "
-              f"코너별 성적(by_corner)은 방금 예측에서 뽑은 값이라 정확하다.")
+        print(f"  (!) by_model is stale (older than best.pt): {stale}\n"
+              f"      if training was interrupted, that model's by_model numbers "
+              f"are from the previous run. The per-corner scores (by_corner) "
+              f"come from the predictions just made, so they are correct.")
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summ, f, indent=2)
     print(f"  wrote {out_dir}/summary.json "
-          f"(코너 {len(summ['by_corner'])}개, 모델 {len(summ['by_model'])}개)")
+          f"({len(summ['by_corner'])} corners, {len(summ['by_model'])} models)")
     _print_corner_table(summ["by_corner"])
     return out_fp
 
@@ -946,8 +961,9 @@ def _corner_table(csv_fp: str) -> list:
 def _print_corner_table(rows: list) -> None:
     if not rows:
         return
-    print("\n  코너별 성적 (모델이 아니라 코너 기준)")
-    print(f"    {'회로':<22}{'온도':<6}{'코너':<20}{'경로':>7}{'MAE':>10}{'worst':>10}")
+    print("\n  Per-corner scores (keyed by corner, not by model)")
+    print(f"    {'circuit':<22}{'temp':<6}{'corner':<20}"
+          f"{'paths':>7}{'MAE':>10}{'worst':>10}")
     for r in rows:
         mae = "-" if r["mae_ps"] is None else f"{r['mae_ps']:.2f}ps"
         wst = "-" if r["worst_ps"] is None else f"{r['worst_ps']:.2f}ps"
@@ -955,7 +971,7 @@ def _print_corner_table(rows: list) -> None:
               f"{r['n_paths']:>7}{mae:>10}{wst:>10}")
     scored = [r for r in rows if r["mae_ps"] is not None]
     if scored:
-        print(f"    {'전체':<48}{sum(r['n_paths'] for r in rows):>7}"
+        print(f"    {'total':<48}{sum(r['n_paths'] for r in rows):>7}"
               f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
               f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
 
@@ -966,11 +982,12 @@ def main(argv=None):
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=STAGES, nargs="?", default="help")
     ap.add_argument("--config", default=DEFAULT_PROJECT, help="project config (default: config.yaml)")
-    ap.add_argument("--design", default=None, help="이 회로만")
-    ap.add_argument("--temp", default=None, help="이 온도만")
+    ap.add_argument("--design", default=None, help="this circuit only")
+    ap.add_argument("--temp", default=None, help="this temperature only")
     ap.add_argument("--corners", default="hidden", choices=["hidden", "seen", "all"])
     ap.add_argument("--file", default=None,
-                    help="check 단계에서 검사할 리포트 파일 (생략하면 config 에서 첫 파일)")
+                    help="report file to inspect in the check stage "
+                         "(omit to use the first file from the config)")
     args = ap.parse_args(argv)
 
     os.chdir(REPO_ROOT)
@@ -990,7 +1007,7 @@ def main(argv=None):
     failed = []
     for stage in stages:
         if stage == "bundle":
-            print(f"\n===== bundle: 회로별 단일 가중치 파일 =====", flush=True)
+            print(f"\n===== bundle: one weight file per circuit =====", flush=True)
             try:
                 stage_bundle(models)
             except Exception as e:
@@ -1020,15 +1037,15 @@ def main(argv=None):
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()
-                print(f"!!!!! FAILED {stage}: {m['name']} -- 계속 진행", flush=True)
+                print(f"!!!!! FAILED {stage}: {m['name']} -- continuing", flush=True)
 
     print("\n" + "=" * 60)
     if failed:
-        print(f"완료, 단 실패 {len(failed)}건:")
+        print(f"done, but {len(failed)} failed:")
         for what, err in failed:
             print(f"  - {what}: {err}")
         return 1
-    print(f"전부 성공 ({len(models)} models, stages={list(stages)})")
+    print(f"all succeeded ({len(models)} models, stages={list(stages)})")
     return 0
 
 

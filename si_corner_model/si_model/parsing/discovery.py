@@ -235,25 +235,27 @@ def _flat_scan(root: str, regex: str, cfg: dict, kind: str, exclude=None,
         lab, a, b = dupes[0]
         if os.path.dirname(a) == os.path.dirname(b):
             raise AssertionError(
-                f"{kind}: 코너 {lab} 가 같은 폴더의 두 파일에 매칭됐다:\n  {a}\n  {b}\n"
-                f"  annotated 와 crosstalk 이 한 폴더에 있는 배치다. 파일명으로 구분하도록\n"
-                f"  config 에 아래를 추가할 것:\n"
+                f"{kind}: corner {lab} matched two files in the same folder:\n  {a}\n  {b}\n"
+                f"  This is a layout where annotated and crosstalk share one folder.\n"
+                f"  Add the following to the config so they are told apart by name:\n"
                 f"    files:\n"
                 f"      annotated_contains: _fixed_annotated\n"
                 f"      crosstalk_contains: by_path")
         raise AssertionError(
             f"{kind}: corner {lab} matched by more than one file:\n  {a}\n  {b}\n"
-            f"파일명이 코너를 유일하게 지정하지 못한다. data.{kind}_dir 를 더 깊은\n"
-            f"디렉토리로 좁히거나, patterns.{kind}_regex 로 정확한 형식을 지정할 것.")
+            f"filenames do not identify a corner uniquely. Narrow data.{kind}_dir to a\n"
+            f"deeper directory, or state the exact format with patterns.{kind}_regex.")
     if not found:
-        how = ("auto(토큰) 방식" if auto else f"정규식 {regex!r}")
+        how = ("auto (token) mode" if auto else f"regex {regex!r}")
         raise AssertionError(
             f"no {kind} corners discovered under {root}\n"
-            f"  탐색 방식: {how} -- 파일명에서 {'아무것도' if not seen_any else '일부만'} 못 찾음\n"
-            f"  기대: 파일명 어딘가에 전압(0p5400 / 0.54), 레벨({names}),\n"
-            f"        온도(data.temp={cfg['data'].get('temp')!r}) 토큰이 있어야 한다\n"
-            f"  (공정 접두사 = {prefix!r})\n"
-            f"  실제 파일명을 보려면: bash scripts/run.sh recon")
+            f"  discovery mode: {how} -- found {'nothing' if not seen_any else 'only part'} "
+            f"in the filenames\n"
+            f"  expected: somewhere in the filename, a voltage (0p5400 / 0.54),\n"
+            f"        a level ({names}), and a temperature\n"
+            f"        (data.temp={cfg['data'].get('temp')!r}) token\n"
+            f"  (process prefix = {prefix!r})\n"
+            f"  to see the actual filenames: bash scripts/run.sh recon")
     return found
 
 

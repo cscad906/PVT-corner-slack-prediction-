@@ -10,7 +10,7 @@ hold reports), so it needs no separate setup/hold split -- one model per
 not trained but fetched from a same-level neighbour (V-independent) -- see the
 trainer. No crosstalk is used.
 
-    bash scripts/run.sh build            # config.yaml 에 task: slew 일 때
+    bash scripts/run.sh build            # when config.yaml has task: slew
 """
 import argparse
 import os
@@ -101,8 +101,8 @@ def build(cfg: dict) -> str:
     ok = ~np.isnan(slew).any(axis=1)
     if not ok.all():
         keep = np.where(ok)[0]
-        assert len(keep) > 0, "모든 코너에서 측정된 경로가 하나도 없다"
-        print(f"[PATHS] 전 코너에서 측정된 경로만 남긴다: "
+        assert len(keep) > 0, "not a single path was measured at every corner"
+        print(f"[PATHS] keeping only paths measured at every corner: "
               f"{len(idx_order)} -> {len(keep)}", flush=True)
         slew, cap, path_sig = slew[keep], cap[keep], path_sig[keep]
         idx_order = [idx_order[r] for r in keep]

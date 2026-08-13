@@ -1,6 +1,6 @@
 """Slack training CLI (setup / hold).
 
-    bash scripts/run.sh train [--design <회로>] [--temp <온도>]
+    bash scripts/run.sh train [--design <circuit>] [--temp <temp>]
 
 Scheme: all-seen leave-one-out. A training sample is (path, seen corner c); the
 model sees the other seen corners as tokens (LOO fold) and predicts the residual
