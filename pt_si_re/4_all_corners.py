@@ -285,16 +285,27 @@ def run_corner(name, d, steps, args, spef, cmap, sink):
 
     코너끼리는 서로 안 건드린다. 각자 자기 폴더에만 쓰고, SPEF 와 Cpin 표는
     읽기만 한다. 그래서 --jobs 로 동시에 돌려도 된다.
+
+    sink 가 None 이면 그때그때 화면에 찍는다(하나씩 돌 때). 리스트를 주면
+    거기에 모은다(동시에 돌 때 -- 뒤섞이면 못 읽으므로 코너가 끝날 때 한
+    덩어리로 찍는다).
     """
+    def say(line):
+        if sink is None:
+            print(line)
+            sys.stdout.flush()      # 파이프로 넘길 때도 바로 보이게
+        else:
+            say(line)
+
     t_corner = time.time()
     codes, trouble = [], []
     for label, script, need_spef, product in steps:
         if args.skip_done and step_done(d, product):
-            sink.append("  %-12s 건너뜀 (%s 이미 있음)" % (label, product))
+            say("  %-12s 건너뜀 (%s 이미 있음)" % (label, product))
             codes.append("SKIP")
             continue
         if need_spef and not (spef and os.path.isfile(spef)):
-            sink.append("  %-12s 건너뜀 (SPEF 없음)" % label)
+            say("  %-12s 건너뜀 (SPEF 없음)" % label)
             codes.append("NOSPEF")
             continue
 
@@ -311,18 +322,18 @@ def run_corner(name, d, steps, args, spef, cmap, sink):
         if script == "5b_pairs.py":
             call += ["--mode", args.mode]
 
-        sink.append("  %-12s 실행" % label)
+        say("  %-12s 실행" % label)
         t0 = time.time()
         ok, c = run_step(script, call, args.quiet, sink)
         codes.append(c)
         took = fmt_dur(time.time() - t0)
         if not ok:
-            sink.append("  %-12s 실패 (%s) -> 이 코너의 남은 단계는 건너뜁니다"
+            say("  %-12s 실패 (%s) -> 이 코너의 남은 단계는 건너뜁니다"
                         % (label, took))
             trouble.append((name, label, c))
             codes += ["-"] * (len(steps) - len(codes))
             break
-        sink.append("  %-12s 끝 (%s) [ %s ]" % (label, took, c))
+        say("  %-12s 끝 (%s) [ %s ]" % (label, took, c))
         if c.startswith("W-"):
             trouble.append((name, label, c))
     return codes, trouble, time.time() - t_corner
@@ -482,10 +493,10 @@ def main():
             print("[%d/%d] %s%s" % (idx, len(corners), name, eta))
             print("-" * 68)
             spef, cmap = prep(name, d)
-            sink = []
-            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink)
-            for line in sink:
-                print(line)
+            # 하나씩 돌 때는 **모아 두지 않고 그때그때 찍는다.** 모아 두면
+            # 코너가 끝날 때까지 화면이 멈춰 있어, 2b 가 몇십 분 도는 동안
+            # 살아 있는지조차 알 수 없다. 뒤섞일 걱정은 하나씩 돌 때는 없다.
+            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, None)
             results.append((name, codes))
             trouble += tr
             print("  -> %s 끝. 걸린 시간 %s" % (name, fmt_dur(took)))
