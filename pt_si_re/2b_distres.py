@@ -76,6 +76,9 @@ CODE_INFO = {
                    "--rpt <파일> 로 하나를 지정하거나, 코너마다 폴더를 나눠 주세요."),
     "E-NOFILE":   ("필요한 입력 파일이 없습니다",
                    "0_check.py 를 돌리면 무엇이 없는지 알려줍니다."),
+    "E-SPEFPICK": ("--spef-dir 에서 이 코너에 맞는 SPEF 를 못 골랐습니다",
+                   "위 '이유' 를 보세요. 온도/RC 코너가 안 맞거나 후보가 여럿인 "
+                   "경우입니다. --spef 로 파일을 직접 주면 바로 됩니다."),
     "E-NOPATH":   ("리포트에서 경로를 하나도 못 읽었습니다",
                    "report_timing 에 -input_pins 를 넣어 다시 뽑아 주세요."),
     "E-NONET":    ("리포트에 '(net)' 줄이 없습니다",
@@ -135,7 +138,13 @@ def main():
     ap.add_argument("--dir", default=".",
                     help="**코너 폴더 하나** (그 안에 .rpt 가 있는 폴더). 여러 코너를 한 번에 하려면 4_all_corners.py --root")
     ap.add_argument("--rpt", default=None)
-    ap.add_argument("--spef", default=None)
+    ap.add_argument("--spef", default=None,
+                    help="쓸 SPEF 파일 하나를 직접 지정")
+    ap.add_argument("--spef-dir", "--spef-root", default=None,
+                    help="SPEF 들이 든 **폴더**. 코너(=폴더) 이름과 SPEF 파일 "
+                         "이름에서 온도와 RC 코너를 뽑아 같은 것을 고른다. "
+                         "전압은 안 본다(기생 RC 는 전압과 무관). 어느 것을 "
+                         "왜 골랐는지 화면에 찍는다. 못 고르면 멈춘다")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -144,8 +153,41 @@ def main():
     if _err:
         print("")
         code(_ec, "[ 실패 ] " + _err)
-    spef = args.spef or os.path.join(d, "design.spef")
     out = args.out or os.path.join(d, "distres.tsv")
+
+    # SPEF 를 정하는 순서. 위가 이기고, 어느 길로 정해졌는지 화면에 남긴다.
+    #   1) --spef        직접 지정
+    #   2) --spef-dir    코너 이름(온도 + RC 코너)에 맞는 것을 폴더에서 고름
+    #   3) <코너폴더>/design.spef
+    spef_why = ""
+    if args.spef:
+        spef = args.spef
+        spef_why = "--spef 로 직접 지정"
+    elif args.spef_dir:
+        import spef_match
+        # 코너 이름 : .rpt 파일 이름이 아니라 **폴더 이름**을 쓴다. 2회차 결과가
+        # <코너>/<코너>.rpt 로 놓이므로 둘이 같지만, 폴더 이름 쪽이 규약이다.
+        corner = os.path.basename(os.path.abspath(d))
+        if not os.path.isdir(args.spef_dir):
+            print("")
+            code("E-NOFILE", "[ 실패 ] --spef-dir 폴더가 없습니다: %s" % args.spef_dir)
+        spef, why = spef_match.pick(corner, spef_match.list_spefs(args.spef_dir))
+        if spef is None:
+            print("")
+            code("E-SPEFPICK",
+                 "[ 실패 ] 코너 '%s' 에 맞는 SPEF 를 못 골랐습니다." % corner,
+                 "         이유: %s" % why,
+                 "",
+                 "         폴더에 무엇이 있는지 보려면:",
+                 "           %s %s --spef-dir %s --dir %s"
+                 % (sys.executable,
+                    os.path.join(HERE, "_engine", "spef_match.py"),
+                    args.spef_dir,
+                    os.path.dirname(os.path.abspath(d)) or "."))
+        spef_why = "--spef-dir 에서 코너 '%s' 에 맞춰 고름 (%s)" % (corner, why)
+    else:
+        spef = os.path.join(d, "design.spef")
+        spef_why = "코너 폴더의 design.spef"
 
     print("=" * 68)
     print("2b - Dist / Res 표  (SPEF 를 읽습니다)")
@@ -157,6 +199,8 @@ def main():
             code("E-NOFILE", "[ 실패 ] %s 이 없습니다: %s" % (label, p))
     print("  리포트 : %s" % rpt)
     print("  SPEF   : %s  (%.0fMB)" % (spef, os.path.getsize(spef) / 1048576.0))
+    if spef_why:
+        print("           %s" % spef_why)
 
     nets = net_lines(rpt)
     if not nets:
