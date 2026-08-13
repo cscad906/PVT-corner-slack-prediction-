@@ -18,9 +18,23 @@
 코너 이름은 폴더 이름을 그대로 쓴다(2회차에서 리포트 이름과 같게 지어진다).
 
 SPEF 고르는 순서
-    1) 코너 폴더 안의 design.spef 가 있으면 그것       <- RC 코너가 다를 때
-    2) 없으면 --spef 로 준 파일                        <- 보통 이쪽
-    3) 둘 다 없으면 그 코너는 2b/2c 를 건너뛴다(2a, 3 은 SPEF 가 필요 없다)
+    1) 코너 폴더 안의 design.spef 가 있으면 그것       <- 코너 하나만 다를 때
+    2) --spef-root <폴더> 를 줬으면 코너 이름에 맞는 것을 그 폴더에서 고른다
+    3) 없으면 --spef 로 준 파일 하나                   <- 전 코너 공용
+
+    --spef-root 는 **온도와 RC 코너(BEOL)** 로만 맞춘다. 전압은 안 본다 --
+    기생 RC 는 배선 형상과 온도로 정해지고 전원 전압과는 무관하다. 그래서
+    tt0p6v25c_Cnom / tt0p7v25c_Cnom / tt0p8v25c_Cnom 은 같은 SPEF 를 쓴다.
+
+        코너 이름  tt0p6v25c_Cnom          ->  25C, Cnom
+        SPEF 이름  ....Cnom_model_25.spef  ->  25C, Cnom     ... 짝
+
+    이름만으로 안 갈리면 SPEF 머리말을 읽는다(StarRC/ICC2 가 찍어 준다).
+        // PARASITIC_TECH Cnom_model at 25.000 degree
+
+    **한 코너라도 못 고르면 아무것도 돌리지 않고 멈춘다.** 반쯤 돌려 놓고
+    실패하면 어느 코너가 어느 SPEF 로 만들어진 것인지 나중에 알 수 없고,
+    틀린 SPEF 로 돌면 숫자가 그럴듯하게 나와 한참 뒤에야 드러난다.
 
 Cpin 고르는 순서 (현장에서 pin_attr.txt 대신 Cpin 표를 받았을 때)
     1) 코너 폴더 안의 cpin_map.txt 가 있으면 그것      <- 코너마다 받았을 때
@@ -54,6 +68,47 @@ from find_rpt import find_rpt
 # 코너 폴더에서 이 이름을 찾으면 그것을 Cpin 표로 쓴다.
 # 현장에서 받는 파일 이름이 정해져 있으면 여기만 바꾸면 된다.
 CPIN_MAP_NAME = "cpin_map.txt"
+
+
+def resolve_spefs(corners, args):
+    """코너마다 쓸 SPEF 를 **한 코너도 돌리기 전에** 전부 정한다.
+
+    -> ({코너: 경로}, [(코너, 왜 못 골랐나)])
+
+    미리 정하는 이유가 두 가지다.
+      - 코너 16개를 한참 돌린 뒤 마지막에서 'SPEF 를 못 골랐다' 가 나오면
+        그때까지 돌린 것이 헛수고다.
+      - SPEF 를 잘못 물리면 결과가 **그럴듯하게** 나온다. 숫자가 나오니까
+        맞은 줄 알고 넘어가고, 한참 뒤 모델이 이상할 때야 알게 된다.
+    """
+    picker = None
+    if args.spef_root:
+        import spef_match
+        spefs = spef_match.list_spefs(args.spef_root)
+        picker = (spef_match, spefs)
+
+    out, bad = {}, []
+    for name, d in corners:
+        local = os.path.join(d, "design.spef")
+        if os.path.isfile(local):
+            out[name] = local
+            continue
+        if picker is not None:
+            mod, spefs = picker
+            p, why = mod.pick(name, spefs)
+            if p:
+                out[name] = p
+            else:
+                bad.append((name, why))
+            continue
+        if args.spef:
+            if os.path.isfile(args.spef):
+                out[name] = args.spef
+            else:
+                bad.append((name, "--spef 파일이 없습니다: %s" % args.spef))
+            continue
+        bad.append((name, "design.spef / --spef-root / --spef 중 하나가 필요합니다"))
+    return out, bad
 
 # 단계는 PT 를 사이에 두고 두 묶음으로 나뉜다. PT 는 파이썬에서 못 부르므로
 # 묶음 1 이 끝나면 pt_shell 로 한 번 갔다 와야 한다.
@@ -178,8 +233,12 @@ def main():
         description="round2 아래 코너 폴더 전부에 2a/2b/2c/3 을 돌린다.")
     ap.add_argument("--root", required=True,
                     help="코너 폴더들이 **들어 있는 상위 폴더** (예: round2). 코너 폴더 하나가 아니다")
+    ap.add_argument("--spef-root", "--spef-dir", default=None,
+                    help="SPEF 들이 든 **폴더**. 코너 이름의 온도와 RC 코너"
+                         "(BEOL)로 맞는 것을 고른다. 전압은 안 본다. 한 코너"
+                         "라도 못 고르면 아무것도 돌리지 않고 멈춘다")
     ap.add_argument("--spef", default=None,
-                    help="모든 코너가 함께 쓸 SPEF. 코너 폴더에 design.spef 가 "
+                    help="모든 코너가 함께 쓸 SPEF 파일 하나. 코너 폴더에 design.spef 가 "
                          "있으면 그쪽이 우선한다")
     ap.add_argument("--cpin-map", default=None,
                     help="모든 코너가 함께 쓸 Cpin 표(2열 이상). 코너 폴더에 "
@@ -236,9 +295,45 @@ def main():
     print("  코너      : %d개" % len(corners))
     for name, _ in corners:
         print("      %s" % name)
-    if args.spef:
+    if args.spef_root:
+        print("  SPEF 폴더 : %s" % args.spef_root)
+    elif args.spef:
         print("  공용 SPEF : %s" % args.spef)
     print("")
+
+    # ---- SPEF 를 **여기서 전부** 정한다. 하나라도 못 정하면 안 돌린다. ----
+    spef_of, spef_bad = resolve_spefs(corners, args)
+    need_spef = any(s[2] for s in steps)
+    if need_spef and args.spef_root:
+        print("  %-26s %-42s" % ("코너", "쓸 SPEF"))
+        print("  " + "-" * 66)
+        for name, _ in corners:
+            print("  %-26s %-42s"
+                  % (name, os.path.basename(spef_of[name])
+                     if name in spef_of else "*** 못 고름 ***"))
+        for name, why in spef_bad:
+            print("  %-26s %s" % ("", why))
+        print("  " + "-" * 66)
+        print("")
+
+    if need_spef and spef_bad:
+        print("=" * 68)
+        print("  문제 발생")
+        print("    무엇이   : %d개 코너가 쓸 SPEF 를 못 정했습니다." % len(spef_bad))
+        print("    하실 일  : 위 이유를 보고 셋 중 하나로 정해 주세요.")
+        print("               1) 코너 폴더에 design.spef 를 둔다 (ln -s 로도 됩니다)")
+        print("               2) --spef-root 폴더에 그 온도/RC 코너 SPEF 를 넣는다")
+        print("               3) --spef 로 파일 하나를 직접 준다")
+        print("")
+        print("               폴더에 무엇이 있는지 보려면:")
+        print("                 %s %s --spef-dir %s --dir %s"
+              % (sys.executable,
+                 os.path.join(HERE, "_engine", "spef_match.py"),
+                 args.spef_root or "<SPEF폴더>", args.root))
+        print("")
+        print("    에러 코드: E-SPEFPICK")
+        print("=" * 68)
+        sys.exit(1)
 
     results = []   # (코너, [코드...])
     for idx, (name, d) in enumerate(corners, 1):
@@ -246,9 +341,7 @@ def main():
         print("[%d/%d] %s" % (idx, len(corners), name))
         print("-" * 68)
 
-        spef = os.path.join(d, "design.spef")
-        if not os.path.isfile(spef):
-            spef = args.spef
+        spef = spef_of.get(name)
 
         # Cpin 표 고르는 순서 (SPEF 와 같은 방식)
         #   1) 코너 폴더 안의 cpin_map.txt        <- 코너마다 따로 받았을 때
