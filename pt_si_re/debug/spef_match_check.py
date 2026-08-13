@@ -81,17 +81,31 @@ def main():
     print("")
     print("  found in the SPEF : %d / %d   (%.0f%%)" % (hit, len(nets), pct))
     print("")
-    if pct >= 80:
-        print("  OK. The names line up. 2b being slow here is just size,")
-        print("      so let it finish.")
-    elif pct >= 20:
-        print("  PARTIAL. Many names are missing, so 2b will fall back to")
-        print("      matching by connection for the rest -- that is the slow")
-        print("      path. Expect a long run and gaps in Dist/Res.")
-        print("      Check that the corner and the RC/temperature match.")
+    # 문턱값은 실측으로 잡았다. 한 자리에서 재 보면 값이 두 무리로 갈린다.
+    #   맞는 SPEF  : 48%   (BoomCoreV3 의 Cmax/Cmin/Cnom x 25C/125C 여섯 개
+    #                      모두 정확히 같은 값이 나온다)
+    #   딴 SPEF    :  0%   (NAME_MAP 을 다른 디자인 것으로 바꿔 재 봄)
+    # 그 사이는 사실상 안 나온다. 그래서 "30% 넘으면 맞는 것" 으로 본다.
+    #
+    # 맞는 SPEF 인데도 절반뿐인 이유는, 리포트의 계층 이름을 SPEF 가 평탄화해
+    # 적기 때문이다(a/b/c -> a/b_c). 나머지는 2b 가 이름 변형과 CONN 으로
+    # 찾아낸다. 즉 절반쯤 못 찾는 것이 이 흐름의 정상이다.
+    if pct >= 30:
+        print("  OK -- this SPEF belongs to this report.")
+        print("      Half the names not matching directly is normal here:")
+        print("      the report keeps the hierarchy (a/b/c) while the SPEF")
+        print("      flattens it (a/b_c). 2b finds the rest by name variants")
+        print("      and by connection.")
+        print("      A correct SPEF measures about 48% on this design, and a")
+        print("      wrong one measures 0%. So this is fine -- if 2b is slow,")
+        print("      it is the size and the fallback, not the wrong file.")
+    elif pct > 0:
+        print("  ODD. Some names line up but far fewer than expected")
+        print("      (a correct SPEF measures about 48% here, a wrong one 0%).")
+        print("      Check that the design and the extraction run match.")
     else:
-        print("  MISMATCH. Almost nothing lines up. This SPEF is for another")
-        print("      design or another extraction. 2b will run for hours and")
+        print("  MISMATCH. Nothing lines up. This SPEF is for another design")
+        print("      or another extraction. 2b will run for a long time and")
         print("      still end with E-RES0.")
         print("      Stop it and pick the right SPEF:")
         print("        python3 _engine/spef_match.py --spef-dir <folder> --dir <root>")

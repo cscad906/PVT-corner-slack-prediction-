@@ -295,7 +295,7 @@ def run_corner(name, d, steps, args, spef, cmap, sink):
             print(line)
             sys.stdout.flush()      # 파이프로 넘길 때도 바로 보이게
         else:
-            say(line)
+            sink.append(line)
 
     t_corner = time.time()
     codes, trouble = [], []
