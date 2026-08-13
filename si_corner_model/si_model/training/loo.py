@@ -209,12 +209,20 @@ def _effective_mode(cfg: dict, split: Split) -> str:
     that, the "neighbourhood" IS the whole grid, so every candidate is scored on
     identical data and the winner is noise. Measured on the real 14nm drop at
     125C (6 seen, adaptive_k=6): adaptive gave 3.151 ps at the hidden corners
-    where plain gave 2.148 (worst 5.269 vs 2.555). At m25 (10 seen) the
-    neighbourhood is a real subset and adaptive holds its own -- better worst
-    case (13.5 vs 19.6 ps) at a slightly worse mean -- so it is kept there.
+    where plain gave 2.148 (worst 5.269 vs 2.555).
 
     This is a structural rule, not a fit to held-out error: it fires on the
-    corner count alone, which is known before any label is read."""
+    corner count alone, which is known before any label is read.
+
+    It is also no longer the main reason plain is used -- ``base.weighting``
+    now defaults to plain outright, because base quality alone turned out to
+    be the wrong thing to select on. The base is not used by itself; a network
+    learns a residual on top of it, and on an adaptive base that learning did
+    not happen at all: 125C stalled at 3.08 ps (its E2 value) for the whole
+    run, and m25 sat at 11.19 ps for 30 epochs, while the same setups on a
+    plain base reached 0.94 ps and 10.25 ps. At m25 adaptive is the better
+    base on its own (worst 13.5 vs 19.6 ps) and still loses end to end. The
+    downgrade below stays for anyone who sets adaptive explicitly."""
     mode = cfg["base"].get("weighting", cfg["base"].get("local_bandwidth", "adaptive"))
     if mode != "adaptive":
         return mode

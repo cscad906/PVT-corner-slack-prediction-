@@ -223,9 +223,21 @@ base:
   cross_terms: true                 # 교차항(dv*dlevel ...) 사용
   cross_max_degree: 2               # 교차항 총차수 상한 (코너가 적으면 2, 넉넉하면 3)
 
-  weighting: adaptive               # plain    = 전역 OLS 1회
+  weighting: plain                  # plain    = 전역 OLS 1회 (권장)
                                     # local    = 고정 대역폭 가중 OLS (bandwidth 필요)
-                                    # adaptive = 코너별 대역폭 자동 선택 (권장/최고)
+                                    # adaptive = 코너별 대역폭 자동 선택
+                                    #
+                                    # base 단독 성적만 보면 adaptive 가 나아 보일 수
+                                    # 있다. 그런데 base 는 혼자 쓰는 게 아니라 그 위에
+                                    # 신경망이 잔차를 배운다. adaptive base 위에서는
+                                    # 그 학습이 아예 안 됐다 (14nm 실측):
+                                    #    125C  adaptive base 3.151 -> 학습해도 3.08 에서 정지
+                                    #          plain    base 2.148 -> 학습으로 0.94 까지
+                                    #    m25   adaptive base 11.20 -> 30 epoch 내내 11.19
+                                    #          plain    base 11.00 -> 24 epoch 에 10.25
+                                    # m25 는 base 단독으로는 adaptive 가 worst 에서 앞서는데
+                                    # (13.5 vs 19.6) 최종은 plain 이 이긴다. 즉 base 만
+                                    # 보고 고르면 안 된다.
   bandwidth: [0.05, 1.0]            # weighting: local 일 때의 (dv, dlevel) 대역폭
   adaptive_grid: null               # adaptive 후보 대역폭. null = seen 간격에서 자동 유도
                                     #   직접 줄 때: [[0.02, 1.0], [0.05, 1.0], null]
