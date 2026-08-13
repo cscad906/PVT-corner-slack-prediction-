@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import argparse
 from difflib import SequenceMatcher
+import sys as _sys
+import time as _time
 import fnmatch
 import glob
 import os
@@ -168,6 +170,54 @@ def load_lib_pin_caps(lib_path):
     return result
 
 
+class Tick(object):
+    """긴 루프가 도는 동안 살아 있다는 것을 보여 준다.
+
+    2b 는 1GB SPEF 를 여섯 번까지 훑는데, 그 사이 화면에 아무것도 안 나온다.
+    몇십 분을 보고도 도는 중인지 멈춘 건지 알 수가 없어서, 잘못된 SPEF 로
+    한참을 기다린 뒤에야 알게 된다.
+
+    줄마다 시계를 보면 그것대로 비싸므로, 2만 줄에 한 번만 본다. 실제로
+    찍는 것은 3초에 한 번이다. 화면이 넘치지 않으면서 멈춤은 바로 보인다.
+
+    화면에 나가는 문장은 영어로 쓴다(현장 터미널이 한글을 깨뜨린다).
+    """
+
+    EVERY = 20000
+    SECS = 3.0
+
+    def __init__(self, label, total_bytes=None):
+        self.label = label
+        self.total = total_bytes
+        self.n = 0
+        self.t0 = _time.time()
+        self.last = self.t0
+
+    def __call__(self, fh=None):
+        self.n += 1
+        if self.n % self.EVERY:
+            return
+        now = _time.time()
+        if now - self.last < self.SECS:
+            return
+        self.last = now
+        el = now - self.t0
+        where = ""
+        if fh is not None and self.total:
+            try:
+                pos = fh.tell()
+                where = "  %3d%%" % min(100, int(100.0 * pos / self.total))
+            except (IOError, OSError, ValueError):
+                where = ""
+        print("      %s%s   %d lines, %.0fs" % (self.label, where, self.n, el))
+        _sys.stdout.flush()
+
+    def done(self):
+        print("      %s   done in %.0fs (%d lines)"
+              % (self.label, _time.time() - self.t0, self.n))
+        _sys.stdout.flush()
+
+
 def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                            pin_cap_map=None):
     """타이밍 리포트의 (net) 줄에 Dist/Res/Cpin 을 붙인다.
@@ -179,7 +229,12 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
       ② lib_path     -- Liberty 의 cell/pin capacitance (기존 방식)
       ③ SPEF *CONN 의 *L -- 두 경로가 모두 실패했을 때. SPEF 에 따라 없을 수 있다.
     """
-    print("1. 타이밍 리포트에서 타겟 Net 및 Driver/Receiver 정보 추출 중...")
+    print("1. reading the timing report for target nets and driver/receiver pins ...")
+    _sys.stdout.flush()
+    try:
+        _spef_size = os.path.getsize(spef_path)
+    except OSError:
+        _spef_size = None
 
     with open(report_path, 'r') as f:
         report_lines = f.readlines()
@@ -270,7 +325,9 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     print(f"-> 총 {len(queries)}개의 넷 연결(Edge) 경로를 찾았습니다.")
 
     # ---------------------------------------------------------
-    print("2. SPEF *NAME_MAP 파싱 중...")
+    print("2. reading the SPEF *NAME_MAP ...")
+    _sys.stdout.flush()
+    _tk = Tick("2. NAME_MAP", _spef_size)
     name_to_ids = {}
     norm_name_to_ids = {}
     leaf_to_ids = {}
@@ -280,6 +337,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     with open(spef_path, 'r') as f:
         in_name_map = False
         for line in f:
+            _tk(f)
             line = line.strip()
             is_star = line[:1] == '*'
             if is_star and line.startswith('*NAME_MAP'):
@@ -308,11 +366,15 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                 else:
                     break
 
-    print("2-1. SPEF port-to-D_NET alias 파싱 중...")
+    _tk.done()
+    print("2-1. reading port-to-D_NET aliases ...")
+    _sys.stdout.flush()
+    _tk = Tick("2-1. port alias", _spef_size)
     port_id_to_dnet_ids = {}
     with open(spef_path, 'r') as f:
         current_dnet = None
         for raw in f:
+            _tk(f)
             line = raw.strip()
             if not line:
                 continue
@@ -779,7 +841,10 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     results = {}
 
     # ---------------------------------------------------------
-    print("3. 대용량 SPEF 파일 탐색 및 계산 중 (Single-pass)...")
+    _tk.done()
+    print("3. scanning the SPEF and computing (single pass) ...")
+    _sys.stdout.flush()
+    _tk3 = Tick("3. main scan", _spef_size)
     
     in_target_net = False
     current_spef_net = None
@@ -912,6 +977,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
 
     with open(spef_path, 'r') as f:
         for line in f:
+            _tk3(f)
             line = line.strip()
             if not line: continue
             # 첫 글자만 먼저 본다. '*' 로 시작하지 않는 줄이 대부분이라
@@ -953,7 +1019,9 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
 
         if in_target_net: process_collected_net_data()
 
-    print("3-1. 1차 계산 후 남은 N/A net에 대해 exact CONN 2차 처리 중...")
+    _tk3.done()
+    print("3-1. second pass over the nets still missing ...")
+    _sys.stdout.flush()
     second_pass_hits = second_pass_exact_conn_match(line_idx_to_query, spef_path, results)
     if second_pass_hits:
         # Build per-D_NET queries with fixed node tokens and recompute only unresolved rows.
@@ -1027,7 +1095,8 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     if output_path is None:
         return results
 
-    print("4. 표 형식에 맞춰 타이밍 리포트 업데이트 중...")
+    print("4. writing the annotated report ...")
+    _sys.stdout.flush()
     
     net_row_re = re.compile(
         r'^(?P<prefix>.*\(net\)\s+\d+\s+[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*$'

@@ -81,34 +81,31 @@ def main():
     print("")
     print("  found in the SPEF : %d / %d   (%.0f%%)" % (hit, len(nets), pct))
     print("")
-    # 문턱값은 실측으로 잡았다. 한 자리에서 재 보면 값이 두 무리로 갈린다.
-    #   맞는 SPEF  : 48%   (BoomCoreV3 의 Cmax/Cmin/Cnom x 25C/125C 여섯 개
-    #                      모두 정확히 같은 값이 나온다)
-    #   딴 SPEF    :  0%   (NAME_MAP 을 다른 디자인 것으로 바꿔 재 봄)
-    # 그 사이는 사실상 안 나온다. 그래서 "30% 넘으면 맞는 것" 으로 본다.
+    # 이 숫자만으로 "맞다" 고 단정하면 안 된다. 실측에서 이름이 48% 맞는
+    # SPEF 로 2b 를 끝까지 돌렸더니 Res 가 8930개 중 0개였다. 같은 디자인의
+    # 다른 추출본이면 상위 계층 이름은 그대로이고 CTS 넷 이름만 달라지는데,
+    # 2b 가 필요로 하는 것이 주로 그쪽이기 때문이다.
     #
-    # 맞는 SPEF 인데도 절반뿐인 이유는, 리포트의 계층 이름을 SPEF 가 평탄화해
-    # 적기 때문이다(a/b/c -> a/b_c). 나머지는 2b 가 이름 변형과 CONN 으로
-    # 찾아낸다. 즉 절반쯤 못 찾는 것이 이 흐름의 정상이다.
-    if pct >= 30:
-        print("  OK -- this SPEF belongs to this report.")
-        print("      Half the names not matching directly is normal here:")
-        print("      the report keeps the hierarchy (a/b/c) while the SPEF")
-        print("      flattens it (a/b_c). 2b finds the rest by name variants")
-        print("      and by connection.")
-        print("      A correct SPEF measures about 48% on this design, and a")
-        print("      wrong one measures 0%. So this is fine -- if 2b is slow,")
-        print("      it is the size and the fallback, not the wrong file.")
-    elif pct > 0:
-        print("  ODD. Some names line up but far fewer than expected")
-        print("      (a correct SPEF measures about 48% here, a wrong one 0%).")
-        print("      Check that the design and the extraction run match.")
-    else:
-        print("  MISMATCH. Nothing lines up. This SPEF is for another design")
-        print("      or another extraction. 2b will run for a long time and")
-        print("      still end with E-RES0.")
-        print("      Stop it and pick the right SPEF:")
+    # 그래서 이 검사는 **아니라는 것만** 확실히 말한다.
+    #   0%   -> 확실히 다른 SPEF. 더 볼 것 없이 끊는다.
+    #   그 외 -> 아직 모른다. 2b 를 끝까지 돌려 'Res 있음' 을 봐야 안다.
+    if pct == 0:
+        print("  DEFINITELY WRONG. Not one name lines up. Stop 2b now -- it")
+        print("      will grind for a long time and still end at E-RES0.")
+        print("      Pick the SPEF for this corner:")
         print("        python3 _engine/spef_match.py --spef-dir <folder> --dir <root>")
+    else:
+        print("  NOT DECIDED. A high percentage here does NOT prove the SPEF")
+        print("      is the right one. Measured on this design: names matched")
+        print("      48% and the finished 2b run still produced Res for 0 of")
+        print("      8930 nets. Two extractions of the same design share the")
+        print("      upper hierarchy but differ in the clock-tree net names,")
+        print("      and those are most of what 2b needs.")
+        print("")
+        print("      What decides it is the end of the 2b run:")
+        print("          Res  있음 : <n>   (없음 <m>)")
+        print("      If it says 0, the SPEF is wrong no matter how good this")
+        print("      percentage looked.")
     print("")
     print("  report net examples : %s" % ", ".join(nets[:3]))
     print("  SPEF name examples  : %s" % ", ".join(sorted(names)[:3]))
