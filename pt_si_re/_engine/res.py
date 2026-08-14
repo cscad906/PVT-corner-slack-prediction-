@@ -93,8 +93,15 @@ def _dedup_keep_order(seq):
     return out
 
 
+@lru_cache(maxsize=1 << 20)
 def normalize_name_token(name):
-    # SPEF name_map may escape brackets, while PT report usually does not.
+    """SPEF 는 대괄호를 이스케이프하고 PT 리포트는 안 하므로 맞춰 준다.
+
+    캐시가 있는 이유: 이름으로 못 찾은 넷을 연결(CONN)로 찾는 구간에서
+    이 함수가 1억 5천만 번 불린다. 그런데 실제로 서로 다른 이름은 수십만
+    개뿐이라, 같은 문자열을 몇백 번씩 다시 바꾸고 있었다(str.replace 만
+    3억 회). 캐시 하나로 그 반복이 사라진다.
+    """
     return name.replace(r'\[', '[').replace(r'\]', ']')
 
 @lru_cache(maxsize=None)
@@ -229,6 +236,11 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
       ② lib_path     -- Liberty 의 cell/pin capacitance (기존 방식)
       ③ SPEF *CONN 의 *L -- 두 경로가 모두 실패했을 때. SPEF 에 따라 없을 수 있다.
     """
+    # 이름 fuzzy 검색 예산. [남은 횟수, 건너뛴 횟수]
+    # 넷 하나마다 NAME_MAP 전체를 훑는 경로라, 이름이 크게 어긋난 SPEF 에서
+    # 이것 하나로 몇 시간이 간다. 정상 리포트는 이 한도에 안 닿는다.
+    _fuzzy_budget = [200, 0]
+
     print("1. reading the timing report for target nets and driver/receiver pins ...")
     _sys.stdout.flush()
     try:
@@ -537,7 +549,21 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         # normalized, flattened, and leaf-based rules failed. Return a small set
         # of high-similarity candidates and let later pin-resolution discard
         # mismatches.
-        if not ids:
+        # 여기는 넷 하나마다 NAME_MAP 전체(수십만)를 훑는다. 이름이 잘 맞는
+        # 리포트에서는 몇 번 안 오지만, SPEF 가 어긋나면 못 찾은 넷 전부가
+        # 여기로 몰려 시간이 제곱으로 간다. 실측에서 22분에 2% 였다.
+        #
+        # 그런데 건지는 양이 거의 없다. 같은 실행에서 이 계열 fallback 이
+        # 3952개를 훑어 6개(0.15%)를 건졌다. 몇 시간을 더 써도 결과는
+        # 사실상 같고, 어차피 E-RES0 로 끝난다.
+        #
+        # 그래서 횟수를 제한한다. 정상적인 리포트는 이 한도에 닿지 않는다.
+        # 닿았다면 그것 자체가 "SPEF 가 이 리포트 것이 아니다" 라는 신호이고,
+        # 그 사실을 몇 시간 뒤가 아니라 지금 알려 주는 편이 낫다.
+        if not ids and _fuzzy_budget[0] <= 0:
+            _fuzzy_budget[1] += 1        # 건너뛴 횟수. 끝에 알린다
+        elif not ids:
+            _fuzzy_budget[0] -= 1
             leaf = norm_name.split('/')[-1]
             fuzzy = []
             for spef_id, full_name in name_entries:
@@ -737,25 +763,53 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                 candidate_query_indices.update(unresolved_by_driver_pin.get(pin_name, ()))
                 candidate_query_indices.update(unresolved_by_recv_pin.get(pin_name, ()))
 
+            if not candidate_query_indices:
+                return
+
+            # 이 D_NET 의 CONN 을 **핀 이름으로 한 번만** 색인해 둔다.
+            # 예전에는 후보 질의마다 conn_entries 를 처음부터 끝까지 두 번씩
+            # 훑었다. 그래서 endpoint_matches_conn 이 4억 3천만 번 불렸고,
+            # 그 안에서 이름 정규화가 또 1억 5천만 번 돌았다. 이 구간 하나가
+            # 2b 시간의 대부분이다.
+            #
+            # 핀 이름이 같은 것만 후보가 될 수 있으므로(endpoint_matches_conn
+            # 의 첫 조건), 그것으로 먼저 좁힌 뒤 인스턴스 이름을 비교한다.
+            by_pin = {}
+            ports = []
+            for conn in conn_entries:
+                pn = conn['pin_name']
+                if pn is None:
+                    ports.append(conn)
+                else:
+                    by_pin.setdefault(pn, []).append(conn)
+
+            def matches(inst_name, pin_name):
+                """endpoint_matches_conn 과 같은 판정. 후보만 본다."""
+                cands = ports if pin_name == "__PORT__" else by_pin.get(pin_name)
+                if not cands:
+                    return None
+                for conn in cands:
+                    if endpoint_matches_conn(conn, inst_name, pin_name):
+                        return conn
+                return None
+
             for q_idx in candidate_query_indices:
                 if q_idx in fallback_hits:
                     continue
 
                 q = unresolved_queries[q_idx]
+                if matches(q['drvr_inst'], q['drvr_pin']) is None:
+                    continue
+
+                if matches(q['recv_inst'], q['recv_pin']) is not None:
+                    fallback_hits[q_idx] = dnet_id
+                    continue
+
+                # 아래는 드물게만 오므로 예전대로 전체를 본다.
                 driver_matches = [
                     conn for conn in conn_entries
                     if endpoint_matches_conn(conn, q['drvr_inst'], q['drvr_pin'])
                 ]
-                if not driver_matches:
-                    continue
-
-                recv_matches = [
-                    conn for conn in conn_entries
-                    if endpoint_matches_conn(conn, q['recv_inst'], q['recv_pin'])
-                ]
-                if recv_matches:
-                    fallback_hits[q_idx] = dnet_id
-                    continue
 
                 driver_output_matches = [
                     conn for conn in driver_matches
@@ -1094,6 +1148,20 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     # (1b_distres.py 처럼 Dist/Res 표만 필요할 때 쓰는 경로)
     if output_path is None:
         return results
+
+    if _fuzzy_budget[1]:
+        print("")
+        print("  NOTE: gave up the last-resort name search for %d nets."
+              % _fuzzy_budget[1])
+        print("        That search walks the whole NAME_MAP for one net, and")
+        print("        it is capped at %d nets per run. Hitting the cap means"
+              % (200,))
+        print("        the names in this SPEF do not line up with this report.")
+        print("        Measured on a good run it recovered 6 nets out of 3952,")
+        print("        so lifting the cap would cost hours and change almost")
+        print("        nothing. Check the SPEF instead:")
+        print("          python3 debug/spef_match_check.py <report> <spef>")
+        _sys.stdout.flush()
 
     print("4. writing the annotated report ...")
     _sys.stdout.flush()
