@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""2b (표 방식) - Dist / Res 를 받은 표에서 읽어 만든다. SPEF 를 안 쓴다.
+
+    python3 2b_distres_table.py --dir <코너폴더>                  # 폴더의 distres_map.txt
+    python3 2b_distres_table.py --dir <코너폴더> --table <표파일>  # 직접 지정
+
+표를 찾는 순서 (2a 의 cpin_map.txt 와 같은 규약)
+    1) --table 로 준 파일
+    2) 코너 폴더 안의 distres_map.txt
+
+2b_distres.py / 2b_distres2.py 를 대체한다. 셋 다 출력이 같은
+`distres.tsv (line_no / net / dist / res)` 라서 다음 단계 2c_merge.py 는
+어느 것으로 만들었든 그대로 받는다.
+
+언제 쓰나
+    SPEF 를 직접 못 뽑는 사이트에서 **상대(기업 등)가 계산해 준 표**를 받아 쓸 때.
+    SPEF 가 있으면 2b_distres2.py 쪽이 정확하다(아래 "정확도" 참조).
+
+표 형식
+    열 3개면 된다.  net 이름 / res / dist        (구분자·헤더·열 순서는 자동 인식)
+        n57401      11.1137     7.3315
+        clock       51.5246   131.1135
+    헤더가 있으면 열 이름으로 찾고, 없으면 net,res,dist 순서로 본다.
+    구분자는 공백/탭/쉼표/세미콜론/파이프 중에서 알아서 고른다.
+    '#' 이나 '//' 로 시작하는 줄과 빈 줄은 건너뛴다.
+
+정확도 -- 열 3개면 절반이 부정확하다
+    Dist/Res 는 **드라이버 핀에서 그 리시버 핀까지**의 값인데, 넷 이름만 키로
+    쓰면 넷 하나에 값이 하나뿐이다. 리시버가 여럿인 넷은 그 줄들이 전부 같은
+    값을 받는다. BoomCoreV3 실측(82,472 (net) 줄)으로:
+
+        열 구성                                        SPEF 계산값과 일치
+        net_name res dist                                    69.4%
+        net_name driver_pin receiver_pin res dist           100.0%
+
+    그래서 상대에게 **드라이버/리시버 핀 열 2개를 더** 달라고 하는 게 좋다.
+    열 이름에 driver/receiver(또는 drv/recv/load/sink)가 들어 있으면 이 스크립트가
+    자동으로 핀 쌍 키로 바꿔 쓴다. 핀 표기는 리포트와 같은 `인스턴스/핀` 형식.
+    3열로 받아도 돌아가긴 한다 -- 대신 영향 받는 줄 수를 W-NETKEY 로 알려준다.
+
+코너별로 표가 몇 개 필요한가
+    Dist 는 배치 좌표라 코너가 바뀌어도 안 변한다. 표 1개면 된다.
+    Res 는 온도에 따라 크게 변한다(실측 25C->125C 전 넷 +39%, -40C->125C +86%).
+    **온도마다 표가 따로 있어야 한다.** 전압으로는 안 변하니 전압별로는 필요 없다.
+"""
+import argparse
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "_engine"))
+from utf8 import force_utf8, wopen
+force_utf8()
+from find_rpt import find_rpt
+
+OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
+
+# 받은 표를 코너 폴더에 둘 때 쓰는 이름. 2a 의 cpin_map.txt 와 같은 규약이다.
+# (--table 로 직접 주면 이름은 상관없다)
+TABLE_NAME = "distres_map.txt"
+
+NA = ("", "n/a", "na", "nan", "null", "-", "none")
+
+# 헤더가 있을 때 열을 알아보는 데 쓰는 이름 후보 (소문자 비교)
+COL_NET = ("net", "net_name", "netname", "name")
+COL_RES = ("res", "resistance", "r", "dr_res", "path_res", "net_res")
+COL_DIST = ("dist", "distance", "length", "len", "dr_length", "wl", "wirelength")
+COL_DRV = ("driver", "drv", "driver_pin", "drv_pin", "source", "src")
+COL_RECV = ("receiver", "recv", "receiver_pin", "recv_pin", "load", "sink", "target")
+
+# 화면 출력은 영어로 둔다 (한글이 깨지는 터미널이 있다).
+# 설명이 필요하면 이 파일 맨 위 설명글과 코드표.md 를 본다.
+CODE_INFO = {
+    "E-TABLE":    ("the supplied table could not be read",
+                   "check it has net/res/dist columns, and the header/delimiter."),
+    "E-TABLE0":   ("not one net name in the table matches the report",
+                   "check the table is for this design, and how net names are written."),
+    "W-RES":      ("many rows have no Dist/Res",
+                   "run 2c_merge.py -- it splits the cause into A/B/C for you."),
+    "W-NETKEY":   ("the table is keyed by net name only, so multi-receiver nets squash",
+                   "ask them to add two more columns: driver pin and receiver pin."),
+}
+
+
+def code(c, *msg):
+    """무슨 일이 있었는지 설명하고 코드를 찍는다. (2b_distres.py 와 같은 규약)"""
+    for m in msg:
+        print(m)
+    print("")
+    print("=" * 66)
+    if c.startswith("OK-"):
+        print("  DONE                [ %s ]" % c)
+        print("=" * 66)
+        return
+    what, todo = CODE_INFO.get(c, ("", ""))
+    kind = "FAILED" if c.startswith("E-") else "CHECK "
+    print("  %s" % kind)
+    if what:
+        print("    what   : %s" % what)
+        print("    to do  : %s" % todo)
+    print("")
+    print("    code   : %s" % c)
+    print("=" * 66)
+    sys.exit(1 if c.startswith("E-") else 0)
+
+
+def fmt(v, nd=12):
+    """2b_distres.py 와 같은 자릿수 규칙. 소수점 6자리 반올림 후 뒤 0 제거."""
+    if v is None:
+        return ""
+    s = "%.*f" % (nd, float(v))
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def scan_report(rpt):
+    """리포트 -> [(줄번호, 넷, 드라이버핀, 리시버핀)]
+
+    '(net)' 줄 바로 앞 핀이 드라이버, 바로 뒤 핀이 리시버. 2a/2b 와 같은 규칙이다.
+    """
+    out = []
+    prev_pin = None
+    pending = None
+    with open(rpt, "r", errors="ignore") as f:
+        for idx, line in enumerate(f):
+            m = OBJ_RE.match(line)
+            if not m:
+                continue
+            name, tag = m.group(1), m.group(2).lower()
+            if tag == "net":
+                pending = (idx, name, prev_pin)
+                continue
+            if pending is not None:
+                out.append((pending[0], pending[1], pending[2], name))
+                pending = None
+            prev_pin = name
+    return out
+
+
+# ------------------------------------------------------------------ 이름 변형
+
+def name_variants(name):
+    """표와 리포트의 이름 표기가 갈리는 경우를 흡수한다."""
+    base = name.strip().lstrip("/")
+    out = [base]
+    for b in list(out):
+        esc = b.replace("\\[", "[").replace("\\]", "]")
+        if esc != b:
+            out.append(esc)
+    for b in list(out):
+        flat = re.sub(r"\[(\d+)\]", r"_\1_", b)
+        if flat != b:
+            out.append(flat)
+        unflat = re.sub(r"_(\d+)_", r"[\1]", b)
+        if unflat != b:
+            out.append(unflat)
+    for b in list(out):
+        if "/" in b:
+            out.append(b.replace("/", "."))
+        if "." in b:
+            out.append(b.replace(".", "/"))
+    seen = []
+    for x in out:
+        if x not in seen:
+            seen.append(x)
+    return seen
+
+
+# ------------------------------------------------------------------ 표 읽기
+
+def sniff(sample):
+    for d in (",", "\t", ";", "|"):
+        if all(d in ln for ln in sample):
+            return d
+    return None          # None = 공백으로 나눈다
+
+
+def find_col(header, cands):
+    low = [h.strip().lower().lstrip("#").strip() for h in header]
+    for i, h in enumerate(low):
+        if h in cands:
+            return i
+    for i, h in enumerate(low):
+        if any(h.startswith(c) or c in h for c in cands):
+            return i
+    return None
+
+
+def num(tok, scale):
+    t = tok.strip()
+    if t.lower() in NA:
+        return None
+    try:
+        return float(t) * scale
+    except ValueError:
+        return None
+
+
+def load_table(path, res_scale=1.0, dist_scale=1.0):
+    """표 -> ({키: (dist, res)}, 핀쌍키인가, 통계)"""
+    with open(path, "r", errors="ignore") as f:
+        raw = [ln.rstrip("\n\r") for ln in f]
+    lines = [ln for ln in raw
+             if ln.strip() and not ln.lstrip().startswith(("#", "//"))]
+    if not lines:
+        return {}, False, {"rows": 0, "bad": 0, "keys": 0,
+                           "delim": "?", "header": False, "pair": False}
+
+    delim = sniff(lines[:20])
+    if delim:
+        split = lambda s: [c.strip() for c in s.split(delim)]
+    else:
+        split = lambda s: s.split()
+
+    first = split(lines[0])
+    numeric = 0
+    for tok in first[1:3]:
+        try:
+            float(tok)
+            numeric += 1
+        except ValueError:
+            pass
+    has_header = numeric < 1
+
+    if has_header:
+        i_net = find_col(first, COL_NET)
+        i_res = find_col(first, COL_RES)
+        i_dist = find_col(first, COL_DIST)
+        i_drv = find_col(first, COL_DRV)
+        i_recv = find_col(first, COL_RECV)
+        body = lines[1:]
+        if i_net is None or i_res is None or i_dist is None:
+            code("E-TABLE",
+                 "[ FAILED ] cannot tell which column is which.",
+                 "           header was: %s" % first,
+                 "           rename the header, or drop it (then: net res dist)")
+    else:
+        i_net, i_res, i_dist, i_drv, i_recv = 0, 1, 2, None, None
+        body = lines
+
+    pair = i_drv is not None and i_recv is not None
+    need = max(x for x in (i_net, i_res, i_dist, i_drv, i_recv) if x is not None) + 1
+
+    tab = {}
+    bad = 0
+    conflict = 0
+    for ln in body:
+        c = split(ln)
+        if len(c) < need or not c[i_net].strip():
+            bad += 1
+            continue
+        val = (num(c[i_dist], dist_scale), num(c[i_res], res_scale))
+        for v in name_variants(c[i_net]):
+            k = (v, c[i_drv].strip(), c[i_recv].strip()) if pair else v
+            if k in tab:
+                if tab[k] != val:
+                    conflict += 1
+                continue
+            tab[k] = val
+
+    st = {"rows": len(body), "bad": bad, "keys": len(tab), "conflict": conflict,
+          "delim": {None: "whitespace", ",": "comma", "\t": "tab",
+                    ";": "semicolon", "|": "pipe"}[delim],
+          "header": has_header, "pair": pair}
+    return tab, pair, st
+
+
+# ------------------------------------------------------------------ main
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Dist/Res from a supplied table instead of the SPEF.")
+    ap.add_argument("--dir", default=".",
+                    help="corner folder that holds timing.rpt")
+    ap.add_argument("--rpt", default=None)
+    ap.add_argument("--table", default=None,
+                    help="the supplied table: net_name / res / dist. "
+                         "default: <dir>/" + TABLE_NAME)
+    ap.add_argument("--out", default=None,
+                    help="default <dir>/distres.tsv, so 2c_merge.py picks it up")
+    ap.add_argument("--res-scale", type=float, default=1.0,
+                    help="multiply every table res by this (unit alignment)")
+    ap.add_argument("--dist-scale", type=float, default=1.0,
+                    help="multiply every table dist by this (unit alignment)")
+    args = ap.parse_args()
+
+    d = args.dir
+    rpt, err, _ = find_rpt(d, args.rpt)
+    if err:
+        print("[ FAILED ] %s" % err)
+        sys.exit(1)
+    # 표를 찾는 순서: 1) --table 로 준 것  2) 코너 폴더의 distres_map.txt
+    table = args.table or os.path.join(d, TABLE_NAME)
+    if not os.path.isfile(table):
+        print("[ FAILED ] table not found: %s" % table)
+        if not args.table:
+            print("           put it in the corner folder as %s," % TABLE_NAME)
+            print("           or point at it with --table <file>")
+        sys.exit(1)
+    out = args.out or os.path.join(d, "distres.tsv")
+
+    print("=" * 68)
+    print("2b (table) - Dist / Res    [no SPEF]")
+    print("=" * 68)
+    print("  report : %s" % rpt)
+    print("  table  : %s" % table)
+
+    tab, pair, st = load_table(table, args.res_scale, args.dist_scale)
+    print("  parsed : rows=%d keys=%d bad=%d  delim=%s header=%s"
+          % (st["rows"], st["keys"], st["bad"], st["delim"], st["header"]))
+    print("  key    : %s" % ("net + driver pin + receiver pin"
+                             if pair else "net name only"))
+    if st.get("conflict"):
+        print("  note   : %d duplicate names with different values, first kept"
+              % st["conflict"])
+    if not tab:
+        code("E-TABLE",
+             "[ FAILED ] no usable rows in the table.")
+
+    rows = scan_report(rpt)
+    print("  (net) lines : %d" % len(rows))
+    print("")
+
+    # 넷 이름만으로 키를 잡을 때, 리시버가 여럿인 넷이 몇 줄이나 되는지 센다.
+    # 그 줄들은 전부 같은 값을 받게 되므로 조용히 넘기지 않는다.
+    recv_of = {}
+    for _idx, net, _drv, rcv in rows:
+        recv_of.setdefault(net, set()).add(rcv)
+    many = set(n for n, r in recv_of.items() if len(r) > 1)
+
+    n = hit_d = hit_r = 0
+    squashed = 0
+    tmp = []
+    for idx, net, drv, rcv in rows:
+        n += 1
+        if net in many:
+            squashed += 1
+        dist = res = None
+        for v in name_variants(net):
+            k = (v, drv or "", rcv or "") if pair else v
+            if k in tab:
+                dist, res = tab[k]
+                break
+        if dist is not None:
+            hit_d += 1
+        if res is not None:
+            hit_r += 1
+        tmp.append((idx, net, dist, res))
+
+    with wopen(out) as fh:
+        fh.write("line_no\tnet\tdist\tres\n")
+        for idx, net, dist, res in tmp:
+            fh.write("%d\t%s\t%s\t%s\n" % (idx, net, fmt(dist), fmt(res)))
+
+    print("-" * 68)
+    print("  out       : %s" % out)
+    print("  rows      : %d" % n)
+    print("  Dist found: %d   (miss %d)" % (hit_d, n - hit_d))
+    print("  Res  found: %d   (miss %d)" % (hit_r, n - hit_r))
+    if not pair:
+        print("  squashed  : %d rows (%.1f%%) sit on a net with >1 receiver"
+              % (squashed, 100.0 * squashed / n if n else 0.0))
+    print("-" * 68)
+
+    if n == 0:
+        code("E-NOROW", "[ FAILED ] the report has no (net) lines.")
+    if hit_r == 0 and hit_d == 0:
+        code("E-TABLE0",
+             "[ FAILED ] not one net name in the table matched the report.")
+    if hit_r < n * 0.9:
+        code("W-RES",
+             "[ CHECK ] Res is empty on %d rows (%.0f%%)."
+             % (n - hit_r, 100.0 * (n - hit_r) / n))
+    if not pair and squashed:
+        code("W-NETKEY",
+             "[ CHECK ] %d rows (%.1f%%) share a net with other receivers,"
+             % (squashed, 100.0 * squashed / n),
+             "          so they all got the same value from the table.",
+             "          measured on BoomCoreV3: 3 columns -> 69.4% correct,",
+             "          adding driver/receiver pin columns -> 100%.")
+    code("OK-DISTRES",
+         "[ OK ] Dist/Res %d/%d." % (hit_r, n),
+         "       next:  %s 2c_merge.py --dir %s" % (sys.executable, d))
+
+
+if __name__ == "__main__":
+    main()

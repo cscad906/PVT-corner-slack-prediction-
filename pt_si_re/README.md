@@ -538,6 +538,83 @@ python3 5c_report.py   --dir $D                              # -> <코너>.path_
 
 ---
 
+## SPEF 대신 표를 받아 쓸 때 — 2b_distres_table.py
+
+SPEF 를 직접 못 뽑는 사이트에서, **상대(기업 등)가 계산해 준 표**로 Dist/Res 를 채운다.
+`2b_distres.py` 자리에 그대로 끼운다. 출력이 같은 `distres.tsv` 라서 `2c_merge.py` 부터는
+아무것도 안 바뀐다.
+
+```bash
+D=round2/TT_0p8V_25C
+python3 2b_distres_table.py --dir $D                      # -> distres.tsv
+python3 2c_merge.py         --dir $D                      # 이하 동일
+```
+
+### 받은 표를 어디에 어떤 이름으로 두나
+
+`2a` 의 `cpin_map.txt` 와 같은 규약이다. **코너 폴더 안에 `distres_map.txt`** 로 둔다.
+
+```
+round2/TT_0p8V_25C/
+  TT_0p8V_25C.rpt      리포트 (원래 있던 것)
+  cpin_map.txt         받은 Cpin 표   -> 2a
+  distres_map.txt      받은 Dist/Res 표 -> 2b_distres_table.py     ★ 이것
+```
+
+찾는 순서는 1) `--table` 로 준 파일 2) 코너 폴더의 `distres_map.txt` 다.
+이름을 바꾸고 싶으면 `--table <파일>` 로 직접 주면 된다.
+
+**Res 는 온도마다 다르고 전압으로는 안 변하므로, 표는 온도당 1개다.** 같은 온도의
+코너 폴더들에는 같은 파일이 들어간다. 용량이 아까우면 심볼릭 링크로 둔다.
+
+```bash
+# 25C 코너 폴더 전부에 같은 표를 건다
+foreach D (round2/TT_*_25C)
+    ln -s /받은곳/distres_25c.txt $D/distres_map.txt
+end
+```
+
+표는 열 3개면 된다. 구분자(공백/탭/쉼표), 헤더 유무, 열 순서는 알아서 인식한다.
+
+```
+net_name        res         dist
+n57401          11.1137     7.3315
+clock           51.5246   131.1135
+```
+
+단위가 다르면 `--res-scale` / `--dist-scale` 로 맞춘다. 코드는 안 고쳐도 된다.
+
+### 열 3개면 절반 가까이가 부정확하다
+
+Dist/Res 는 **드라이버 핀에서 그 리시버 핀까지**의 값인데, 넷 이름만 키로 쓰면 넷 하나에
+값이 하나뿐이다. 리시버가 여럿인 넷은 그 줄들이 전부 같은 값을 받는다.
+
+| 표의 열 구성 | SPEF 계산값과 일치 |
+|---|---|
+| `net_name res dist` | 79.5% (example/round2/TT_0p8V_25C 기준) |
+| `net_name driver_pin receiver_pin res dist` | **100%** |
+
+그래서 **driver/receiver 핀 열 2개를 더** 달라고 하는 게 좋다. 열 이름에
+driver/receiver(또는 drv/recv/load/sink)가 들어 있으면 자동으로 핀 쌍 키로 바꿔 쓴다.
+핀 표기는 리포트와 같은 `인스턴스/핀` 형식이어야 한다.
+3열로 받아도 돌아가긴 한다 — 대신 영향 받는 줄 수를 `W-NETKEY` 로 매번 알려준다.
+
+### 표가 몇 개 필요한가
+
+- **Dist 는 표 1개면 된다.** 배치 좌표라 전압·온도·RC 코너가 바뀌어도 안 변한다.
+- **Res 는 온도마다 표가 따로 있어야 한다.** 실측으로 25C→125C 에서 전 넷이 +39%,
+  -40C→125C 에서 +86% 움직인다 (`R(T) = R(0C) x (1 + 0.00432 x T)`, 구리 TCR 0.43%/도).
+  한 개만 받아 돌려 쓰면 배선 RC 의 온도 의존성이 사라진다.
+- **전압별로는 필요 없다.** 배선 RC 는 전원 전압과 무관해서 값이 전혀 안 변한다.
+- RC 코너(Cmin/Cnom/Cmax)별로도 받으면 좋지만 우선순위는 낮다 — 실측상 83% 의 넷이
+  코너 간 저항 차이 0.1% 미만이다.
+
+### 검증한 것
+
+`example/round2/TT_0p8V_25C` 의 SPEF 산출물에서 표를 역으로 만들어 이 경로로 다시 돌린 결과,
+핀 열이 있는 표에서는 `<코너>_fixed_annotated.txt` 가 원본과 **바이트 단위로 같았다**
+(8,930 (net) 줄, `OK-DISTRES` → `OK-MERGE`).
+
 ## 결과 파일
 
 ### `<코너>_fixed_annotated.txt`
@@ -692,6 +769,7 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 6_check_xtalk.py   받은 crosstalk 결과 검사 (읽기만 한다)
 2a_cpin.py         Cpin        (SPEF 안 읽음, 1초)
 2b_distres.py      Dist/Res    (SPEF 읽음)
+2b_distres_table.py  Dist/Res  (SPEF 대신 받은 표를 읽음. 아래 참조)
 2c_merge.py        -> <코너>_fixed_annotated.txt                ★
 5a_contexts.py     경로별 victim 넷 + PT 에 물어볼 넷 목록
 5b_pairs.py        받은 PT 출력에서 victim-aggressor 쌍
