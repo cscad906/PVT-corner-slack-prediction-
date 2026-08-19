@@ -11,7 +11,7 @@
     python 0_check.py    <- 2.7 이어도 이건 돈다. 쓸 수 있는 파이썬을 찾아 준다
 
 무엇이 준비됐고 무엇이 없는지, 없으면 무엇을 해야 하는지를 한국어로 출력한다.
-여기서 전부 OK 가 나온 뒤에 2_annotate.py 로 넘어간다.
+여기서 전부 OK 가 나온 뒤에 4_all_corners.py 로 넘어간다.
 """
 from __future__ import print_function
 
@@ -58,8 +58,9 @@ INPUTS = [
      "pt_shell: redirect -file pin_attr.txt { report_attribute -application [get_pins *] }"),
     ("net_attr.txt", "넷 attribute 덤프 (crosstalk)",
      "pt_shell: redirect -file net_attr.txt { report_attribute -application [get_nets *] }"),
-    ("design.spef", "SPEF (Dist/Res 계산에 필요)",
-     "이미 받은 SPEF 파일을 이 이름으로 복사하거나, --spef 로 경로를 직접 준다"),
+    ("resdist_map.txt", "받은 Res/Dist 표 (2b 가 쓴다)",
+     "코너 폴더마다 하나씩 둔다. 헤더 없이 3열: net 이름 / res / dist.\n"
+     "               Res 는 온도마다 다르므로 그 코너 온도의 표를 둔다."),
 ]
 
 OK = "[ OK ]"
@@ -328,8 +329,15 @@ def main():
     if py and have:
         print("  준비 완료. 다음 명령으로 넘어가세요:")
         print("")
-        print("    %s 2_annotate.py  --dir %s" % (sys.executable, args.dir))
-        print("    %s 5a_contexts.py --dir %s" % (sys.executable, args.dir))
+        print("    %s 4_all_corners.py --root <상위폴더>            # 묶음 1 annotation"
+              % sys.executable)
+        print("    %s 4_all_corners.py --root <상위폴더> --phase 2  # 묶음 2 crosstalk"
+              % sys.executable)
+        print("")
+        print("  코너 하나만 손으로 돌릴 때는:")
+        print("    %s 2a_cpin.py           --dir %s" % (sys.executable, args.dir))
+        print("    %s 2b_distres_table.py  --dir %s" % (sys.executable, args.dir))
+        print("    %s 2c_merge.py          --dir %s" % (sys.executable, args.dir))
     else:
         print("  아직 준비가 안 됐습니다. 위에서 [ 없음 ] / [ 주의 ] 로 표시된 것을 먼저 해결하세요.")
     print("=" * 68)
