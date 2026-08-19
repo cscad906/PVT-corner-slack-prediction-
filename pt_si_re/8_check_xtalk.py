@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""6 - 현장에서 받은 crosstalk 결과가 코너마다 제대로 나왔는지 검사한다.
+"""8 - 현장에서 받은 crosstalk 결과가 코너마다 제대로 나왔는지 검사한다.
 
-    python3 6_check_xtalk.py --root /받은곳
+    python3 8_check_xtalk.py --root /받은곳
 
 setup / hold 를 **자동으로 판별**한다(PT 원문의 Annotated max/min). 검사가
 끝나면 다음에 칠 명령을 찍어 주는데, hold 면 5b 에 --mode hold 를 붙여서

@@ -200,7 +200,7 @@ NEXT_HINT = {
     "1": ("annotation 이 끝났습니다. 이어서 crosstalk 을 돌리세요:",
           "    %(py)s 4_all_corners.py --root %(root)s --phase 2",
           "(담당자분께 받은 xtalk/ 가 코너 폴더마다 있어야 합니다.",
-          " 먼저 확인하려면 6_check_xtalk.py --root %(root)s)"),
+          " 먼저 확인하려면 8_check_xtalk.py --root %(root)s)"),
     "2": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
           "    <코너>_fixed_annotated.txt",
           "    <코너>.path_context_si_compact.by_path.rpt",

@@ -172,7 +172,7 @@ def main():
         print("         담당자분께 받은 xtalk/ 를 이 폴더에 두셔야 5b 가 돕니다.")
         print("         받은 것이 맞는지 먼저 보려면:")
         print("           python3 %s --dir %s"
-              % (os.path.join(HERE, "6_check_xtalk.py"), os.path.abspath(d)))
+              % (os.path.join(HERE, "8_check_xtalk.py"), os.path.abspath(d)))
     code("OK-XCTX")
 
 

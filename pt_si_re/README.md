@@ -284,20 +284,20 @@ round2/<코너>/xtalk/            <- 받은 4개
 ## 우리가 돌리는 것 — 네 줄
 
 ```bash
-python3 6_check_xtalk.py --root round2                          # 받은 것 검사
+python3 8_check_xtalk.py --root round2                          # 받은 것 검사
 python3 4_all_corners.py --root round2 --phase 1   # 2a 2b 2c  (annotation, SPEF 불필요)
 python3 4_all_corners.py --root round2 --phase 2   # 5a 5b 5c  (crosstalk)
-python3 7_collect.py     --root round2 --out deliver --mode setup
+python3 6_collect.py     --root round2 --out deliver --mode setup
 ```
 
 hold 는 **작업 폴더를 따로 두고** 같은 네 줄에 `--mode hold` 를 붙인다
-(`4_all_corners.py` 와 `7_collect.py` 에). `6_check_xtalk.py` 는 setup/hold 를
+(`4_all_corners.py` 와 `6_collect.py` 에). `8_check_xtalk.py` 는 setup/hold 를
 PT 원문에서 자동 판별하므로 붙일 필요가 없다.
 
-### 6 — 받은 것 검사 (먼저 한다)
+### 8 — 받은 것 검사 (먼저 한다)
 
 ```bash
-python3 6_check_xtalk.py --root round2
+python3 8_check_xtalk.py --root round2
 ```
 
 받은 폴더 아래에서 이름이 `xtalk` 인 폴더를 **전부** 찾아 한 번에 본다.
@@ -354,10 +354,10 @@ python3 4_all_corners.py --root round2 --phase 2
 | `--only 2a,2b` | 그 묶음 안에서 일부만 |
 | `--mode hold` | hold 데이터를 만들 때 (5b 에 전달) |
 
-### 7 — 넘길 형태로 모으기
+### 6 — 넘길 형태로 모으기
 
 ```bash
-python3 7_collect.py --root round2 --out deliver --mode setup
+python3 6_collect.py --root round2 --out deliver --mode setup
 ```
 
 작업 폴더에는 중간 파일(`cpin.tsv`, `distres.tsv`, `xtalk/...`)이 잔뜩 남는데,
@@ -673,7 +673,7 @@ aggressor_driver_slew_max  coupling_cap_ff
 | `1_union.py` | `--mode setup` (기본) | **`--mode hold`** |
 | 담당자분이 source 할 tcl | `pt/xtalk_all.tcl` | **`pt/xtalk_all_hold.tcl`** |
 | `4_all_corners.py` | `--mode setup` (기본) | **`--mode hold`** |
-| `7_collect.py` | `--mode setup` | **`--mode hold`** |
+| `6_collect.py` | `--mode setup` | **`--mode hold`** |
 
 `1_union.py --mode` 는 생성되는 `fixed_paths.tcl` 의 `set DTYPE` 을 정한다.
 이걸 안 주면 hold 리포트로 고른 경로를 **setup 으로 측정**하게 된다.
@@ -772,7 +772,7 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 0_check.py         환경/입력 점검. 처음에 한 번 (파이썬 2.7 로도 돌아간다)
 0_trim.py          리포트가 너무 클 때 코너마다 worst N개만 남긴 사본
 1_union.py         코너 합치기 -> fixed_paths.tcl               ★ 담당자분께 드림
-6_check_xtalk.py   받은 crosstalk 결과 검사 (읽기만 한다)
+8_check_xtalk.py   받은 crosstalk 결과 검사 (읽기만 한다)
 2a_cpin.py         Cpin        (SPEF 안 읽음, 1초)
 2b_distres_table.py  Dist/Res  (받은 표를 읽음)          ★ 지금 쓰는 것
 2b_distres.py      Dist/Res    (SPEF 읽음. 예전 방식)
@@ -781,7 +781,7 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 5b_pairs.py        받은 PT 출력에서 victim-aggressor 쌍
 5c_report.py       -> 14열 리포트                                ★
 4_all_corners.py   위를 코너 전부에 (--phase 1 / 2)
-7_collect.py       최종 2종만 넘길 형태로 모으기
+6_collect.py       최종 2종만 넘길 형태로 모으기
 9_diagnose.py      N/A 원인을 넷 단위로 분류 (필요할 때만)
 ```
 

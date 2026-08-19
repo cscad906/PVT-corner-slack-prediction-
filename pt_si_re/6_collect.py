@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""7 - 다 돌린 결과에서 **최종 파일 2종만** 뽑아 넘길 형태로 모은다.
+"""6 - 다 돌린 결과에서 **최종 파일 2종만** 뽑아 넘길 형태로 모은다.
 
-    python3 7_collect.py --root round2      --out deliver --mode setup
-    python3 7_collect.py --root round2_hold --out deliver --mode hold
+    python3 6_collect.py --root round2      --out deliver --mode setup
+    python3 6_collect.py --root round2_hold --out deliver --mode hold
 
 setup 과 hold 는 **작업 폴더가 따로**다(별개 2세트). --out 은 같은 곳을 주면
 그 아래에 setup/ 과 hold/ 로 갈려 담긴다.

@@ -8,7 +8,7 @@
 **hold 데이터면 --mode hold 를 반드시 준다.** 이 값이 결과의 analysis_type
 열에 그대로 들어간다. 빼먹어도 에러가 안 나고 setup 으로 찍히기만 하므로,
 나중에 setup/hold 를 섞어 학습하게 된다. 어느 쪽인지 모르겠으면
-`6_check_xtalk.py` 가 PT 원문을 보고 알려 준다(원문의 Annotated max/min).
+`8_check_xtalk.py` 가 PT 원문을 보고 알려 준다(원문의 Annotated max/min).
 
 넣는 것   xtalk/context_raw.rpt   (xtalk_all.tcl / xtalk_all_hold.tcl 의 PT 원문)
 나오는 것 xtalk/active_features.tsv         쌍 하나가 한 줄
@@ -47,7 +47,7 @@ CODE_INFO = {
     "E-NOUCTX":   ("unique_contexts.tsv is missing or empty",
                    "It is part of what the PT run produces, together with "
                    "context_raw.rpt. Check the xtalk/ folder you received "
-                   "is complete (6_check_xtalk.py)."),
+                   "is complete (8_check_xtalk.py)."),
     "E-MODE":     ("The PT output was made with setup/hold the other way round",
                    "Re-run 5b with the other --mode, or re-make the PT output "
                    "with the delay type you want. See above."),
