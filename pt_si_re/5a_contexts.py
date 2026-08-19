@@ -10,17 +10,20 @@ mode 옵션이 없다. (가리는 곳은 1_union.py 와 5b_pairs.py 두 곳뿐�
 넣는 것   <코너>_fixed_annotated.txt (2c_merge.py) 또는 원본 <코너>.rpt
           crosstalk 은 Dist/Res/Cpin 을 안 쓰므로 둘 중 아무거나 된다
 나오는 것 xtalk/path_victim_nets.tsv     경로별 victim 넷 + 구간(launch/data/capture)
-          xtalk/unique_contexts.tsv      PT 에 물어볼 (넷, driver핀, load핀) 중복 제거
+
+**unique_contexts.tsv 는 만들지 않는다.** 그건 담당자분 쪽 산출물이다.
+xtalk_all.tcl 이 PT 안에서 만들고, 우리가 받는 것이다. 5a 가 같은 이름으로
+덮어쓰면 "PT 가 실제로 무엇을 물어봤는지" 기록이 사라진다.
 
 왜 필요한가
-    report_attribute 로는 넷 단위 **요약**(aggressor 몇 개, coupling cap 합계)만
-    나옵니다.
-    기존 14열 리포트는 **aggressor 하나하나**의 bump 와 coupling cap 을 담습니다.
-    그건 report_attribute 로는 안 나오고 report_delay_calculation -crosstalk 을
-    넷마다 돌려야 나옵니다. 그래서 먼저 "어느 넷을 물어볼지" 목록을 만듭니다.
+    PT 는 우리가 못 돌립니다. 담당자분이 fixed_paths.tcl 과 xtalk_all.tcl 을
+    돌려 주시고, 우리는 그 결과를 받아 이어서 합니다. 그래서 PT 보다 먼저
+    할 일은 없고, 이 단계는 **받은 뒤에** 돕니다.
 
-같은 넷이 여러 경로에 나와도 PT 에는 한 번만 물어봅니다(중복 제거). 그래서
-경로 수보다 훨씬 적습니다.
+    받은 폴더에 unique_contexts.tsv 가 이미 있는데도 5a 를 도는 이유는
+    path_victim_nets.tsv 하나 때문입니다. 5c 가 그것을 쓰는데 PT 쪽 산출물에는
+    없습니다(PT 는 경로 개념이 없어서 안 만듭니다). 같은 리포트에서 만드는
+    것이라 결과는 같습니다.
 """
 import argparse
 import os
@@ -43,7 +46,7 @@ CODE_INFO = {
                    "있어야 합니다."),
     "E-PARSE":    ("annotated.txt 을 읽다가 실패했습니다",
                    "2c_merge.py 가 정상(OK-MERGE)으로 끝났는지 확인해 주세요."),
-    "E-NOCTX":    ("PT 에 물어볼 넷이 하나도 없습니다",
+    "E-NOCTX":    ("리포트에서 victim 넷을 하나도 못 찾았습니다",
                    "annotated.txt 에 '(net)' 줄이 있는지 확인해 주세요. "
                    "report_timing 에 -nets 가 빠졌을 수 있습니다."),
 }
@@ -110,8 +113,7 @@ def main():
                          "주면 --dir 아래 xtalk/ 를 찾지 않는다")
     args = ap.parse_args()
 
-    for _p in ['parse_annotated_with_clock_segments.py', 'make_unique_path_arc_contexts.py']:
-        need_parser(_p)
+    need_parser('parse_annotated_with_clock_segments.py')
 
     d = args.dir
     ann = args.annotated
@@ -127,7 +129,7 @@ def main():
     work = args.xtalk or os.path.join(d, "xtalk")
 
     print("=" * 68)
-    print("5a - crosstalk 쌍 리포트 1단계 (PT 에 물어볼 목록 만들기)")
+    print("5a - path_victim_nets.tsv (경로별 victim 넷 + 구간)")
     print("=" * 68)
 
     if not os.path.isdir(work):
@@ -141,41 +143,36 @@ def main():
     if not ok:
         code("E-PARSE", "[ 실패 ] annotated.txt 파싱 실패", out[-800:])
 
-    ctx = os.path.join(work, "unique_contexts.tsv")
-    ok, out = run("make_unique_path_arc_contexts.py", victim, ctx)
-    if not ok:
-        code("E-PARSE", "[ 실패 ] 목록 만들기 실패", out[-800:])
+    # unique_contexts.tsv 는 만들지 않는다 -- 담당자분 쪽 산출물이다.
 
     n_path = count_rows(summary)
     n_victim = count_rows(victim)
-    n_ctx = count_rows(ctx)
 
     print("")
     print("-" * 68)
     print("  경로            : %d" % n_path)
     print("  victim 넷 줄    : %d  (경로마다 중복 포함)" % n_victim)
-    print("  PT 에 물어볼 것 : %d  (중복 제거 후)" % n_ctx)
     print("  작업 폴더       : %s" % work)
     print("-" * 68)
 
-    if n_ctx == 0:
-        code("E-NOCTX", "[ 실패 ] PT 에 물어볼 넷이 0개입니다.")
+    if n_victim == 0:
+        code("E-NOCTX", "[ 실패 ] 리포트에서 victim 넷을 하나도 못 찾았습니다.")
 
-    # PT 를 이미 다녀왔는지 보고 안내를 갈라 준다.
-    # xtalk_all.tcl 로 돌렸으면 PT 단계가 통째로 끝나 있으므로 바로 5b 로 간다.
+    # PT 는 담당자분이 이미 돌려 주신 것이라, 그 결과가 이 폴더에 왔는지만 본다.
+    # 여기서 "pt_shell 에서 돌리세요" 라고 안내하면 안 된다 -- 우리는 PT 를 못 돌린다.
+    nxt = ("--xtalk %s" % os.path.abspath(work)) if args.xtalk \
+        else ("--dir %s" % os.path.abspath(d))
     if os.path.exists(os.path.join(work, "context_raw.rpt")):
-        print("[ 정상 ] %d개 넷. PT 는 이미 끝나 있습니다(context_raw.rpt 확인)." % n_ctx)
+        print("[ 정상 ] victim 넷 %d줄. PT 출력도 와 있습니다(context_raw.rpt)." % n_victim)
         print("         다음은 셸에서:")
-        print("           python3 %s %s"
-              % (os.path.join(HERE, "5b_pairs.py"),
-                 ("--xtalk %s" % os.path.abspath(work)) if args.xtalk
-                 else ("--dir %s" % os.path.abspath(d))))
+        print("           python3 %s %s" % (os.path.join(HERE, "5b_pairs.py"), nxt))
     else:
-        print("[ 정상 ] %d개 넷. 다만 PT 출력(context_raw.rpt)이 아직 없습니다." % n_ctx)
-        print("         pt_shell 에서 (디자인 로드된 상태로):")
-        print("           cd %s" % os.path.abspath(d))
-        print("           source %s" % os.path.join(HERE, "pt", "xtalk_all.tcl"))
-        print("         hold 면 xtalk_all_hold.tcl 을 씁니다.")
+        print("[ 정상 ] victim 넷 %d줄." % n_victim)
+        print("         다만 PT 출력(context_raw.rpt)이 이 폴더에 없습니다.")
+        print("         담당자분께 받은 xtalk/ 를 이 폴더에 두셔야 5b 가 돕니다.")
+        print("         받은 것이 맞는지 먼저 보려면:")
+        print("           python3 %s --dir %s"
+              % (os.path.join(HERE, "6_check_xtalk.py"), os.path.abspath(d)))
     code("OK-XCTX")
 
 

@@ -42,10 +42,12 @@ CODE_INFO = {
     "E-NORAW":    ("PT output (context_raw.rpt) is missing",
                    "Run pt/xtalk_all.tcl (xtalk_all_hold.tcl for hold) in "
                    "pt_shell first."),
-    "E-NO5A":     ("An input made by 5a_contexts.py is missing or empty",
-                   "Run 5a_contexts.py for this corner first. 5b needs "
-                   "path_victim_nets.tsv and unique_contexts.tsv, not just "
-                   "the PT output."),
+    "E-NO5A":     ("path_victim_nets.tsv (made by 5a_contexts.py) is missing or empty",
+                   "Run 5a_contexts.py for this corner first."),
+    "E-NOUCTX":   ("unique_contexts.tsv is missing or empty",
+                   "It is part of what the PT run produces, together with "
+                   "context_raw.rpt. Check the xtalk/ folder you received "
+                   "is complete (6_check_xtalk.py)."),
     "E-MODE":     ("The PT output was made with setup/hold the other way round",
                    "Re-run 5b with the other --mode, or re-make the PT output "
                    "with the delay type you want. See above."),
@@ -163,17 +165,26 @@ def main():
     if not os.path.isfile(raw):
         code("E-NORAW", "[ FAILED ] PT output not found: %s" % raw)
 
-    # 5a 가 만든 두 파일도 파서에 넘어간다. 예전에는 이걸 확인하지 않아서,
-    # 5a 를 안 돌렸을 때도 "PT 출력 앞부분을 보라"는 엉뚱한 안내가 나왔다.
-    for p in (victim, ctx):
-        if not os.path.isfile(p):
-            code("E-NO5A",
-                 "[ FAILED ] 5a output not found: %s" % p,
-                 "           5b reads this together with the PT output.")
-        if os.path.getsize(p) == 0:
-            code("E-NO5A",
-                 "[ FAILED ] 5a output is empty: %s" % p,
-                 "           5a ran but produced nothing.")
+    # 파서에 함께 넘기는 두 파일. 만드는 쪽이 서로 달라서 안내도 갈라야 한다.
+    #   path_victim_nets.tsv  <- 5a 가 만든다 (우리)
+    #   unique_contexts.tsv   <- xtalk_all.tcl 이 만든다 (담당자분 PT 산출물)
+    # 예전에는 둘 다 "5a 를 돌리세요" 라고 안내해서, 실제로는 받은 것이 빠진
+    # 경우에도 엉뚱한 곳을 보게 했다.
+    if not os.path.isfile(victim):
+        code("E-NO5A",
+             "[ FAILED ] 5a output not found: %s" % victim,
+             "           5b reads this together with the PT output.")
+    if os.path.getsize(victim) == 0:
+        code("E-NO5A",
+             "[ FAILED ] 5a output is empty: %s" % victim,
+             "           5a ran but produced nothing.")
+    if not os.path.isfile(ctx):
+        code("E-NOUCTX",
+             "[ FAILED ] PT output not found: %s" % ctx,
+             "           this one comes from pt/xtalk_all.tcl, not from 5a.")
+    if os.path.getsize(ctx) == 0:
+        code("E-NOUCTX",
+             "[ FAILED ] PT output is empty: %s" % ctx)
 
     if os.path.getsize(raw) == 0:
         code("E-NORAW",

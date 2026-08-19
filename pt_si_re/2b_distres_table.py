@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 """2b (표 방식) - Dist / Res 를 받은 표에서 읽어 만든다. SPEF 를 안 쓴다.
 
-    python3 2b_distres_table.py --dir <코너폴더>                  # 폴더의 distres_map.txt
-    python3 2b_distres_table.py --dir <코너폴더> --table <표파일>  # 직접 지정
+    python3 2b_distres_table.py --dir <코너폴더>
 
-표를 찾는 순서 (2a 의 cpin_map.txt 와 같은 규약)
-    1) --table 로 준 파일
-    2) 코너 폴더 안의 distres_map.txt
+표는 코너 폴더 안에 **resdist_map.txt** 로 둔다. 2a 의 cpin_map.txt 와 같은
+규약이다. Res 는 온도에 따라 다르므로, 코너마다 그 코너 온도의 표를 둔다.
+(--table 로 다른 경로를 줄 수도 있으나 보통 쓸 일이 없다)
 
 2b_distres.py / 2b_distres2.py 를 대체한다. 셋 다 출력이 같은
 `distres.tsv (line_no / net / dist / res)` 라서 다음 단계 2c_merge.py 는
@@ -18,10 +17,15 @@
     SPEF 가 있으면 2b_distres2.py 쪽이 정확하다(아래 "정확도" 참조).
 
 표 형식
-    열 3개면 된다.  net 이름 / res / dist        (구분자·헤더·열 순서는 자동 인식)
+    **헤더 없이 열 3개.  net 이름 / res / dist  이 순서다.**
         n57401      11.1137     7.3315
         clock       51.5246   131.1135
-    헤더가 있으면 열 이름으로 찾고, 없으면 net,res,dist 순서로 본다.
+
+    순서가 곧 의미이므로 res 와 dist 를 바꿔 넣으면 그대로 뒤바뀐 채 들어간다
+    (둘 다 숫자라 에러가 안 난다). 파일 이름을 resdist_map.txt 로 둔 것이 그
+    순서를 상기시키려는 것이다.
+
+    헤더가 붙어 와도 알아본다(그때는 열 순서가 달라도 이름으로 찾는다).
     구분자는 공백/탭/쉼표/세미콜론/파이프 중에서 알아서 고른다.
     '#' 이나 '//' 로 시작하는 줄과 빈 줄은 건너뛴다.
 
@@ -58,8 +62,11 @@ from find_rpt import find_rpt
 OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 
 # 받은 표를 코너 폴더에 둘 때 쓰는 이름. 2a 의 cpin_map.txt 와 같은 규약이다.
+# 이름 순서가 곧 열 순서다: net / res / dist. 결과 파일 distres.tsv 는 dist 가
+# 먼저라 반대인데, 그건 기존 2b 형식이라 못 바꾼다. 그래서 입력 쪽 이름을
+# resdist 로 두어 헷갈리지 않게 한다.
 # (--table 로 직접 주면 이름은 상관없다)
-TABLE_NAME = "distres_map.txt"
+TABLE_NAME = "resdist_map.txt"
 
 NA = ("", "n/a", "na", "nan", "null", "-", "none")
 
@@ -73,6 +80,9 @@ COL_RECV = ("receiver", "recv", "receiver_pin", "recv_pin", "load", "sink", "tar
 # 화면 출력은 영어로 둔다 (한글이 깨지는 터미널이 있다).
 # 설명이 필요하면 이 파일 맨 위 설명글과 코드표.md 를 본다.
 CODE_INFO = {
+    "E-NOTABLE":  ("this corner folder has no resdist_map.txt",
+                   "every corner folder needs its own. Res differs per "
+                   "temperature, so the table does too."),
     "E-TABLE":    ("the supplied table could not be read",
                    "check it has net/res/dist columns, and the header/delimiter."),
     "E-TABLE0":   ("not one net name in the table matches the report",
@@ -95,13 +105,13 @@ def code(c, *msg):
         print("=" * 66)
         return
     what, todo = CODE_INFO.get(c, ("", ""))
-    kind = "FAILED" if c.startswith("E-") else "CHECK "
-    print("  %s" % kind)
+    kind = "FAILED" if c.startswith("E-") else "CHECK"
+    # 코드는 반드시 "[ CODE ]" 형태로 한 번 찍는다 -- 4_all_corners.py 가 이 형태로
+    # 읽는다. 안 그러면 코너별 결과표에 "?" 로 남고 문제로 집계된다.
+    print("  %-19s [ %s ]" % (kind, c))
     if what:
         print("    what   : %s" % what)
         print("    to do  : %s" % todo)
-    print("")
-    print("    code   : %s" % c)
     print("=" * 66)
     sys.exit(1 if c.startswith("E-") else 0)
 
@@ -223,7 +233,12 @@ def load_table(path, res_scale=1.0, dist_scale=1.0):
             numeric += 1
         except ValueError:
             pass
-    has_header = numeric < 1
+    # 헤더 판별. 숫자가 하나도 없다는 것만으로는 부족하다 -- 첫 줄의 res/dist 가
+    # 둘 다 N/A 인 데이터 줄일 수도 있고, 그러면 그 줄을 헤더로 먹어 버린다.
+    # 그래서 아는 열 이름이 실제로 보일 때만 헤더로 본다.
+    known = set(COL_NET) | set(COL_RES) | set(COL_DIST) | set(COL_DRV) | set(COL_RECV)
+    looks_named = any(t.strip().lower().lstrip("#").strip() in known for t in first)
+    has_header = numeric < 1 and looks_named
 
     if has_header:
         i_net = find_col(first, COL_NET)
@@ -277,8 +292,7 @@ def main():
                     help="corner folder that holds timing.rpt")
     ap.add_argument("--rpt", default=None)
     ap.add_argument("--table", default=None,
-                    help="the supplied table: net_name / res / dist. "
-                         "default: <dir>/" + TABLE_NAME)
+                    help="path to the table, if it is not <dir>/" + TABLE_NAME)
     ap.add_argument("--out", default=None,
                     help="default <dir>/distres.tsv, so 2c_merge.py picks it up")
     ap.add_argument("--res-scale", type=float, default=1.0,
@@ -292,14 +306,12 @@ def main():
     if err:
         print("[ FAILED ] %s" % err)
         sys.exit(1)
-    # 표를 찾는 순서: 1) --table 로 준 것  2) 코너 폴더의 distres_map.txt
+    # 표를 찾는 순서: 1) --table 로 준 것  2) 코너 폴더의 resdist_map.txt
     table = args.table or os.path.join(d, TABLE_NAME)
     if not os.path.isfile(table):
-        print("[ FAILED ] table not found: %s" % table)
-        if not args.table:
-            print("           put it in the corner folder as %s," % TABLE_NAME)
-            print("           or point at it with --table <file>")
-        sys.exit(1)
+        # code() 로 끝내야 한다. 그냥 exit 하면 4_all_corners 의 결과표에 "?" 로
+        # 남아서 무엇 때문에 걸렸는지 표만 봐서는 알 수 없다.
+        code("E-NOTABLE", "[ FAILED ] table not found: %s" % table)
     out = args.out or os.path.join(d, "distres.tsv")
 
     print("=" * 68)

@@ -2,11 +2,18 @@
 # -*- coding: utf-8 -*-
 """4 - round2 아래 코너 폴더 전부에 같은 단계를 돌린다.
 
-    python3 4_all_corners.py --root setup --spef-root setup            # 묶음 1
-    python3 4_all_corners.py --root setup --phase 2                    # 묶음 2
-    python3 4_all_corners.py --root hold  --spef-root setup --mode hold
-    python3 4_all_corners.py --root setup --only 2b --spef-root setup  # 한 단계만
-    python3 4_all_corners.py --root setup --skip-done --spef-root setup # 이어서
+    python3 4_all_corners.py --root setup                    # 묶음 1 (annotation)
+    python3 4_all_corners.py --root setup --phase 2          # 묶음 2 (crosstalk)
+    python3 4_all_corners.py --root hold  --phase 2 --mode hold
+    python3 4_all_corners.py --root setup --only 2b          # 한 단계만
+    python3 4_all_corners.py --root setup --skip-done        # 이어서
+
+Dist/Res 는 **받은 표**로 채운다(2b_distres_table.py). 표는 코너 폴더마다
+resdist_map.txt 로 들어 있어야 한다. Res 는 온도에 따라 다르므로, 코너 폴더에
+그 코너의 온도에 맞는 표를 두는 것이다.
+
+SPEF 는 이제 묶음 1 에 필요 없다. --spef / --spef-root 는 2c 가 N/A 원인을
+진단할 때만 쓰이는 선택 사항이다.
 
 --spef-root 는 SPEF 가 여러 개 든 폴더다. --root 와 같은 폴더여도 된다
 (코너 탐색은 .rpt 를 가진 하위 폴더만 보므로 .spef 와 섞이지 않는다).
@@ -14,13 +21,18 @@
 코너가 10개 넘어가면 폴더 이름을 하나씩 치는 게 일이라 만든 것이다.
 하는 일은 아래를 코너마다 반복하는 것뿐이고, 새로 계산하는 것은 없다.
 
-    2a_cpin.py     --dir <코너폴더>
-    2b_distres.py  --dir <코너폴더> [--spef ...]
-    2c_merge.py    --dir <코너폴더>
+  묶음 1 -- annotation
+    2a_cpin.py            --dir <코너폴더>
+    2b_distres_table.py   --dir <코너폴더>      <- 받은 표를 읽는다. SPEF 안 씀
+    2c_merge.py           --dir <코너폴더>
+  묶음 2 -- crosstalk (담당자분께 받은 xtalk/ 가 있어야 한다)
     5a_contexts.py --dir <코너폴더>
-  [PT] all_xtalk_one.tcl
     5b_pairs.py    --dir <코너폴더>
     5c_report.py   --dir <코너폴더>
+
+PT 는 두 묶음 사이가 아니라 둘 다보다 **앞**에 있다. 담당자분이 fixed_paths.tcl
+과 xtalk_all.tcl 을 돌려 주신 결과를 받아서 이 둘을 돈다. 서로 독립이라 순서도
+상관없다.
 
 코너 이름은 폴더 이름을 그대로 쓴다(2회차에서 리포트 이름과 같게 지어진다).
 
@@ -158,55 +170,37 @@ def resolve_spefs(corners, args):
 # 단계는 PT 를 사이에 두고 두 묶음으로 나뉜다. PT 는 파이썬에서 못 부르므로
 # 묶음 1 이 끝나면 pt_shell 로 한 번 갔다 와야 한다.
 #
-#   묶음 1 -> [PT] all_xtalk_one.tcl -> 묶음 2
+#   [PT: 담당자분] -> 묶음 1(annotation) / 묶음 2(crosstalk)
 #
 # 예전에는 PT 를 두 번(계산 -> 파이썬 -> 도착시각) 다녀와 묶음이 셋이었다.
 # 지금은 tcl 이 자기가 받은 출력에서 aggressor 이름을 직접 긁으므로 한 번이다.
 #
 # (표시이름, 스크립트, SPEF 가 필요한가, 결과 파일)
 PHASES = {
+    # 묶음 1 = annotation, 묶음 2 = crosstalk. 갈래가 그대로 나뉜다.
     "1": [
         ("2a cpin",     "2a_cpin.py",     False, "cpin.tsv"),
-        ("2b distres",  "2b_distres.py",  True,  "distres.tsv"),
+        ("2b distres",  "2b_distres_table.py", False, "distres.tsv"),
         ("2c merge",    "2c_merge.py",    False, "*_fixed_annotated.txt"),
-        ("5a contexts", "5a_contexts.py", False, "xtalk/unique_contexts.tsv"),
     ],
     "2": [
+        ("5a contexts", "5a_contexts.py", False, "xtalk/path_victim_nets.tsv"),
         ("5b pairs",    "5b_pairs.py",    False, "xtalk/active_features.tsv"),
         ("5c report",   "5c_report.py",   False, "xtalk/compact_flat.tsv"),
     ],
 }
 
-# 묶음이 끝나면 pt_shell 에서 그대로 source 할 tcl 을 만들어 준다.
-# 경로를 손으로 고칠 일이 없고, 세션에 값이 남아 엉뚱한 폴더를 도는 일도 없다.
-PT_WRAPPER = {
-    # 묶음 1 뒤에 PT 를 **한 번만** 다녀오면 된다.
-    # (예전에는 PT 1차 -> 파이썬 -> PT 2차 로 두 번이었다. 지금은 tcl 이
-    #  자기가 받은 출력에서 aggressor 이름을 직접 긁어 이어서 처리한다.)
-    "1": ("run_pt_xtalk.tcl", "all_xtalk_one.tcl"),
-}
-
-
-def write_pt_wrapper(phase, root, mode):
-    if phase not in PT_WRAPPER:
-        return None
-    name, target = PT_WRAPPER[phase]
-    path = os.path.join(root, name)
-    with wopen(path) as fh:
-        fh.write("# 4_all_corners.py --phase %s 가 자동으로 만든 파일입니다.\n" % phase)
-        fh.write("# pt_shell 에서 그대로 source 하세요. 고칠 것 없습니다.\n")
-        fh.write("#     pt_shell> source %s\n\n" % os.path.abspath(path))
-        fh.write('set XTALK_ROOT "%s"\n' % os.path.abspath(root))
-        fh.write('set DELAY_TYPE "%s"\n' % ("min" if mode == "hold" else "max"))
-        fh.write('source "%s"\n' % os.path.join(HERE, "dev", target))
-    return path
+# PT 를 위한 wrapper 는 만들지 않는다.
+# PT 는 묶음 사이가 아니라 **둘 다보다 앞**에 있다. 담당자분이 fixed_paths.tcl 과
+# xtalk_all.tcl 을 돌려 주시고, 우리는 그 결과를 받아 1과 2를 돈다. 우리 쪽에서
+# pt_shell 을 열 일이 없으므로 "이걸 source 하세요" 라고 안내하면 안 된다.
 
 
 NEXT_HINT = {
-    "1": ("pt_shell 에서 crosstalk 계산을 돌리세요 (디자인 로드된 상태로):",
-          "    source %(wrap)s",
-          "그다음 다시 셸에서 -- 이걸로 끝입니다:",
-          "    %(py)s 4_all_corners.py --root %(root)s --phase 2"),
+    "1": ("annotation 이 끝났습니다. 이어서 crosstalk 을 돌리세요:",
+          "    %(py)s 4_all_corners.py --root %(root)s --phase 2",
+          "(담당자분께 받은 xtalk/ 가 코너 폴더마다 있어야 합니다.",
+          " 먼저 확인하려면 6_check_xtalk.py --root %(root)s)"),
     "2": ("끝입니다. 코너마다 아래 두 파일이 학습 입력입니다.",
           "    <코너>_fixed_annotated.txt",
           "    <코너>.path_context_si_compact.by_path.rpt",
@@ -605,10 +599,8 @@ def main():
 
     print("  묶음 %s 전부 정상입니다. 다음:" % args.phase)
     print("")
-    wrap = write_pt_wrapper(args.phase, args.root, args.mode)
     fill = {"root": os.path.abspath(args.root), "pkg": HERE,
-            "py": sys.executable,
-            "wrap": os.path.abspath(wrap) if wrap else ""}
+            "py": sys.executable}
     for line in NEXT_HINT[args.phase]:
         print("  " + (line % fill if "%(" in line else line))
     print("=" * 68)

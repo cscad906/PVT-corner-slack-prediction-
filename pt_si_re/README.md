@@ -285,8 +285,8 @@ round2/<코너>/xtalk/            <- 받은 4개
 
 ```bash
 python3 6_check_xtalk.py --root round2                          # 받은 것 검사
-python3 4_all_corners.py --root round2 --phase 1 --spef <SPEF>  # 2a 2b 2c 5a
-python3 4_all_corners.py --root round2 --phase 2                # 5b 5c
+python3 4_all_corners.py --root round2 --phase 1   # 2a 2b 2c  (annotation, SPEF 불필요)
+python3 4_all_corners.py --root round2 --phase 2   # 5a 5b 5c  (crosstalk)
 python3 7_collect.py     --root round2 --out deliver --mode setup
 ```
 
@@ -318,17 +318,18 @@ setup 과 hold 가 섞여 있어도 알아서 갈라 본다. **읽기만 하고 
 ### 4 — 코너 전부 후처리
 
 ```bash
-python3 4_all_corners.py --root round2 --phase 1 --spef <SPEF>
+python3 4_all_corners.py --root round2 --phase 1
 python3 4_all_corners.py --root round2 --phase 2
 ```
 
-`--phase 1` 이 `2a → 2b → 2c → 5a`, `--phase 2` 가 `5b → 5c` 다.
+`--phase 1` 이 `2a → 2b → 2c`(annotation), `--phase 2` 가 `5a → 5b → 5c`(crosstalk) 다.
+두 묶음은 서로 독립이라 순서를 바꿔도 된다. PT 는 둘 사이가 아니라 **둘 다보다 앞**에
+있다 — 담당자분이 이미 돌려 주신 것이다.
 (묶음이 나뉘어 있는 것은 원래 그 사이에 PT 가 끼던 흔적이다. 지금은 crosstalk
 계산이 현장에서 이미 끝나 있으므로 **두 줄을 연달아 치면 된다.**)
 
-> `--phase 1` 이 끝나면 화면 끝에 `run_pt_xtalk.tcl 을 source 하세요` 라는
-> 안내가 나온다. 그건 **우리가 PT 까지 직접 돌릴 때**(`dev/`) 쓰는 길이다.
-> 현장에서 `xtalk/` 를 받아 온 경우에는 무시하고 바로 `--phase 2` 로 간다.
+> `--phase 1` 과 `--phase 2` 는 서로 독립이다. 어느 쪽을 먼저 돌려도 되고,
+> 한쪽이 막혀도 다른 쪽은 나온다.
 
 묶음마다 이 표가 나온다.
 
@@ -443,10 +444,9 @@ crosstalk 쪽은 annotated 파일이 있으면 그것을 쓰지만 없으면 원
 
 ```bash
 # annotation 만 (PT 결과의 xtalk/ 가 아직 없어도 된다)
-python3 4_all_corners.py --root round2 --spef <SPEF> --phase 1 --only 2a,2b,2c
+python3 4_all_corners.py --root round2 --phase 1
 
 # crosstalk 만 (SPEF 도 Cpin 표도 필요 없다)
-python3 4_all_corners.py --root round2 --phase 1 --only 5a
 python3 4_all_corners.py --root round2 --phase 2
 ```
 
@@ -458,14 +458,18 @@ crosstalk 14열을 만드는 세 조각이다.
 
 | | 하는 일 | 나오는 것 |
 |---|---|---|
-| **5a** | 리포트를 읽어 경로별 victim 넷 목록과 **PT 에 물어볼 넷 목록**을 만든다. 같은 넷이 여러 경로에 나오므로 중복을 뺀다 | `xtalk/path_victim_nets.tsv`, `xtalk/unique_contexts.tsv` |
+| **5a** | 리포트를 읽어 **경로별 victim 넷 + 구간**을 만든다. `unique_contexts.tsv` 는 만들지 않는다 — 그건 담당자분 쪽 산출물이라 덮으면 안 된다 | `xtalk/path_victim_nets.tsv` |
 | PT (`xtalk_all.tcl`) | **현장에서 이미 끝나 있다.** 그 넷마다 `report_delay_calculation -crosstalk`, **이어서** 거기서 긁은 aggressor 의 도착시각·slew 까지 | `xtalk/context_raw.rpt`, `xtalk/*_windows.tsv` |
 | **5b** | PT 출력을 파싱해 **victim–aggressor 쌍**으로 만든다 | `xtalk/active_features.tsv` |
 | **5c** | 위를 합쳐 14열로 쓴다 | `<코너>.path_context_si_compact.by_path.rpt` ★ |
 
-받아 온 폴더에 `unique_contexts.tsv` 가 이미 들어 있는데도 5a 를 다시 도는 이유는
+받아 온 폴더에 `unique_contexts.tsv` 가 이미 들어 있는데도 5a 를 도는 이유는
 **`path_victim_nets.tsv` 때문**이다. 5c 가 그것을 쓰는데 담당자분 쪽 산출물에는
-없다(PT 는 필요가 없어서 안 만든다). 같은 리포트에서 만드는 것이라 결과는 같다.
+없다(PT 는 경로 개념이 없어서 안 만든다).
+
+**5a 는 `unique_contexts.tsv` 를 만들지 않는다.** 그건 PT 가 만들어 준 것이고,
+"PT 가 실제로 무엇을 물어봤는지" 를 담은 유일한 기록이다. 덮어쓰면 그 기록이
+사라진다. 5b 가 그 파일을 읽지만, 받은 것을 그대로 읽는다.
 
 실제 숫자(294경로 기준): victim 넷 줄 8,930 → 물어볼 넷 **788개**(중복 제거) →
 쌍 **13,947줄**.
@@ -491,10 +495,10 @@ crosstalk 14열을 만드는 세 조각이다.
 `--only` 로 그 묶음 안에서 원하는 단계만 돌린다. 이름은 `2a` `2b` `2c` `5a` `5b` `5c`.
 
 ```bash
-python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2a
-python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --only 2b
+python3 4_all_corners.py --root <round2> --phase 1 --only 2a
+python3 4_all_corners.py --root <round2> --phase 1 --only 2b
 python3 4_all_corners.py --root <round2>                --phase 1 --only 2c
-python3 4_all_corners.py --root <round2>                --phase 1 --only 5a
+python3 4_all_corners.py --root <round2>                --phase 2 --only 5a
 ```
 
 순서는 지켜야 한다. `2c` 는 `2a`/`2b` 결과를 합치는 것이고, `5b`/`5c` 는
@@ -511,7 +515,7 @@ python3 4_all_corners.py --root <round2>                --phase 1 --only 5a
 ### 중간에 끊겼을 때
 
 ```bash
-python3 4_all_corners.py --root <round2> --spef <SPEF> --phase 1 --skip-done
+python3 4_all_corners.py --root <round2> --phase 1 --skip-done
 ```
 
 이미 만들어진 단계는 `SKIP` 으로 건너뛰고 안 된 것만 이어서 한다.
@@ -548,39 +552,41 @@ SPEF 를 직접 못 뽑는 사이트에서, **상대(기업 등)가 계산해 �
 D=round2/TT_0p8V_25C
 python3 2b_distres_table.py --dir $D                      # -> distres.tsv
 python3 2c_merge.py         --dir $D                      # 이하 동일
+
+# 코너 전부에 한 번에 (묶음 1 이 이미 이 방식이다)
+python3 4_all_corners.py --root round2 --phase 1
 ```
 
 ### 받은 표를 어디에 어떤 이름으로 두나
 
-`2a` 의 `cpin_map.txt` 와 같은 규약이다. **코너 폴더 안에 `distres_map.txt`** 로 둔다.
+`2a` 의 `cpin_map.txt` 와 같은 규약이다. **코너 폴더 안에 `resdist_map.txt`** 로 둔다.
 
 ```
 round2/TT_0p8V_25C/
   TT_0p8V_25C.rpt      리포트 (원래 있던 것)
   cpin_map.txt         받은 Cpin 표   -> 2a
-  distres_map.txt      받은 Dist/Res 표 -> 2b_distres_table.py     ★ 이것
+  resdist_map.txt      받은 Dist/Res 표 -> 2b_distres_table.py     ★ 이것
 ```
 
-찾는 순서는 1) `--table` 로 준 파일 2) 코너 폴더의 `distres_map.txt` 다.
-이름을 바꾸고 싶으면 `--table <파일>` 로 직접 주면 된다.
+**코너 폴더마다 하나씩 있어야 한다.** `cpin_map.txt` 와 같다.
 
-**Res 는 온도마다 다르고 전압으로는 안 변하므로, 표는 온도당 1개다.** 같은 온도의
-코너 폴더들에는 같은 파일이 들어간다. 용량이 아까우면 심볼릭 링크로 둔다.
+Res 는 온도에 따라 달라지므로, 그 코너의 온도에 맞는 표를 그 폴더에 둔다.
+전압으로는 안 변하니 같은 온도의 코너들에는 같은 내용이 들어간다.
 
-```bash
-# 25C 코너 폴더 전부에 같은 표를 건다
-foreach D (round2/TT_*_25C)
-    ln -s /받은곳/distres_25c.txt $D/distres_map.txt
-end
-```
-
-표는 열 3개면 된다. 구분자(공백/탭/쉼표), 헤더 유무, 열 순서는 알아서 인식한다.
+표는 **헤더 없이 열 3개, `net 이름 / res / dist` 순서**다.
 
 ```
-net_name        res         dist
 n57401          11.1137     7.3315
 clock           51.5246   131.1135
 ```
+
+순서가 곧 의미라서 res 와 dist 를 바꿔 넣으면 그대로 뒤바뀐 채 들어간다(둘 다
+숫자라 에러가 안 난다). 파일 이름을 `resdist_map.txt` 로 둔 것이 그 순서를
+상기시키려는 것이다.
+
+헤더가 붙어 와도 알아본다(그때는 열 순서가 달라도 이름으로 찾는다). 구분자는
+공백/탭/쉼표/세미콜론/파이프 중에서 알아서 고르고, `#`/`//` 주석줄과 빈 줄은
+건너뛴다.
 
 단위가 다르면 `--res-scale` / `--dist-scale` 로 맞춘다. 코드는 안 고쳐도 된다.
 
@@ -768,8 +774,8 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 1_union.py         코너 합치기 -> fixed_paths.tcl               ★ 담당자분께 드림
 6_check_xtalk.py   받은 crosstalk 결과 검사 (읽기만 한다)
 2a_cpin.py         Cpin        (SPEF 안 읽음, 1초)
-2b_distres.py      Dist/Res    (SPEF 읽음)
-2b_distres_table.py  Dist/Res  (SPEF 대신 받은 표를 읽음. 아래 참조)
+2b_distres_table.py  Dist/Res  (받은 표를 읽음)          ★ 지금 쓰는 것
+2b_distres.py      Dist/Res    (SPEF 읽음. 예전 방식)
 2c_merge.py        -> <코너>_fixed_annotated.txt                ★
 5a_contexts.py     경로별 victim 넷 + PT 에 물어볼 넷 목록
 5b_pairs.py        받은 PT 출력에서 victim-aggressor 쌍

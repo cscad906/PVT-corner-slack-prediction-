@@ -507,7 +507,7 @@ CODE_INFO = {
     "E-RES0":     ("SPEF 에서 저항(Res)을 하나도 못 구했습니다",
                    "SPEF 가 이 리포트와 같은 디자인/코너인지 확인해 주세요."),
     "E-NOINPUT":  ("붙일 값(cpin/distres)이 하나도 없습니다",
-                   "2a_cpin.py 와 2b_distres.py 를 먼저 돌려 주세요."),
+                   "2a_cpin.py 와 2b_distres_table.py 를 먼저 돌려 주세요."),
     "E-NOROW":    ("결과 표에 줄이 하나도 없습니다",
                    "timing.rpt 이 report_timing 출력이 맞는지 확인해 주세요."),
     "W-DROP":     ("합집합에서 버린 경로가 많습니다",
@@ -696,7 +696,7 @@ def main():
     else:
         code("OK-CPIN",
              "[ 정상 ] Cpin %d/%d." % (hit, n),
-             "         다음 단계:  %s 2b_distres.py --dir %s" % (sys.executable, d))
+             "         다음 단계:  %s 2b_distres_table.py --dir %s" % (sys.executable, d))
 
 
 if __name__ == "__main__":
