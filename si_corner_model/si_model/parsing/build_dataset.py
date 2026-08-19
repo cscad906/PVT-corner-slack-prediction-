@@ -162,7 +162,19 @@ def cell_drive(cell: str) -> float:
 # so they only have to be CONSISTENT, not semantically right -- which is exactly
 # what can be read off the names themselves.
 # ---------------------------------------------------------------------------
-_DRIVE_CANDIDATES = (r"_X(\d+(?:P\d+)?)$", r"_(\d+(?:P\d+)?)$", r"X(\d+(?:P\d+)?)$")
+# Tried in order; the one matching the most names wins, ties going to the
+# earlier (more specific) entry. The trailing-anchored forms come first because
+# they cannot collide with a process or track token; the unanchored ones exist
+# because a real library name often carries qualifiers AFTER the drive
+# ('..._NAND2_X4_HVT_9T_C14'), and anchoring at the end would find nothing at
+# all there -- which silently left drive at a constant 1.0.
+_DRIVE_CANDIDATES = (
+    r"_X(\d+(?:P\d+)?)$",            # ..._X4
+    r"_(\d+(?:P\d+)?)$",             # ..._0P75   (SAED style)
+    r"X(\d+(?:P\d+)?)$",             # ...NAND2X4
+    r"_X(\d+(?:P\d+)?)(?:_|$)",      # ..._X4_HVT_9T
+    r"X(\d+(?:P\d+)?)(?:_|$)",       # ...NAND2X4_A9PP96
+)
 _AUTO_MIN_DRIVE_RATE = 0.30    # below this, a drive rule is noise; keep 1.0
 _SAED_MIN_COVERAGE = 0.60      # SAED table explains this much -> keep it
 

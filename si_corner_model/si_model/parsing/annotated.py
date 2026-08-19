@@ -68,6 +68,63 @@ CELL_RE = re.compile(
     r"((?:-?\d+\.\d+\s+(?:&\s+)?)+)([rf])(?:\s|$)"
 )
 
+# A row whose point text is LONGER than the Point column pushes the whole
+# numeric run to the right. The header is then a lie for that row: every value
+# lands nearest the wrong heading, and `pick` -- which takes the nearest heading
+# unconditionally -- silently returns another column's number, or NaN (-> 0.0).
+# Long hierarchical instance names with long library cell names do this
+# routinely. When the values do not sit under the headings, the header is
+# ignored for that row and the positional reading is used instead, which stays
+# correct because it counts from the RIGHT (Path is always last).
+_ALIGN_TOL = 3          # characters of drift a real report may still have
+
+
+def _aligned(cmap: "ColumnMap", vals: "list[tuple[float, int]]") -> bool:
+    """Do these values actually sit under the headings?
+
+    Two checks, because proximity alone is not proof: a row can drift far enough
+    to be read wrongly while every value still happens to land within tolerance
+    of SOME heading. The second one is an invariant that holds in every report
+    variant seen -- deterministic, extra trailing columns, and split statistical
+    headings alike: on a cell row the Path value is the LAST number before the
+    r/f edge marker. If the header says otherwise, the header is not describing
+    this row.
+    """
+    if not cmap.cols or not vals:
+        return False
+    if any(min(abs(c[1] - end) for c in cmap.cols) > _ALIGN_TOL for _, end in vals):
+        return False
+    p = cmap.pick(vals, "Path", "Path.Value", "Path.Mean")
+    return p == p and abs(p - vals[-1][0]) < 1e-9
+
+
+# PrimeTime wraps a point name that does not fit, putting the numbers on the
+# NEXT line by themselves. Without joining them the cell row matches nothing:
+# slack still parses, so training runs -- on paths whose stage features are
+# empty. Rejoining costs one line of lookahead.
+_NAME_ONLY_RE = re.compile(r"^\s+\S+/\S+ \(\S+\)( <-)?\s*$")
+_NUMS_ONLY_RE = re.compile(r"^\s+(?:-?\d+\.\d+\s+(?:&\s+)?)+[rf](?:\s|$)")
+
+
+def _join_wrapped(lines):
+    """Yield lines, joining a name-only cell row with the numbers-only row
+    that follows it."""
+    held = None
+    for line in lines:
+        if held is not None:
+            if _NUMS_ONLY_RE.match(line):
+                yield held.rstrip("\n").rstrip() + " " + line.lstrip()
+                held = None
+                continue
+            yield held
+            held = None
+        if _NAME_ONLY_RE.match(line):
+            held = line
+            continue
+        yield line
+    if held is not None:
+        yield held
+
 
 def _cell_nums(blob: str) -> "tuple[float, float, float]":
     """Numeric run of a cell row -> (trans, incr, path). POSITIONAL fallback,
@@ -256,7 +313,7 @@ def parse_annotated(fp: str, with_stages: bool = False) -> "dict[int, AnnotatedP
     prev = ""                          # previous line (the group header, if any)
 
     with open(fp, encoding="utf-8", errors="ignore") as f:
-        for line in f:
+        for line in _join_wrapped(f):
             m = FIXED_PATH_RE.match(line)
             if m:
                 _finish(path, out)
@@ -312,11 +369,11 @@ def parse_annotated(fp: str, with_stages: bool = False) -> "dict[int, AnnotatedP
             m = CELL_RE.match(line)
             if m:
                 pin, cell, crit, blob, edge = m.groups()
-                if cmap is not None and cmap.has("Trans"):
+                off = m.start(4)
+                vals = _row_values(line[off:], off) if cmap is not None else []
+                if cmap is not None and cmap.has("Trans") and _aligned(cmap, vals):
                     # header-driven: pick columns BY NAME, so extra/split columns
                     # (statistical Mean/Sensit/Corner/Value) cannot shift them
-                    off = m.start(4)
-                    vals = _row_values(line[off:], off)
                     trans = cmap.pick(vals, "Trans")
                     incr = cmap.pick(vals, "Incr", "Incr.Value", "Incr.Mean")
                     pathv = cmap.pick(vals, "Path", "Path.Value", "Path.Mean")
