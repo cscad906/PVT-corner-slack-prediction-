@@ -507,25 +507,36 @@ def main():
 
     if jobs > 1:
         from concurrent.futures import ThreadPoolExecutor
-        print("  동시에 %d개 코너씩 돕니다. 코너가 끝나는 대로 출력이 나옵니다." % jobs)
+        print("  동시에 %d개 코너씩 돕니다." % jobs)
+        print("  시작할 때 한 줄, 끝나면 그 코너 출력이 한 덩어리로 나옵니다.")
         print("")
         lock = threading.Lock()
-        state = {"done": 0}
+        state = {"done": 0, "started": 0, "running": 0}
 
         def work(item):
             name, d = item
+            # 코너가 **시작할 때도** 한 줄 찍는다. 안 그러면 첫 코너가 끝날
+            # 때까지 화면이 완전히 멈춰 있어, 도는 중인지 죽었는지 알 수 없다.
+            # 끝날 때 찍는 덩어리와 헷갈리지 않게 "시작" 을 앞에 붙인다.
+            with lock:
+                state["started"] += 1
+                state["running"] += 1
+                print("  시작 [%d/%d] %-28s (지금 %d개 도는 중)"
+                      % (state["started"], len(corners), name, state["running"]))
+                sys.stdout.flush()
             spef, cmap = prep(name, d)
             sink = []
             codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink)
             with lock:
                 state["done"] += 1
+                state["running"] -= 1
                 n = state["done"]
                 eta = ""
                 if n < len(corners):
                     per = (time.time() - t_start) / n
                     eta = "   남은 시간 약 %s" % fmt_dur(per * (len(corners) - n))
                 print("-" * 68)
-                print("[%d/%d] %s   (%s)%s"
+                print("끝   [%d/%d] %s   (%s)%s"
                       % (n, len(corners), name, fmt_dur(took), eta))
                 print("-" * 68)
                 for line in sink:
