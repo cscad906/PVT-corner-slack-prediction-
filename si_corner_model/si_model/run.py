@@ -434,7 +434,14 @@ def expand(p: dict) -> "list[dict]":
             base = {
                 "axes": [
                     {"name": "v", "ref": ref_v,
-                     "order": _order(b.get("v_order"), len(seen_v), 3),
+                     # cap 6, not 3: `auto` is min(cap, seen voltages - 1), and
+                     # a 3 that never moved was silently the binding constraint
+                     # once a deliverable measures more than four voltages over a
+                     # wider range. Nothing is forced -- select_basis still picks
+                     # the order by seen-corner LOO, and expand_terms drops terms
+                     # the grid cannot identify -- so this only makes the higher
+                     # orders available to be chosen.
+                     "order": _order(b.get("v_order"), len(seen_v), 6),
                      "fit_scale": float(b.get("v_fit_scale", 1.0)),
                      "token_scale": float(b.get("v_token_scale", 0.1)),
                      "gap_cap": float(b.get("v_gap_cap", 2.5))},

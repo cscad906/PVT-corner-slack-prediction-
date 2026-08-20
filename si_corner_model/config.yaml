@@ -275,7 +275,16 @@ task: slack                         # slack | slew
 # --- 4. OLS base (the backbone of the prediction) ----------------------------
 base:
   v_order: auto                     # Voltage polynomial order.
-                                    #   auto = min(3, seen voltages - 1)
+                                    #   auto = min(6, seen voltages - 1)
+                                    #   The cap only makes an order AVAILABLE;
+                                    #   select_basis then picks by seen-corner
+                                    #   LOO, and terms the grid cannot identify
+                                    #   are dropped. A 4-voltage grid still
+                                    #   resolves to 3, exactly as before.
+                                    #   It matters once the voltage RANGE widens
+                                    #   -- delay bends far more from 0.475 to
+                                    #   0.95 V than from 0.5 to 0.685, and a
+                                    #   cubic cannot follow it.
   level_order: auto                 # BEOL polynomial order.
                                     #   auto = min(2, levels - 1)
   cross_terms: true                 # Use cross terms (dv*dlevel ...)
