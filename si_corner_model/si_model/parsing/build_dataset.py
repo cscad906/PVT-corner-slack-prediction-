@@ -432,6 +432,51 @@ def stage_sequence(stages):
     return fams, nodes, edges
 
 
+def _reconcile_keys(corner, keys_ann, keys_xt):
+    """Line the annotated and crosstalk key maps up, or say precisely why not.
+
+    The two files are produced by separate PrimeTime passes, so they disagree in
+    ways that are not corruption:
+
+      * one side carries FIXED_PATH blocks the other does not -- a path that
+        errored in only one pass leaves an empty block there. Those indices are
+        dropped (they have no crosstalk to pair with anyway) and counted.
+      * a key differs only by its trailing ``#<idx>``, because one extractor
+        appends the ordinal and the other does not. Compared without it.
+
+    Anything left is a real mismatch -- most often the wrong pair of files for
+    this corner -- and still stops the build, now with the evidence attached
+    rather than a bare "key mismatch".
+    """
+    strip = norm_path_key          # drops a trailing '_#<idx>' / '#<idx>'
+
+    only_ann = sorted(set(keys_ann) - set(keys_xt))
+    only_xt = sorted(set(keys_xt) - set(keys_ann))
+    shared = sorted(set(keys_ann) & set(keys_xt))
+    differ = [i for i in shared if strip(keys_ann[i]) != strip(keys_xt[i])]
+    if differ:
+        ex = "\n".join("    idx=%d\n      annotated: %r\n      crosstalk: %r"
+                        % (i, keys_ann[i], keys_xt[i]) for i in differ[:3])
+        raise AssertionError(
+            "I2: %s: annotation and crosstalk name different paths for the same "
+            "idx (%d of %d shared indices).\n%s\n"
+            "  These are not the same run -- check that this corner's two files "
+            "belong together (files.annotated_contains / crosstalk_contains when "
+            "they share a folder)." % (corner, len(differ), len(shared), ex))
+    if not shared:
+        raise AssertionError(
+            "I2: %s: annotation and crosstalk share no path index at all "
+            "(%d vs %d blocks). Almost certainly the wrong file pair."
+            % (corner, len(keys_ann), len(keys_xt)))
+    if only_ann or only_xt:
+        print("[KEYS] %s: %d paths only in the annotated report, %d only in "
+              "crosstalk -- dropped, %d kept. e.g. %s"
+              % (corner, len(only_ann), len(only_xt), len(shared),
+                 [keys_ann.get(i) or keys_xt.get(i)
+                  for i in (only_ann + only_xt)[:2]]), flush=True)
+    return {i: keys_ann[i] for i in shared}
+
+
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
@@ -485,7 +530,8 @@ def build(cfg: dict) -> str:
         keys_ann = {i: keyf(p.key) for i, p in ann.items()}
         if xt is not None:
             keys_xt = {i: keyf(p.key) for i, p in xt.items()}
-            assert keys_ann == keys_xt, f"I2: {corner}: annotation vs crosstalk key mismatch"
+            keys_ann = _reconcile_keys(corner, keys_ann, keys_xt)
+            ann = {i: p for i, p in ann.items() if i in keys_ann}
         if ref_keys is None:
             ref_keys = keys_ann
             idx_order = sorted(ref_keys)
@@ -499,16 +545,36 @@ def build(cfg: dict) -> str:
             si_label = np.full((N, C), np.nan, np.float64)
             path_sig = np.zeros((N, len(SIG_NAMES)), np.float32)
         else:
-            assert keys_ann == ref_keys, f"I2: {corner}: keys differ from reference corner"
+            # A corner need not carry the same BLOCKS as the reference: a path
+            # that errored in this run leaves an empty block, or none. What must
+            # hold is that a shared index names the same path -- otherwise the
+            # per-corner columns would be comparing different paths on one row.
+            # Indices missing here simply stay NaN and are dropped later by the
+            # "measured at every corner" pass, which already reports the count.
+            shared = set(keys_ann) & set(ref_keys)
+            bad = [i for i in sorted(shared) if keys_ann[i] != ref_keys[i]]
+            if bad:
+                ex = "\n".join("    idx=%d\n      here: %r\n      ref : %r"
+                                % (i, keys_ann[i], ref_keys[i]) for i in bad[:3])
+                raise AssertionError(
+                    "I2: %s: %d of %d shared path indices name a different path "
+                    "than the reference corner (%s).\n%s\n"
+                    "  The corners were not extracted from one fixed-path list; "
+                    "re-run the second pass with the same fixed_paths for every "
+                    "corner." % (corner, len(bad), len(shared), ref_corner, ex))
+            missing = len(set(ref_keys) - shared)
+            if missing:
+                print("[KEYS] %s: %d of %d reference paths absent here -- left "
+                      "unmeasured" % (corner, missing, len(ref_keys)), flush=True)
 
         vw: "dict[tuple[int, int, str], tuple[float, float]]" = {}
         ad: "dict[tuple[int, int], tuple]" = {}
         dl: "dict[tuple[int, int, str], float]" = {}
         for r, idx in enumerate(idx_order):
-            pa = ann[idx]
-            if pa.slack != pa.slack:      # unresolved at this corner -> leave NaN
+            pa = ann.get(idx)
+            if pa is None or pa.slack != pa.slack:   # absent/unresolved -> NaN
                 continue
-            px = xt[idx] if xt is not None else None
+            px = xt.get(idx) if xt is not None else None
             if px is not None:
                 assert abs(pa.slack - px.slack) < 5e-5, \
                     f"I3: {corner} idx={idx}: slack {pa.slack} vs {px.slack}"
