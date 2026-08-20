@@ -226,6 +226,31 @@ def _derive_taxonomy(names: "list[str]") -> dict:
             "_drive_rate": best_rate}
 
 
+def report_missing_parasitics(blocks) -> None:
+    """Say how many net rows carried no Dist/Res/Cpin.
+
+    A net row without them -- omitted, or printed as N/A because that corner
+    was never SPEF-annotated -- parses fine and lands as 0.0, which is what the
+    edge features then train on. A handful is noise; a large share means the
+    BEOL columns carry no information at all, and nothing else in the run would
+    say so. Counted on the reference corner, the only one parsed with stages."""
+    tot = miss = 0
+    for b in blocks.values():
+        for st in (getattr(b, "stages", None) or ()):
+            if st.kind != "net":
+                continue
+            tot += 1
+            if st.dist == 0.0 and st.res == 0.0 and st.cpin == 0.0:
+                miss += 1
+    if not tot or not miss:
+        return
+    pct = 100.0 * miss / tot
+    note = ("  <- the BEOL columns are effectively empty; check that this "
+            "corner was SPEF-annotated" if pct >= 20 else "")
+    print("[NETS] %d of %d net rows have no Dist/Res/Cpin (%.0f%%) -- they "
+          "train as 0.0%s" % (miss, tot, pct, note), flush=True)
+
+
 def autofit_cell_taxonomy(blocks) -> None:
     """Choose the cell taxonomy from the parsed reference corner.
 
@@ -447,6 +472,7 @@ def build(cfg: dict) -> str:
             # thing to call cell_family/cell_drive -- so the taxonomy has to be
             # settled now, from the names this corner just yielded.
             autofit_cell_taxonomy(ann_all)
+            report_missing_parasitics(ann_all)
         # Blocks with no timing result at this corner stay in `ann_all` with
         # slack = NaN; they are dropped after the loop (see the intersection
         # pass below), not here, so the same path list can be walked everywhere.
