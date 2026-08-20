@@ -19,6 +19,7 @@ import argparse
 import io
 import os
 import subprocess
+import time
 import sys
 
 
@@ -310,18 +311,123 @@ def check_machine(work):
         print("    1 로 두세요. 이 폴더는 HDD 라 여러 코너를 동시에 돌려도")
         print("    헤드가 하나뿐이라 총 시간이 그대로입니다. 코너별로만 느려집니다.")
     else:
-        # 2b/2c/5a 가 리포트를 통째로 메모리에 올린다. 대략 리포트의 5~6배.
-        print("    2b/2c/5a 는 리포트를 통째로 메모리에 올립니다 (리포트의 약 5~6배).")
-        print("    리포트가 100MB 면 코너당 약 0.6GB, 400MB 면 약 2.4GB 입니다.")
-        if avail:
-            print("    지금 쓸 수 있는 메모리 %.0fGB 를 그 값으로 나눈 수를 넘기지 마세요."
-                  % (avail / 1048576.0))
-        print("    코어 수도 같이 보세요. 둘 중 작은 쪽이 상한입니다.")
+        # 2b/2c/5a 가 리포트를 통째로 메모리에 올린다. 실측으로 리포트의 약 5.5배.
+        print("    2b/2c/5a 는 리포트를 통째로 메모리에 올립니다 (리포트의 약 5.5배).")
+        rpt, _e, _c = find_rpt(work) if os.path.isdir(work) else (None, None, None)
+        size = None
+        if rpt:
+            try:
+                size = os.path.getsize(rpt)
+            except OSError:
+                pass
+        if size and avail:
+            per = size * 5.5
+            cap = max(1, int(avail * 1024 * 0.7 / per))
+            if cores:
+                cap = min(cap, cores)
+            print("")
+            print("    이 폴더 리포트 %.0fMB -> 코너당 약 %.1fGB"
+                  % (size / 1048576.0, per / 1073741824.0))
+            print("    쓸 수 있는 메모리 %.0fGB 기준으로  --jobs %d  까지가 안전합니다."
+                  % (avail / 1048576.0, cap))
+            print("    (넘기면 스왑으로 가고, 그때는 코너마다 몇 배씩 느려집니다)")
+        else:
+            print("    리포트가 100MB 면 코너당 약 0.6GB, 400MB 면 약 2.4GB 입니다.")
+            print("    쓸 수 있는 메모리를 그 값으로 나눈 수를 넘기지 마세요.")
         print("")
         print("    돌리는 중에 느려지면 다른 창에서 확인:")
         print("      vmstat 5      si/so 가 0 이 아니면 스왑 중 -- --jobs 를 낮추세요")
         print("      iostat -x 5   %util 이 100 에 붙어 있으면 디스크가 병목입니다")
     return None
+
+
+def _proc_counters():
+    """스왑/디스크/CPU 를 한 번 읽어 둔다. 두 번 읽어 차이를 본다."""
+    out = {"swin": 0, "swout": 0, "iowait": 0, "total": 0}
+    v = _read1("/proc/vmstat")
+    if v:
+        for line in v.split("\n"):
+            if line.startswith("pswpin "):
+                out["swin"] = int(line.split()[1])
+            elif line.startswith("pswpout "):
+                out["swout"] = int(line.split()[1])
+    st = _read1("/proc/stat")
+    if st:
+        for line in st.split("\n"):
+            if line.startswith("cpu "):
+                f = [int(x) for x in line.split()[1:]]
+                out["total"] = sum(f)
+                if len(f) > 4:
+                    out["iowait"] = f[4]
+                break
+    return out
+
+
+def watch_run(seconds):
+    """지금 도는 작업이 무엇 때문에 느린지 스스로 판정한다.
+
+    현장에서 화면을 밖으로 내보낼 수 없으므로, 숫자를 보여 주는 대신 결론을
+    말해 준다. 4_all_corners 를 돌리는 중에 다른 창에서 이걸 돌리면 된다.
+    """
+    hr("돌고 있는 작업 진단  (%d초 동안 지켜봅니다)" % seconds)
+    print("  4_all_corners 가 도는 중에 돌리세요. 지금 시작합니다...")
+    print("")
+
+    first = _proc_counters()
+    a = first
+    step = 5
+    n = max(1, seconds // step)
+    for i in range(n):
+        time.sleep(step)
+        b = _proc_counters()
+        d_sw = (b["swin"] - a["swin"]) + (b["swout"] - a["swout"])
+        d_tot = b["total"] - a["total"]
+        d_io = b["iowait"] - a["iowait"]
+        pct = (100.0 * d_io / d_tot) if d_tot else 0.0
+        print("    %2d/%d  스왑 %-8d  디스크 대기 %.0f%%" % (i + 1, n, d_sw, pct))
+        a = b
+
+    # 판정은 마지막 구간이 아니라 **전 구간 누적**으로 한다.
+    # 한 구간만 보면 그때 마침 조용했다는 이유로 잘못 말할 수 있다.
+    print("")
+    tot_sw = (a["swin"] - first["swin"]) + (a["swout"] - first["swout"])
+    tot = a["total"] - first["total"]
+    io_pct = (100.0 * (a["iowait"] - first["iowait"]) / tot) if tot else 0.0
+    load = _read1("/proc/loadavg")
+    l1 = float(load.split()[0]) if load else 0.0
+    try:
+        import multiprocessing
+        cores = multiprocessing.cpu_count()
+    except Exception:
+        cores = 4
+
+    print("-" * 68)
+    if tot_sw > 100:
+        print("  [ 메모리 부족 ]  스왑을 쓰고 있습니다.")
+        print("")
+        print("    코너를 동시에 돌리면 리포트를 그 수만큼 메모리에 올립니다.")
+        print("    남은 메모리를 넘겨서 디스크로 밀려나는 중입니다.")
+        print("    이러면 코너마다 몇 배씩 느려져 병렬로 돌린 의미가 없습니다.")
+        print("")
+        print("    할 일 : --jobs 를 반으로 낮춰 다시 돌리세요.")
+    elif io_pct > 30:
+        print("  [ 디스크 병목 ]  CPU 는 놀고 디스크만 기다립니다.")
+        print("")
+        print("    --jobs 를 올려도 총 시간은 그대로입니다. 코너별로만 느려집니다.")
+        print("    할 일 : --jobs 1 로 두세요. 화면도 실시간으로 나와 낫습니다.")
+    elif l1 > cores * 1.5:
+        print("  [ CPU 경합 ]  이 장비가 이미 붐빕니다 (부하 %.0f, 코어 %d)."
+              % (l1, cores))
+        print("")
+        print("    다른 사람 작업과 겹치는 중입니다. --jobs 를 낮추거나")
+        print("    한산할 때 돌리세요.")
+    else:
+        print("  [ 정상 ]  스왑도 디스크 대기도 없습니다.")
+        print("")
+        print("    자원이 병목은 아닙니다. 그런데도 느리면 리포트가 커서")
+        print("    그만큼 걸리는 것입니다 (시간은 리포트 크기에 정비례합니다).")
+        print("    --jobs 를 올려 볼 여지가 있습니다.")
+    print("-" * 68)
 
 
 def check_inputs(work, spef_override):
@@ -420,7 +526,16 @@ def main():
     ap = argparse.ArgumentParser(description="실행 환경과 입력 파일을 점검한다.")
     ap.add_argument("--dir", default=".", help="입력 파일이 있는 폴더")
     ap.add_argument("--spef", default=None, help="SPEF 경로를 직접 줄 때")
+    ap.add_argument("--watch", type=int, nargs="?", const=30, default=None,
+                    metavar="초",
+                    help="지금 도는 작업이 왜 느린지 판정한다. 4_all_corners 가 "
+                         "도는 중에 다른 창에서 돌린다 (기본 30초)")
     args = ap.parse_args()
+
+    # --watch 는 도는 중에 부르는 것이라, 파이썬/입력 점검은 건너뛴다.
+    if args.watch is not None:
+        watch_run(args.watch)
+        return 0
 
     print("PVT 데이터 추출 - 0단계 점검")
     py = check_env()
