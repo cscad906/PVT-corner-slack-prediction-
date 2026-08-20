@@ -23,9 +23,44 @@ Facts verified on the 14nm iter51 SmallBoomV2 dataset (2026-07):
     ``-min`` (verified: newhold deltas are negative) -- so hold is NOT blocked
     here and ``si_total`` carries the correct sign for both checks.
 """
+import os
+import re
 from dataclasses import dataclass, field
 
 SEGMENTS = ("launch_clock", "data", "capture_clock")
+
+# The extractor writes N/A (or leaves a field empty) where a value could not be
+# computed -- an arc with no annotated parasitics, an aggressor whose driver
+# window PrimeTime never reported. A bare float() on such a field raised
+# "could not convert string to float" and took the whole build down, on a file
+# that is otherwise complete. A filler is read as 0.0, matching what the
+# annotated parser does for a missing Dist/Res/Cpin, and the count is reported
+# so a drop that is mostly fillers cannot pass for a clean one.
+_NA_RE = re.compile(r"^(?:|-+|N/?A|n/?a|NULL|null|nan|NaN)$")
+
+
+class _Fillers:
+    """Counts fillers seen while parsing one file."""
+
+    __slots__ = ("n", "total")
+
+    def __init__(self):
+        self.n = self.total = 0
+
+    def num(self, tok: str) -> float:
+        self.total += 1
+        t = (tok or "").strip()
+        if _NA_RE.match(t):
+            self.n += 1
+            return 0.0
+        try:
+            return float(t)
+        except ValueError:
+            self.n += 1
+            return 0.0
+
+    def integer(self, tok: str) -> int:
+        return int(self.num(tok))
 
 
 @dataclass
@@ -80,6 +115,7 @@ class CrosstalkPath:
 def parse_crosstalk(fp: str) -> "dict[int, CrosstalkPath]":
     """Parse one compact crosstalk report. Returns {idx: CrosstalkPath}."""
     out: "dict[int, CrosstalkPath]" = {}
+    f_ = _Fillers()
     path: "CrosstalkPath | None" = None
     arcs_by_key: "dict[tuple[str, str], VictimArc]" = {}
 
@@ -103,7 +139,7 @@ def parse_crosstalk(fp: str) -> "dict[int, CrosstalkPath]":
             if path is None:
                 continue
             if line.startswith("# Slack:"):
-                path.slack = float(line.split()[-1])
+                path.slack = f_.num(line.split()[-1])
                 continue
             if not line.startswith(SEGMENTS):
                 continue
@@ -112,14 +148,14 @@ def parse_crosstalk(fp: str) -> "dict[int, CrosstalkPath]":
             if len(t) != 14:
                 raise ValueError(f"idx={path.idx}: expected 14 columns, got {len(t)}: {line!r}")
             seg, vnet, anet = t[0], t[1], t[2]
-            delta = float(t[3])
+            delta = f_.num(t[3])
             akey = (seg, vnet)
             arc = arcs_by_key.get(akey)
             if arc is None:
                 arc = VictimArc(
                     segment=seg, net=vnet, delta=delta,
-                    n_aggressors=int(t[5]), load_pin=t[6],
-                    min_arrival=float(t[7]), max_arrival=float(t[8]),
+                    n_aggressors=f_.integer(t[5]), load_pin=t[6],
+                    min_arrival=f_.num(t[7]), max_arrival=f_.num(t[8]),
                 )
                 arcs_by_key[akey] = arc
                 path.arcs.append(arc)
@@ -130,10 +166,16 @@ def parse_crosstalk(fp: str) -> "dict[int, CrosstalkPath]":
             if anet == "0":
                 continue
             arc.aggressors.append(Aggressor(
-                net=anet, driver_pin=t[9], bump=float(t[4]),
-                min_arrival=float(t[10]), max_arrival=float(t[11]),
-                slew=float(t[12]), cc_ff=float(t[13]),
+                net=anet, driver_pin=t[9], bump=f_.num(t[4]),
+                min_arrival=f_.num(t[10]), max_arrival=f_.num(t[11]),
+                slew=f_.num(t[12]), cc_ff=f_.num(t[13]),
             ))
 
     finish()
+    if f_.n:
+        pct = 100.0 * f_.n / max(f_.total, 1)
+        note = ("  <- most of this file is fillers; check the extraction"
+                if pct >= 20 else "")
+        print("[XT] %s: %d of %d numeric fields were N/A -> 0.0 (%.1f%%)%s"
+              % (os.path.basename(fp), f_.n, f_.total, pct, note), flush=True)
     return out
