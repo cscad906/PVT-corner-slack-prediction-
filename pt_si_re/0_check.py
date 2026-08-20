@@ -223,6 +223,107 @@ def human_size(n):
         n /= 1024.0
 
 
+def _read1(path):
+    """/sys, /proc 의 짧은 파일 하나를 읽는다. 값은 전부 ASCII 다.
+
+    ropen(io.open) 을 쓰면 파이썬 2 에서 unicode 가 나오는데, 그걸 한글이 섞인
+    포맷 문자열과 합치면 UnicodeDecodeError 로 죽는다. 이 파일만은 2.7 로도
+    돌아야 하므로 바이트로 읽고 as_text 로 넘긴다.
+    """
+    try:
+        f = open(path, "rb")
+        v = f.read().strip()
+        f.close()
+        return as_text(v)
+    except Exception:
+        return None
+
+
+def disk_of(path):
+    """그 경로가 어느 디스크에 있는지. -> (장치이름, 회전식인가)
+
+    회전식(HDD)이면 여러 코너를 동시에 돌려도 헤드가 하나뿐이라 총 처리량이
+    안 늘어난다. 그래서 --jobs 를 올릴지 말지가 여기서 갈린다.
+    못 알아내면 (None, None) -- 네트워크 디스크(NFS 등)면 보통 여기 걸린다.
+    """
+    try:
+        st = os.stat(path)
+        maj, mino = os.major(st.st_dev), os.minor(st.st_dev)
+        link = os.path.realpath("/sys/dev/block/%d:%d" % (maj, mino))
+        dev = os.path.basename(link)
+        parent = os.path.dirname(link)
+        if os.path.basename(parent) != "block":   # 파티션이면 한 단계 위가 디스크
+            dev = os.path.basename(parent)
+        rot = _read1("/sys/block/%s/queue/rotational" % dev)
+        if rot is None:
+            return dev, None
+        return dev, (rot == "1")
+    except Exception:
+        return None, None
+
+
+def check_machine(work):
+    """코어 / 메모리 / 스왑 / 디스크. --jobs 를 몇으로 줄지 여기서 정한다."""
+    hr("1-2. 장비 점검")
+
+    cores = None
+    try:
+        import multiprocessing
+        cores = multiprocessing.cpu_count()
+    except Exception:
+        pass
+    load = _read1("/proc/loadavg")
+    if cores:
+        print("  CPU 코어  : %d개" % cores)
+    if load:
+        p1 = load.split()[:3]
+        print("  부하      : %s (1분/5분/15분)   <- 코어 수보다 크면 이미 붐빈다"
+              % " ".join(p1))
+
+    mem = _read1("/proc/meminfo")
+    tot = avail = swtot = swfree = None
+    if mem:
+        for line in mem.split("\n"):
+            if line.startswith("MemTotal:"):     tot = int(line.split()[1])
+            elif line.startswith("MemAvailable:"): avail = int(line.split()[1])
+            elif line.startswith("SwapTotal:"):  swtot = int(line.split()[1])
+            elif line.startswith("SwapFree:"):   swfree = int(line.split()[1])
+    if tot and avail is not None:
+        print("  메모리    : 전체 %.0fGB, 지금 쓸 수 있는 것 %.0fGB"
+              % (tot / 1048576.0, avail / 1048576.0))
+    if swtot and swfree is not None and swtot > 0:
+        used = (swtot - swfree) / 1048576.0
+        mark = "   <- 스왑을 쓰고 있다. 메모리가 모자란 것이다" if used > 1 else ""
+        print("  스왑      : %.0fGB 사용중%s" % (used, mark))
+
+    dev, rot = disk_of(work if os.path.isdir(work) else ".")
+    if dev is None:
+        print("  디스크    : 알 수 없음 (네트워크 디스크일 수 있다)")
+        print("              그러면 --jobs 를 올려도 이득이 없을 수 있다")
+    else:
+        kind = "알 수 없음" if rot is None else ("HDD (회전식)" if rot else "SSD/NVMe")
+        print("  디스크    : %s  -  %s" % (dev, kind))
+
+    print("")
+    print("  --jobs 를 몇으로 줄까")
+    if rot is True:
+        print("    1 로 두세요. 이 폴더는 HDD 라 여러 코너를 동시에 돌려도")
+        print("    헤드가 하나뿐이라 총 시간이 그대로입니다. 코너별로만 느려집니다.")
+    else:
+        # 2b/2c/5a 가 리포트를 통째로 메모리에 올린다. 대략 리포트의 5~6배.
+        print("    2b/2c/5a 는 리포트를 통째로 메모리에 올립니다 (리포트의 약 5~6배).")
+        print("    리포트가 100MB 면 코너당 약 0.6GB, 400MB 면 약 2.4GB 입니다.")
+        if avail:
+            print("    지금 쓸 수 있는 메모리 %.0fGB 를 그 값으로 나눈 수를 넘기지 마세요."
+                  % (avail / 1048576.0))
+        print("    코어 수도 같이 보세요. 둘 중 작은 쪽이 상한입니다.")
+        print("")
+        print("    돌리는 중에 느려지면 다른 창에서 확인:")
+        print("      vmstat 5      si/so 가 0 이 아니면 스왑 중 -- --jobs 를 낮추세요")
+        print("      iostat -x 5   %util 이 100 에 붙어 있으면 디스크가 병목입니다")
+    return None
+
+
 def check_inputs(work, spef_override):
     hr("2. 입력 파일 점검  (폴더: %s)" % work)
     missing = []
@@ -323,6 +424,7 @@ def main():
 
     print("PVT 데이터 추출 - 0단계 점검")
     py = check_env()
+    check_machine(args.dir)
     have = check_inputs(args.dir, args.spef)
     if have:
         check_content(args.dir, args.spef)

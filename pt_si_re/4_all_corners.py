@@ -247,6 +247,76 @@ def show(line, sink=None):
         sink.append("      " + line)
 
 
+def _mem_available_bytes():
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return None
+
+
+def _biggest_rpt(corners):
+    """코너들 중 제일 큰 리포트 크기(바이트)."""
+    big = 0
+    for _name, d in corners:
+        rpt, _e, _c = find_rpt(d)
+        if rpt:
+            try:
+                big = max(big, os.path.getsize(rpt))
+            except OSError:
+                pass
+    return big
+
+
+# 2b / 2c / 5a 는 리포트를 통째로 메모리에 올린다. 실측으로 리포트의 약 5.5배다
+# (35MB -> 0.2GB, 446MB -> 2.4GB). 코너를 N개 동시에 돌리면 그만큼 N배가 든다.
+# 남은 메모리를 넘기면 스왑으로 넘어가고, 그때는 코너별로 몇 배씩 느려져서
+# 병렬로 돌린 의미가 사라진다. 그래서 여기서 상한을 잡는다.
+MEM_PER_RPT = 5.5
+MEM_HEADROOM = 0.7          # 남은 메모리를 다 쓰지 않는다
+
+
+def pick_jobs(want, corners):
+    """(쓸 jobs 수, 설명줄들) 을 돌려준다. want 가 0 이면 자동으로 고른다."""
+    why = []
+    n_corner = len(corners)
+    try:
+        import multiprocessing
+        cores = multiprocessing.cpu_count()
+    except Exception:
+        cores = 4
+
+    big = _biggest_rpt(corners)
+    avail = _mem_available_bytes()
+    cap_mem = None
+    if big and avail:
+        per = big * MEM_PER_RPT
+        cap_mem = max(1, int(avail * MEM_HEADROOM / per))
+        why.append("  리포트 최대 %.0fMB -> 코너당 약 %.1fGB, 남은 메모리 %.0fGB"
+                   % (big / 1048576.0, per / 1073741824.0, avail / 1073741824.0))
+
+    if want == 0:
+        jobs = min(n_corner, cores, 8)
+        if cap_mem:
+            jobs = min(jobs, cap_mem)
+        why.append("  --jobs 0 (자동) -> %d 개로 정했습니다" % jobs)
+        return max(1, jobs), why
+
+    jobs = max(1, want)
+    if jobs > n_corner:
+        jobs = n_corner
+    if cap_mem and jobs > cap_mem:
+        why.append("  --jobs %d 는 메모리가 모자랍니다. %d 개로 줄입니다."
+                   % (want, cap_mem))
+        why.append("  (넘기면 스왑으로 가고, 그때는 코너마다 몇 배씩 느려져")
+        why.append("   병렬로 돌린 의미가 없어집니다)")
+        jobs = cap_mem
+    return jobs, why
+
+
 def run_step(script, args, quiet, sink=None):
     """하위 스크립트를 지금 python 으로 돌린다. (성공여부, 마지막코드) 반환."""
     cmd = [sys.executable, os.path.join(HERE, script)] + args
@@ -369,10 +439,12 @@ def main():
     ap.add_argument("--skip-done", action="store_true",
                     help="결과 파일이 이미 있으면 그 단계는 건너뛴다")
     ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
-                    help="코너를 동시에 몇 개 돌릴지. **기본 1(하나씩)**. "
-                         "코너끼리는 자기 폴더에만 쓰므로 나눠도 결과가 같다. "
-                         "다만 2b 가 코너마다 SPEF 를 따로 읽으므로 메모리가 "
-                         "N배로 늘어난다. SPEF 가 크면 2~4 부터 올려 볼 것")
+                    help="코너를 동시에 몇 개 돌릴지. 기본 1(하나씩). "
+                         "0 을 주면 리포트 크기와 남은 메모리를 보고 자동으로 고른다. "
+                         "코너끼리는 자기 폴더에만 쓰므로 나눠도 결과는 같다. "
+                         "2b/2c/5a 가 리포트를 통째로 메모리에 올려 코너당 "
+                         "리포트의 약 5.5배를 쓰므로, 남은 메모리를 넘기면 "
+                         "자동으로 줄인다")
     ap.add_argument("--quiet", action="store_true",
                     help="각 단계의 화면 출력을 숨기고 결과 표만 본다")
     args = ap.parse_args()
@@ -466,9 +538,11 @@ def main():
     #
     # 동시에 돌릴 때는 코너 출력을 모아 뒀다가 그 코너가 끝날 때 한 덩어리로
     # 찍는다. 한 줄씩 뒤섞이면 어느 코너 것인지 알 수 없다.
-    jobs = max(1, args.jobs)
-    if jobs > len(corners):
-        jobs = len(corners)
+    jobs, jobs_why = pick_jobs(args.jobs, corners)
+    for line in jobs_why:
+        print(line)
+    if jobs_why:
+        print("")
     results = []   # (코너, [코드...])
     trouble = []   # (코너, 단계, 코드)
     t_start = time.time()
