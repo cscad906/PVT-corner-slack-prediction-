@@ -82,9 +82,11 @@ def test_shipped_config_defaults_to_the_deployed_layout():
         raw = yaml.safe_load(f)
     assert raw["root"] == "auto", \
         "default root must be auto (the repo's parent = where the designs live)"
-    # designs must be an explicit list: root also holds non-design folders
-    # (pr_si, spice), which auto would pick up as designs.
-    assert isinstance(raw["designs"], list) and raw["designs"]
+    # designs must be stated explicitly -- root also holds non-design folders
+    # (pr_si, spice), which auto would pick up as designs. Either form counts:
+    # a list, or the mapping used when one circuit needs its own corners.
+    assert isinstance(raw["designs"], (list, dict)) and raw["designs"], \
+        "designs must be explicit, not auto"
     # auto resolves to this checkout's parent directory
     p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
     assert p["root"] == os.path.dirname(REPO_ROOT)
