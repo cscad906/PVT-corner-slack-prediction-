@@ -38,6 +38,25 @@ OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 # 정밀도가 필요하면 그쪽을 쓰면 된다.
 DECIMALS = 4
 
+# 헤더에 붙이는 3열. 값 위치는 이 문자열에서 읽어 내므로, 여기만 고치면
+# 값도 따라간다(따로 적힌 포맷과 어긋날 일이 없다).
+HDR_SUFFIX = "       Dist        Res       Cpin"
+
+
+def place(line, col_end, *vals):
+    """값들을 col_end 위치에 오른쪽 끝을 맞춰 놓는다.
+
+    열 이름이 헤더 어디에 있든 그 아래에 선다. 앞 열이 넘쳐서 자리가 모자라면
+    한 칸 띄우고 이어 붙인다 -- 값을 자르지는 않는다.
+    """
+    out = line
+    for val, end in zip(vals, col_end):
+        start = end - len(val)
+        if start < len(out):
+            start = len(out) + 1        # 자리가 모자라면 한 칸 띄우고
+        out = out.ljust(start) + val
+    return out
+
 
 def fmt4(v):
     """문자열로 들어온 값을 기존 형식(소수점 4자리)으로 맞춘다."""
@@ -208,7 +227,8 @@ def main():
         # 마지막 줄 뒤에는 없다. 흘려 쓸 때도 그 형식을 그대로 지킨다.
         first = True
         ended_nl = False
-        seg = ""            # launch_clock / data / capture_clock
+        col_end = [80 + 11, 80 + 22, 80 + 33]   # 헤더를 만나기 전의 기본값
+        seg = ""        # launch_clock / data / capture_clock
         seen_data = False
         for idx, line in enumerate(fin):
             ended_nl = line.endswith("\n")
@@ -235,7 +255,16 @@ def main():
             # 표 헤더와 점선을 늘려 3열 자리를 만든다
             if "Point" in clean and "Path" in clean and "(" not in clean:
                 header_len = len(clean)
-                fout.write(clean + "       Dist        Res       Cpin")
+                new_hdr = clean + HDR_SUFFIX
+                # 값을 놓을 자리를 **헤더에서 직접 읽는다.** 붙인 부분
+                # (header_len 뒤)에서만 찾으므로 원래 헤더에 같은 낱말이
+                # 있어도 안 걸린다. 이렇게 해 두면 HDR_SUFFIX 를 고쳐도
+                # 값 위치가 자동으로 따라간다 -- 따로 적힌 포맷 문자열과
+                # 어긋날 일이 없다.
+                tail = new_hdr[header_len:]
+                col_end = [header_len + tail.find(lbl) + len(lbl)
+                           for lbl in ("Dist", "Res", "Cpin")]
+                fout.write(new_hdr)
                 continue
             if clean.strip() and set(clean.strip()) == set("-"):
                 fout.write(clean + "---------------------------------")
@@ -274,13 +303,11 @@ def main():
                         if pin and pin not in na_pins:
                             na_pins.append(pin)
 
-            # 3열을 **헤더 길이에 맞춰** 붙인다. 예전에는 net 줄만 따로
-            # "prefix + 빈 칸 3개 + 값" 으로 썼는데, 그건 리포트에 Cap 뒤로
-            # 열이 정확히 3개(Trans/Incr/Path)일 때만 헤더 길이와 맞는다.
-            # 리포트 열이 늘거나 줄면 그만큼 어긋난다. 헤더 길이로 채우면
-            # 열이 몇 개든 항상 헤더 아래에 선다.
-            fout.write("%s %10s %10s %10s"
-                       % (clean.ljust(header_len), sd, sr, sc))
+            # 3열을 **헤더에서 읽은 자리**에 오른쪽 끝을 맞춰 붙인다.
+            # 예전에는 net 줄만 따로 "prefix + 빈 칸 3개 + 값" 으로 썼는데,
+            # 그건 리포트에 Cap 뒤로 열이 정확히 3개(Trans/Incr/Path)일 때만
+            # 헤더와 맞는다. 현장 리포트처럼 열이 더 있으면 그만큼 밀린다.
+            fout.write(place(clean, col_end, sd, sr, sc))
 
         # 원본이 개행으로 끝났으면 예전 코드에서는 split 이 만든 마지막 빈
         # 원소 때문에 개행이 하나 더 붙었다. 그 형식을 그대로 지킨다.
