@@ -274,7 +274,7 @@ def run_step(script, args, quiet, sink=None):
     return p.returncode == 0, (last_code or "?")
 
 
-def run_corner(name, d, steps, args, spef, cmap, sink):
+def run_corner(name, d, steps, args, spef, cmap, sink, progress=None):
     """코너 하나를 단계 순서대로 돈다. -> (코드들, 걸린 것들, 걸린 시간)
 
     코너끼리는 서로 안 건드린다. 각자 자기 폴더에만 쓰고, SPEF 와 Cpin 표는
@@ -283,7 +283,14 @@ def run_corner(name, d, steps, args, spef, cmap, sink):
     sink 가 None 이면 그때그때 화면에 찍는다(하나씩 돌 때). 리스트를 주면
     거기에 모은다(동시에 돌 때 -- 뒤섞이면 못 읽으므로 코너가 끝날 때 한
     덩어리로 찍는다).
+
+    progress 를 주면 **단계 하나가 끝날 때마다** (단계, 코드, 걸린시간) 로
+    부른다. 동시에 돌 때 코너가 다 끝나기를 기다리지 않고 진행을 보여 주려는
+    것이다. 여러 스레드가 같이 부르므로 부르는 쪽에서 lock 을 잡아야 한다.
     """
+    def note(label, code, took):
+        if progress is not None:
+            progress(name, label, code, took)
     def say(line):
         if sink is None:
             print(line)
@@ -297,10 +304,12 @@ def run_corner(name, d, steps, args, spef, cmap, sink):
         if args.skip_done and step_done(d, product):
             say("  %-12s 건너뜀 (%s 이미 있음)" % (label, product))
             codes.append("SKIP")
+            note(label, "SKIP", "-")
             continue
         if need_spef and not (spef and os.path.isfile(spef)):
             say("  %-12s 건너뜀 (SPEF 없음)" % label)
             codes.append("NOSPEF")
+            note(label, "NOSPEF", "-")
             continue
 
         call = ["--dir", d]
@@ -324,10 +333,12 @@ def run_corner(name, d, steps, args, spef, cmap, sink):
         if not ok:
             say("  %-12s 실패 (%s) -> 이 코너의 남은 단계는 건너뜁니다"
                         % (label, took))
+            note(label, c, took)
             trouble.append((name, label, c))
             codes += ["-"] * (len(steps) - len(codes))
             break
         say("  %-12s 끝 (%s) [ %s ]" % (label, took, c))
+        note(label, c, took)
         if c.startswith("W-"):
             trouble.append((name, label, c))
     return codes, trouble, time.time() - t_corner
@@ -508,7 +519,7 @@ def main():
     if jobs > 1:
         from concurrent.futures import ThreadPoolExecutor
         print("  동시에 %d개 코너씩 돕니다." % jobs)
-        print("  시작할 때 한 줄, 끝나면 그 코너 출력이 한 덩어리로 나옵니다.")
+        print("  단계가 끝날 때마다 한 줄, 코너가 끝나면 그 코너 출력이 한 덩어리로 나옵니다.")
         print("")
         lock = threading.Lock()
         state = {"done": 0, "started": 0, "running": 0}
@@ -526,7 +537,17 @@ def main():
                 sys.stdout.flush()
             spef, cmap = prep(name, d)
             sink = []
-            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink)
+
+            def step_done_line(cname, label, code, took):
+                # 단계가 끝날 때마다 한 줄. 코너 이름을 앞에 둔다 -- 여러 코너가
+                # 섞여 나오므로 어느 코너 것인지가 먼저 보여야 한다.
+                with lock:
+                    print("       %-24s %-12s %-10s %s"
+                          % (cname, label, took, code))
+                    sys.stdout.flush()
+
+            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink,
+                                         progress=step_done_line)
             with lock:
                 state["done"] += 1
                 state["running"] -= 1
