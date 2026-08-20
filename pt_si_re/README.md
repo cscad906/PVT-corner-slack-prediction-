@@ -811,6 +811,13 @@ debug/why_dropped.py        union 에서 경로가 왜 빠졌는지
 `xtalk_all.tcl` 을 고쳤으면 `python3 dev/make_hold.py` 로 hold 판을 맞춰 줘야
 두 파일이 어긋나지 않는다.
 
+### 예시 폴더
+
+```
+example/final_output_example/   최종 산출물 2종 (annotated + 14열). 앞부분만 잘라 둔 것
+example/xtalk_output_example/   담당자분께 받는 xtalk/ 4개. 앞부분만
+```
+
 ### 문서
 
 ```

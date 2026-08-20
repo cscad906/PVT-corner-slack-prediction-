@@ -1,0 +1,282 @@
+### FIXED_PATH idx=1 key=FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_25_->iregister_read_exe_reg_rs2_data_1_reg_9_#1
+****************************************
+Report : timing
+	-path_type full_clock_expanded
+	-delay_type max
+	-nosplit
+	-input_pins
+	-nets
+	-max_paths 1
+	-transition_time
+	-capacitance
+	-sort_by slack
+Design : BoomCore
+Version: V-2023.12-SP4
+Date   : Mon Aug 10 01:44:29 2026
+****************************************
+
+Warning: There is 1 invalid start point. (UITE-416)
+
+  Startpoint: FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_25_ (rising edge-triggered flip-flop clocked by myCLK)
+  Endpoint: iregister_read_exe_reg_rs2_data_1_reg_9_ (rising edge-triggered flip-flop clocked by myCLK)
+  Last common pin: clock
+  Path Group: myCLK
+  Path Type: max
+
+  Point                                                                                                Fanout    Cap      Trans       Incr       Path       Dist        Res       Cpin
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  clock myCLK (rise edge)                                                                                                         0.000000   0.000000
+  clock source latency                                                                                                            0.000000   0.000000
+  clock (in)                                                                                                           0.000000   0.000000 & 0.000000 r
+  clock (net)                                                                                             1 0.007069                                     72.1570     0.0887     0.0015
+  ZCTSBUF_824211_22831/A (gt3_6t_buf_x12_rvt)                                                                          0.014190   0.007743 & 0.007743 r
+  ZCTSBUF_824211_22831/Y (gt3_6t_buf_x12_rvt)                                                                          0.017837   0.017030 & 0.024772 r
+  ZCTSNET_6904 (net)                                                                                     12 0.023539                                      5.7240   488.8332     0.0005
+  ZCTSINV_497954_21676/A (gt3_6t_inv_x1_rvt)                                                                           0.024780   0.004305 & 0.029078 r
+  ZCTSINV_497954_21676/Y (gt3_6t_inv_x1_rvt)                                                                           0.030313   0.021473 & 0.050551 f
+  ZCTSNET_6160 (net)                                                                                      3 0.005031                                     31.5900     0.3349     0.0010
+  ccd_setup_inst_30328/A (gt3_6t_buf_x6_rvt)                                                                           0.031557   0.004830 & 0.055381 f
+  ccd_setup_inst_30328/Y (gt3_6t_buf_x6_rvt)                                                                           0.004502   0.017362 & 0.072743 f
+  ccd_setup_11 (net)                                                                                      1 0.001043                                      0.3095     8.0943     0.0010
+  ZCTSBUF_485142_21549/A (gt3_6t_buf_x6_rvt)                                                                           0.004548   0.000276 & 0.073019 f
+  ZCTSBUF_485142_21549/Y (gt3_6t_buf_x6_rvt)                                                                           0.008208   0.011158 & 0.084178 f
+  ZCTSNET_6105 (net)                                                                                      6 0.008710                                     41.8860     0.0009     0.0010
+  ZCTSINV_447504_21529/A (gt3_6t_inv_x2_rvt)                                                                           0.022744   0.009324 & 0.093502 f
+  ZCTSINV_447504_21529/Y (gt3_6t_inv_x2_rvt)                                                                           0.038060   0.026647 & 0.120149 r
+  ZCTSNET_6094 (net)                                                                                      8 0.009129                                     24.6060     0.0175     0.0005
+  ZCTSBUF_441233_21521/A (gt3_6t_buf_x2_rvt)                                                                           0.038914   0.005570 & 0.125720 r
+  ZCTSBUF_441233_21521/Y (gt3_6t_buf_x2_rvt)                                                                           0.055937   0.041887 & 0.167606 r
+  ZCTSNET_6090 (net)                                                                                     18 0.013961                                      2.3130     0.0003     0.0007
+  FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_25_/CLK (gt3_6t_dffasync_x1_rvt)                                    0.056480   0.003740 & 0.171346 r
+  FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_25_/Q (gt3_6t_dffasync_x1_rvt) <-                                   0.088436   0.062778 & 0.234125 f
+  FpPipeline_fpu_exe_unit_FPUUnit_fpu__fpiu_io_in_bits_req_in2_prev_prev_expOut_commonCase_T_2_2_ (net)    4 0.006254                                     24.6990     0.0007     0.0005
+  HFSBUF_414_2419/A (gt3_6t_buf_x1_rvt) <-                                                                             0.099941   0.032597 & 0.266722 f
+  HFSBUF_414_2419/Y (gt3_6t_buf_x1_rvt) <-                                                                             0.023386   0.026256 & 0.292978 f
+  HFSNET_1763 (net)                                                                                       6 0.004138                                     10.2960    59.3440     0.0008
+  U28734/B (gt3_6t_nor2_x2_rvt) <-                                                                                     0.028545   0.008832 & 0.301810 f
+  U28734/Y (gt3_6t_nor2_x2_rvt) <-                                                                                     0.019791   0.019010 & 0.320821 r
+  n42941 (net)                                                                                            4 0.002274                                      0.1950    54.9927     0.0004
+  U32958/B (gt3_6t_ao21_x1_rvt) <-                                                                                     0.020020   0.001293 & 0.322113 r
+  U32958/Y (gt3_6t_ao21_x1_rvt) <-                                                                                     0.079038   0.033277 & 0.355390 r
+  n43768 (net)                                                                                           21 0.009760                                      5.4700    59.3432     0.0005
+  gre_a_INV_799_inst_31855/A (gt3_6t_inv_x1_rvt) <-                                                                    0.101431   0.032047 & 0.387438 r
+  gre_a_INV_799_inst_31855/Y (gt3_6t_inv_x1_rvt) <-                                                                    0.052258   0.044878 & 0.432316 f
+  gre_a_INV_799_165 (net)                                                                                14 0.006082                                      0.7470    54.9915     0.0004
+  U51994/A1 (gt3_6t_aoi22_x1_rvt) <-                                                                                   0.052667   0.002089 & 0.434405 f
+  U51994/Y (gt3_6t_aoi22_x1_rvt) <-                                                                                    0.027747   0.022579 & 0.456984 r
+  n43552 (net)                                                                                            2 0.001091                                      1.5610   697.2446     0.0004
+  U52220/A1 (gt3_6t_oai22_x1_rvt) <-                                                                                   0.027762   0.001894 & 0.458878 r
+  U52220/Y (gt3_6t_oai22_x1_rvt) <-                                                                                    0.018712   0.012763 & 0.471641 f
+  n43554 (net)                                                                                            1 0.000473                                      0.4760   405.9339     0.0004
+  ctmTdsLR_2_24381/C (gt3_6t_nor3_x1_rvt) <-                                                                           0.018714   0.000722 & 0.472363 f
+  ctmTdsLR_2_24381/Y (gt3_6t_nor3_x1_rvt) <-                                                                           0.013766   0.013603 & 0.485967 r
+  tmp_net2915 (net)                                                                                       1 0.000417                                      0.0830   291.4599     0.0004
+  ctmTdsLR_1_24380/B (gt3_6t_oa21_x1_rvt) <-                                                                           0.013768   0.000082 & 0.486048 r
+  ctmTdsLR_1_24380/Y (gt3_6t_oa21_x1_rvt) <-                                                                           0.041917   0.024399 & 0.510448 r
+  n76884 (net)                                                                                            4 0.005679                                     37.5370    72.3992     0.0004
+  U52224/A1 (gt3_6t_oai211_x1_rvt) <-                                                                                  0.071347   0.056505 & 0.566953 r
+  U52224/Y (gt3_6t_oai211_x1_rvt) <-                                                                                   0.028371   0.027793 & 0.594746 f
+  n43558 (net)                                                                                            1 0.000958                                      5.9380    54.9905     0.0004
+  U52225/C (gt3_6t_aoi211_x1_rvt) <-                                                                                   0.028496   0.004694 & 0.599441 f
+  U52225/Y (gt3_6t_aoi211_x1_rvt) <-                                                                                   0.026449   0.019276 & 0.618717 r
+  n43560 (net)                                                                                            1 0.000864                                      6.0140    54.9899     0.0004
+  U52226/C (gt3_6t_nand3_x1_rvt) <-                                                                                    0.026493   0.002832 & 0.621549 r
+  U52226/Y (gt3_6t_nand3_x1_rvt) <-                                                                                    0.024326   0.018748 & 0.640297 f
+  aps_rename_113_ (net)                                                                                   1 0.001287                                      7.8040     0.0000     0.0005
+  HFSBUF_147_338/A (gt3_6t_buf_x3_rvt) <-                                                                              0.025785   0.005643 & 0.645941 f
+  HFSBUF_147_338/Y (gt3_6t_buf_x3_rvt) <-                                                                              0.007415   0.017989 & 0.663930 f
+  io_lsu_fp_stdata_bits_data[9] (net)                                                                     2 0.009234                                     65.8890     0.0274     0.0004
+  U52227/B2 (gt3_6t_aoi22_x1_rvt) <-                                                                                   0.095806   0.096906 & 0.760836 f
+  U52227/Y (gt3_6t_aoi22_x1_rvt) <-                                                                                    0.092641   0.063449 & 0.824285 r
+  n74980 (net)                                                                                            1 0.007116                                     44.9140     0.0002     0.0010
+  HFSBUF_974_6099/A (gt3_6t_buf_x8_rvt) <-                                                                             0.110510   0.108958 & 0.933243 r
+  HFSBUF_974_6099/Y (gt3_6t_buf_x8_rvt) <-                                                                             0.010153   0.027804 & 0.961047 r
+  HFSNET_3436 (net)                                                                                      30 0.017421                                     26.9520   253.4576     0.0005
+  HFSBUF_241_6096/A (gt3_6t_buf_x3_rvt) <-                                                                             0.097954   0.056033 & 1.017079 r
+  HFSBUF_241_6096/Y (gt3_6t_buf_x3_rvt) <-                                                                             0.012221   0.024504 & 1.041583 r
+  HFSNET_3435 (net)                                                                                      16 0.008562                                     15.4590     4.3542     0.0004
+  U55438/A1 (gt3_6t_oai22_x1_rvt) <-                                                                                   0.093690   0.052089 & 1.093672 r
+  U55438/Y (gt3_6t_oai22_x1_rvt) <-                                                                                    0.022766   0.020980 & 1.114652 f
+  n46938 (net)                                                                                            1 0.000578                                      1.1810    54.9900     0.0004
+  U55439/B (gt3_6t_aoi21_x1_rvt) <-                                                                                    0.022774   0.003622 & 1.118274 f
+  U55439/Y (gt3_6t_aoi21_x1_rvt) <-                                                                                    0.016253   0.011537 & 1.129811 r
+  n46940 (net)                                                                                            1 0.000412                                      0.2170   244.8999     0.0004
+  U55441/B (gt3_6t_oai211_x1_rvt) <-                                                                                   0.016254   0.000068 & 1.129880 r
+  U55441/Y (gt3_6t_oai211_x1_rvt) <-                                                                                   0.024448   0.011594 & 1.141474 f
+  n46941 (net)                                                                                            1 0.000456                                      0.3950   419.2549     0.0004
+  U55442/B (gt3_6t_ao21_x1_rvt) <-                                                                                     0.024449   0.000986 & 1.142460 f
+  U55442/Y (gt3_6t_ao21_x1_rvt) <-                                                                                     0.011433   0.016937 & 1.159397 f
+  iregister_read_N1030 (net)                                                                              1 0.001213                                     13.1470     0.0004     0.0003
+  iregister_read_exe_reg_rs2_data_1_reg_9_/D (gt3_6t_dffasync_x1_rvt)                                                  0.012438   0.002750 & 1.162147 f
+  data arrival time                                                                                                                          1.162147
+
+  clock myCLK (rise edge)                                                                                                         1.000000   1.000000
+  clock source latency                                                                                                            0.000000   1.000000
+  clock (in)                                                                                                           0.000000   0.000000 & 1.000000 r
+  clock (net)                                                                                             1 0.007069                                     72.1570     0.0887     0.0015
+  ZCTSBUF_824211_22831/A (gt3_6t_buf_x12_rvt)                                                                          0.014190   0.007743 & 1.007743 r
+  ZCTSBUF_824211_22831/Y (gt3_6t_buf_x12_rvt)                                                                          0.017837   0.017030 & 1.024772 r
+  ZCTSNET_6904 (net)                                                                                     12 0.023539                                     25.4340     0.0004     0.0005
+  ZCTSBUF_301370_22174/A (gt3_6t_buf_x2_rvt)                                                                           0.017837   0.006670 & 1.031443 r
+  ZCTSBUF_301370_22174/Y (gt3_6t_buf_x2_rvt)                                                                           0.040562   0.029723 & 1.061165 r
+  ZCTSNET_6464 (net)                                                                                      8 0.010056                                     22.5240     0.0168     0.0010
+  ZCTSBUF_282035_22137/A (gt3_6t_buf_x8_rvt)                                                                           0.040562   0.005823 & 1.066989 r
+  ZCTSBUF_282035_22137/Y (gt3_6t_buf_x8_rvt)                                                                           0.049781   0.033570 & 1.100559 r
+  ZCTSNET_6439 (net)                                                                                     62 0.047391                                      5.3420     0.0002     0.0007
+  iregister_read_exe_reg_rs2_data_1_reg_9_/CLK (gt3_6t_dffasync_x1_rvt)                                                0.049781   0.018486 & 1.119044 r
+  clock reconvergence pessimism                                                                                                   0.000000   1.119044
+  clock uncertainty                                                                                                               -0.000100  1.118944
+  library setup time                                                                                                              -0.011285  1.107659
+  data required time                                                                                                                         1.107659
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  data required time                                                                                                                         1.107659
+  data arrival time                                                                                                                          -1.162147
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  slack (VIOLATED)                                                                                                                           -0.054488
+
+
+
+### FIXED_PATH idx=2 key=FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_24_->iregister_read_exe_reg_rs2_data_1_reg_9_#2
+****************************************
+Report : timing
+	-path_type full_clock_expanded
+	-delay_type max
+	-nosplit
+	-input_pins
+	-nets
+	-max_paths 1
+	-transition_time
+	-capacitance
+	-sort_by slack
+Design : BoomCore
+Version: V-2023.12-SP4
+Date   : Mon Aug 10 01:44:29 2026
+****************************************
+
+Warning: There is 1 invalid start point. (UITE-416)
+
+  Startpoint: FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_24_ (rising edge-triggered flip-flop clocked by myCLK)
+  Endpoint: iregister_read_exe_reg_rs2_data_1_reg_9_ (rising edge-triggered flip-flop clocked by myCLK)
+  Last common pin: clock
+  Path Group: myCLK
+  Path Type: max
+
+  Point                                                                             Fanout    Cap      Trans       Incr       Path       Dist        Res       Cpin
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  clock myCLK (rise edge)                                                                                      0.000000   0.000000
+  clock source latency                                                                                         0.000000   0.000000
+  clock (in)                                                                                        0.000000   0.000000 & 0.000000 r
+  clock (net)                                                                          1 0.007069                                     72.1570     0.0887     0.0015
+  ZCTSBUF_824211_22831/A (gt3_6t_buf_x12_rvt)                                                       0.014190   0.007743 & 0.007743 r
+  ZCTSBUF_824211_22831/Y (gt3_6t_buf_x12_rvt)                                                       0.017837   0.017030 & 0.024772 r
+  ZCTSNET_6904 (net)                                                                  12 0.023539                                     18.7440     0.0030     0.0020
+  ZCTSINV_260698_22256/A (gt3_6t_inv_x4_rvt)                                                        0.028903   0.010365 & 0.035137 r
+  ZCTSINV_260698_22256/Y (gt3_6t_inv_x4_rvt)                                                        0.015813   0.008019 & 0.043156 f
+  ZCTSNET_6546 (net)                                                                   1 0.005433                                     54.7860    54.9908     0.0020
+  ZCTSINV_260668_22255/A (gt3_6t_inv_x4_rvt)                                                        0.020587   0.006762 & 0.049919 f
+  ZCTSINV_260668_22255/Y (gt3_6t_inv_x4_rvt)                                                        0.013378   0.010128 & 0.060047 r
+  ZCTSNET_6545 (net)                                                                   5 0.004165                                      3.4440     0.0003     0.0005
+  ccd_setup_inst_30314/A (gt3_6t_buf_x1_rvt)                                                        0.013864   0.001383 & 0.061430 r
+  ccd_setup_inst_30314/Y (gt3_6t_buf_x1_rvt)                                                        0.008425   0.011775 & 0.073205 r
+  ccd_setup_6 (net)                                                                    1 0.001029                                      0.2580   343.1979     0.0010
+  ZCTSBUF_260652_22254/A (gt3_6t_buf_x6_rvt)                                                        0.008444   0.000241 & 0.073446 r
+  ZCTSBUF_260652_22254/Y (gt3_6t_buf_x6_rvt)                                                        0.011468   0.012917 & 0.086363 r
+  ZCTSNET_6544 (net)                                                                   6 0.006690                                     19.5420     0.0009     0.0010
+  ZCTSBUF_254710_22248/A (gt3_6t_buf_x6_rvt)                                                        0.013520   0.003797 & 0.090160 r
+  ZCTSBUF_254710_22248/Y (gt3_6t_buf_x6_rvt)                                                        0.044171   0.021287 & 0.111447 r
+  ZCTSNET_6538 (net)                                                                  39 0.031720                                      1.9945     0.0009     0.0015
+  ZCTSBUF_252447_22244/A (gt3_6t_buf_x12_rvt)                                                       0.058813   0.012512 & 0.123959 r
+  ZCTSBUF_252447_22244/Y (gt3_6t_buf_x12_rvt)                                                       0.031929   0.026736 & 0.150695 r
+  ZCTSNET_6534 (net)                                                                  59 0.046607                                     10.1570     0.0003     0.0007
+  FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_24_/CLK (gt3_6t_dffasync_x1_rvt)                 0.056811   0.018393 & 0.169088 r
+  FpPipeline_fregister_read_exe_reg_rs2_data_0_reg_24_/Q (gt3_6t_dffasync_x1_rvt) <-                0.013591   0.034293 & 0.203381 f
+  FpPipeline_fpu_exe_unit_N27 (net)                                                    1 0.000627                                      1.0710    54.9899     0.0005
+  HFSBUF_1233_7244/A (gt3_6t_buf_x2_rvt) <-                                                         0.013612   0.000329 & 0.203710 f
+  HFSBUF_1233_7244/Y (gt3_6t_buf_x2_rvt) <-                                                         0.009444   0.013273 & 0.216982 f
+  HFSNET_4012 (net)                                                                    5 0.007949                                     22.6740    54.9905     0.0005
+  HFSBUF_898_7243/A (gt3_6t_buf_x3_rvt) <-                                                          0.072790   0.033347 & 0.250329 f
+  HFSBUF_898_7243/Y (gt3_6t_buf_x3_rvt) <-                                                          0.026887   0.034662 & 0.284991 f
+  HFSNET_4011 (net)                                                                   28 0.013329                                      6.3540     0.0210     0.0008
+  U28734/A (gt3_6t_nor2_x2_rvt) <-                                                                  0.035462   0.012281 & 0.297272 f
+  U28734/Y (gt3_6t_nor2_x2_rvt) <-                                                                  0.019791   0.018442 & 0.315714 r
+  n42941 (net)                                                                         4 0.002274                                      0.1950    54.9927     0.0004
+  U32958/B (gt3_6t_ao21_x1_rvt) <-                                                                  0.020020   0.001293 & 0.317007 r
+  U32958/Y (gt3_6t_ao21_x1_rvt) <-                                                                  0.079038   0.033277 & 0.350284 r
+  n43768 (net)                                                                        21 0.009760                                      5.4700    59.3432     0.0005
+  gre_a_INV_799_inst_31855/A (gt3_6t_inv_x1_rvt) <-                                                 0.101431   0.032047 & 0.382331 r
+  gre_a_INV_799_inst_31855/Y (gt3_6t_inv_x1_rvt) <-                                                 0.052258   0.044878 & 0.427209 f
+  gre_a_INV_799_165 (net)                                                             14 0.006082                                      0.7470    54.9915     0.0004
+  U51994/A1 (gt3_6t_aoi22_x1_rvt) <-                                                                0.052667   0.002089 & 0.429299 f
+  U51994/Y (gt3_6t_aoi22_x1_rvt) <-                                                                 0.027747   0.022579 & 0.451877 r
+  n43552 (net)                                                                         2 0.001091                                      1.5610   697.2446     0.0004
+  U52220/A1 (gt3_6t_oai22_x1_rvt) <-                                                                0.027762   0.001894 & 0.453771 r
+  U52220/Y (gt3_6t_oai22_x1_rvt) <-                                                                 0.018712   0.012763 & 0.466535 f
+  n43554 (net)                                                                         1 0.000473                                      0.4760   405.9339     0.0004
+  ctmTdsLR_2_24381/C (gt3_6t_nor3_x1_rvt) <-                                                        0.018714   0.000722 & 0.467257 f
+  ctmTdsLR_2_24381/Y (gt3_6t_nor3_x1_rvt) <-                                                        0.013766   0.013603 & 0.480860 r
+  tmp_net2915 (net)                                                                    1 0.000417                                      0.0830   291.4599     0.0004
+  ctmTdsLR_1_24380/B (gt3_6t_oa21_x1_rvt) <-                                                        0.013768   0.000082 & 0.480942 r
+  ctmTdsLR_1_24380/Y (gt3_6t_oa21_x1_rvt) <-                                                        0.041917   0.024399 & 0.505341 r
+  n76884 (net)                                                                         4 0.005679                                     37.5370    72.3992     0.0004
+  U52224/A1 (gt3_6t_oai211_x1_rvt) <-                                                               0.071347   0.056505 & 0.561847 r
+  U52224/Y (gt3_6t_oai211_x1_rvt) <-                                                                0.028371   0.027793 & 0.589640 f
+  n43558 (net)                                                                         1 0.000958                                      5.9380    54.9905     0.0004
+  U52225/C (gt3_6t_aoi211_x1_rvt) <-                                                                0.028496   0.004694 & 0.594334 f
+  U52225/Y (gt3_6t_aoi211_x1_rvt) <-                                                                0.026449   0.019276 & 0.613610 r
+  n43560 (net)                                                                         1 0.000864                                      6.0140    54.9899     0.0004
+  U52226/C (gt3_6t_nand3_x1_rvt) <-                                                                 0.026493   0.002832 & 0.616443 r
+  U52226/Y (gt3_6t_nand3_x1_rvt) <-                                                                 0.024326   0.018748 & 0.635191 f
+  aps_rename_113_ (net)                                                                1 0.001287                                      7.8040     0.0000     0.0005
+  HFSBUF_147_338/A (gt3_6t_buf_x3_rvt) <-                                                           0.025785   0.005643 & 0.640834 f
+  HFSBUF_147_338/Y (gt3_6t_buf_x3_rvt) <-                                                           0.007415   0.017989 & 0.658823 f
+  io_lsu_fp_stdata_bits_data[9] (net)                                                  2 0.009234                                     65.8890     0.0274     0.0004
+  U52227/B2 (gt3_6t_aoi22_x1_rvt) <-                                                                0.095806   0.096906 & 0.755729 f
+  U52227/Y (gt3_6t_aoi22_x1_rvt) <-                                                                 0.092641   0.063449 & 0.819178 r
+  n74980 (net)                                                                         1 0.007116                                     44.9140     0.0002     0.0010
+  HFSBUF_974_6099/A (gt3_6t_buf_x8_rvt) <-                                                          0.110510   0.108958 & 0.928136 r
+  HFSBUF_974_6099/Y (gt3_6t_buf_x8_rvt) <-                                                          0.010153   0.027804 & 0.955940 r
+  HFSNET_3436 (net)                                                                   30 0.017421                                     26.9520   253.4576     0.0005
+  HFSBUF_241_6096/A (gt3_6t_buf_x3_rvt) <-                                                          0.097954   0.056033 & 1.011973 r
+  HFSBUF_241_6096/Y (gt3_6t_buf_x3_rvt) <-                                                          0.012221   0.024504 & 1.036477 r
+  HFSNET_3435 (net)                                                                   16 0.008562                                     15.4590     4.3542     0.0004
+  U55438/A1 (gt3_6t_oai22_x1_rvt) <-                                                                0.093690   0.052089 & 1.088566 r
+  U55438/Y (gt3_6t_oai22_x1_rvt) <-                                                                 0.022766   0.020980 & 1.109546 f
+  n46938 (net)                                                                         1 0.000578                                      1.1810    54.9900     0.0004
+  U55439/B (gt3_6t_aoi21_x1_rvt) <-                                                                 0.022774   0.003622 & 1.113168 f
+  U55439/Y (gt3_6t_aoi21_x1_rvt) <-                                                                 0.016253   0.011537 & 1.124705 r
+  n46940 (net)                                                                         1 0.000412                                      0.2170   244.8999     0.0004
+  U55441/B (gt3_6t_oai211_x1_rvt) <-                                                                0.016254   0.000068 & 1.124773 r
+  U55441/Y (gt3_6t_oai211_x1_rvt) <-                                                                0.024448   0.011594 & 1.136367 f
+  n46941 (net)                                                                         1 0.000456                                      0.3950   419.2549     0.0004
+  U55442/B (gt3_6t_ao21_x1_rvt) <-                                                                  0.024449   0.000986 & 1.137354 f
+  U55442/Y (gt3_6t_ao21_x1_rvt) <-                                                                  0.011433   0.016937 & 1.154290 f
+  iregister_read_N1030 (net)                                                           1 0.001213                                     13.1470     0.0004     0.0003
+  iregister_read_exe_reg_rs2_data_1_reg_9_/D (gt3_6t_dffasync_x1_rvt)                               0.012438   0.002750 & 1.157040 f
+  data arrival time                                                                                                       1.157040
+
+  clock myCLK (rise edge)                                                                                      1.000000   1.000000
+  clock source latency                                                                                         0.000000   1.000000
+  clock (in)                                                                                        0.000000   0.000000 & 1.000000 r
+  clock (net)                                                                          1 0.007069                                     72.1570     0.0887     0.0015
+  ZCTSBUF_824211_22831/A (gt3_6t_buf_x12_rvt)                                                       0.014190   0.007743 & 1.007743 r
+  ZCTSBUF_824211_22831/Y (gt3_6t_buf_x12_rvt)                                                       0.017837   0.017030 & 1.024772 r
+  ZCTSNET_6904 (net)                                                                  12 0.023539                                     25.4340     0.0004     0.0005
+  ZCTSBUF_301370_22174/A (gt3_6t_buf_x2_rvt)                                                        0.017837   0.006670 & 1.031443 r
+  ZCTSBUF_301370_22174/Y (gt3_6t_buf_x2_rvt)                                                        0.040562   0.029723 & 1.061165 r
+  ZCTSNET_6464 (net)                                                                   8 0.010056                                     22.5240     0.0168     0.0010
+  ZCTSBUF_282035_22137/A (gt3_6t_buf_x8_rvt)                                                        0.040562   0.005823 & 1.066989 r
+  ZCTSBUF_282035_22137/Y (gt3_6t_buf_x8_rvt)                                                        0.049781   0.033570 & 1.100559 r
+  ZCTSNET_6439 (net)                                                                  62 0.047391                                      5.3420     0.0002     0.0007
+  iregister_read_exe_reg_rs2_data_1_reg_9_/CLK (gt3_6t_dffasync_x1_rvt)                             0.049781   0.018486 & 1.119044 r
+  clock reconvergence pessimism                                                                                0.000000   1.119044
+  clock uncertainty                                                                                            -0.000100  1.118944
+  library setup time                                                                                           -0.011285  1.107659
+  data required time                                                                                                      1.107659
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  data required time                                                                                                      1.107659
+  data arrival time                                                                                                       -1.157040
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  slack (VIOLATED)                                                                                                        -0.049381
+
+
+
