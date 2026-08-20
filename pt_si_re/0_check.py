@@ -294,8 +294,12 @@ def check_machine(work):
               % (tot / 1048576.0, avail / 1048576.0))
     if swtot and swfree is not None and swtot > 0:
         used = (swtot - swfree) / 1048576.0
-        mark = "   <- 스왑을 쓰고 있다. 메모리가 모자란 것이다" if used > 1 else ""
-        print("  스왑      : %.0fGB 사용중%s" % (used, mark))
+        # 스왑 "사용량" 은 지금 모자라다는 뜻이 아니다. 예전에 한 번 밀려나고
+        # 그 뒤로 안 건드린 페이지가 그대로 남아 있는 것이라, 며칠 전 것일 수도
+        # 있고 남의 작업이 남긴 것일 수도 있다. 지금 모자란지는 **스왑이 지금도
+        # 오가는지**(si/so)로 봐야 하고, 그건 --watch 가 본다.
+        print("  스왑      : %.0fGB 사용중  (예전에 밀려난 것. 지금 모자란다는"
+              " 뜻은 아니다)" % used)
 
     dev, rot = disk_of(work if os.path.isdir(work) else ".")
     if dev is None:
@@ -335,7 +339,11 @@ def check_machine(work):
             print("    리포트가 100MB 면 코너당 약 0.6GB, 400MB 면 약 2.4GB 입니다.")
             print("    쓸 수 있는 메모리를 그 값으로 나눈 수를 넘기지 마세요.")
         print("")
-        print("    돌리는 중에 느려지면 다른 창에서 확인:")
+        print("    지금 메모리가 모자란지는 위 '스왑 사용량' 이 아니라")
+        print("    돌리는 중에 스왑이 오가는지로 봅니다:")
+        print("      python3 0_check.py --watch      <- 이게 판정해 줍니다")
+        print("")
+        print("    직접 보시려면:")
         print("      vmstat 5      si/so 가 0 이 아니면 스왑 중 -- --jobs 를 낮추세요")
         print("      iostat -x 5   %util 이 100 에 붙어 있으면 디스크가 병목입니다")
     return None
