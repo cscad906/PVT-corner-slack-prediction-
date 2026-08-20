@@ -8,15 +8,16 @@
 | `<코너>_fixed_annotated.txt` | `2c_merge.py` (묶음 1) | 타이밍 리포트 + Dist/Res/Cpin 3열 |
 | `<코너>.path_context_si_compact.by_path.rpt` | `5c_report.py` (묶음 2) | crosstalk 14열 |
 
-이 폴더는 실제 산출물(BoomCore, TT_0p8V_25C)에서 **앞부분만 잘라 온 것**이다.
-줄 수만 줄였고 형식과 값은 실물 그대로다.
+**BoomCore 실물 그대로다.** 자르지 않았다. 코너 하나(TT_0p8V_25C)를 끝까지
+돌린 결과 두 파일을 그대로 넣었다.
 
-| 파일 | 여기 | 실물 |
+| 파일 | 크기 | 내용 |
 |---|---|---|
-| `..._fixed_annotated.txt` | 경로 2개 (35 KB) | 경로 294개 · 4.3 MB |
-| `...by_path.rpt` | 경로 1개 (7 KB) | 경로 294개 · 16,577줄 · 2.0 MB |
+| `..._fixed_annotated.txt` | 4.3 MB | 경로 294개 |
+| `...by_path.rpt` | 2.0 MB | 경로 294개, 쌍 16,577줄 |
 
-BoomCoreV3 의 큰 코너(경로 3,000개)에서는 annotated 가 40 MB 정도 된다.
+경로 수가 많아지면 그만큼 커진다. BoomCoreV3 의 큰 코너(경로 3,000개)에서는
+annotated 가 40 MB, crosstalk 이 36 MB 다.
 
 ---
 
