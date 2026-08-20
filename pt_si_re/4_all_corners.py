@@ -197,7 +197,8 @@ PHASES = {
 
 
 NEXT_HINT = {
-    "1": ("annotation 이 끝났습니다. 이어서 crosstalk 을 돌리세요:",
+    "1": ("annotation 이 끝났습니다. **crosstalk 은 아직 안 돌았습니다.**",
+          "이어서 이걸 치세요:",
           "    %(py)s 4_all_corners.py --root %(root)s --phase 2",
           "(담당자분께 받은 xtalk/ 가 코너 폴더마다 있어야 합니다.",
           " 먼저 확인하려면 8_check_xtalk.py --root %(root)s)"),
@@ -346,7 +347,9 @@ def run_corner(name, d, steps, args, spef, cmap, sink, progress=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="round2 아래 코너 폴더 전부에 2a/2b/2c/3 을 돌린다.")
+        description="round2 아래 코너 폴더 전부에 한 묶음을 돌린다. "
+                "--phase 1 = 2a/2b/2c(annotation), --phase 2 = 5a/5b/5c(crosstalk). "
+                "한 번에 다 돌지 않으므로 두 번 친다.")
     ap.add_argument("--root", required=True,
                     help="코너 폴더들이 **들어 있는 상위 폴더** (예: round2). 코너 폴더 하나가 아니다")
     ap.add_argument("--spef-root", "--spef-dir", default=None,
@@ -361,7 +364,9 @@ def main():
                          "%s 가 있으면 그쪽이 우선한다. 안 주면 " % CPIN_MAP_NAME +
                          "각 코너의 pin_attr.txt 를 쓴다")
     ap.add_argument("--phase", default="1", choices=["1", "2"],
-                    help="1=2a~5a(기본), 2=5b~5c. 사이에 pt_shell 을 한 번 다녀온다")
+                    help="1=2a 2b 2c (annotation, 기본), 2=5a 5b 5c (crosstalk). "
+                         "**한 번에 다 돌지 않는다 -- 두 번 쳐야 한다.** "
+                         "둘은 서로 독립이라 순서는 상관없다")
     ap.add_argument("--only", default=None,
                     help="그 묶음 안에서 일부만. 쉼표로 (예: 2a,2b)")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
