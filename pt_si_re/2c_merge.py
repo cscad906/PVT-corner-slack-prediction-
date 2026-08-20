@@ -274,13 +274,13 @@ def main():
                         if pin and pin not in na_pins:
                             na_pins.append(pin)
 
-            m_net = NET_ROW_RE.match(clean)
-            if m_net:
-                fout.write("%s %10s %10s %10s %10s %10s %10s"
-                           % (m_net.group("prefix"), "", "", "", sd, sr, sc))
-            else:
-                fout.write("%s %10s %10s %10s"
-                           % (clean.ljust(header_len), sd, sr, sc))
+            # 3열을 **헤더 길이에 맞춰** 붙인다. 예전에는 net 줄만 따로
+            # "prefix + 빈 칸 3개 + 값" 으로 썼는데, 그건 리포트에 Cap 뒤로
+            # 열이 정확히 3개(Trans/Incr/Path)일 때만 헤더 길이와 맞는다.
+            # 리포트 열이 늘거나 줄면 그만큼 어긋난다. 헤더 길이로 채우면
+            # 열이 몇 개든 항상 헤더 아래에 선다.
+            fout.write("%s %10s %10s %10s"
+                       % (clean.ljust(header_len), sd, sr, sc))
 
         # 원본이 개행으로 끝났으면 예전 코드에서는 split 이 만든 마지막 빈
         # 원소 때문에 개행이 하나 더 붙었다. 그 형식을 그대로 지킨다.
