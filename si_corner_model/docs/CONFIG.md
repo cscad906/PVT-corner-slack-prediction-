@@ -25,7 +25,7 @@ base(OLS) 튜닝은 [OLS.md](OLS.md), 리포트 파싱은 [PARSING.md](PARSING.m
 | `temps[].tag` | — | 모델/폴더 이름에 쓰일 문자열 (`125`, `m25`) |
 | `temps[].token` | `tag` | **파일명 안의** 온도 토큰. tag 와 달라도 됨 |
 | `temps[].levels` | — | 그 온도에 존재하는 BEOL 레벨. **온도마다 달라도 된다** |
-| `mode` | `setup` | **setup/hold 를 정하는 한 줄.** 읽을 폴더(`files.subdir`, `files.crosstalk_subdir`)와 쓸 폴더(`out.*`)가 전부 여기서 유도된다 |
+| `mode` | `setup` | **setup/hold 를 정하는 한 줄.** 읽을 폴더(`files.subdir`, `files.crosstalk_subdir`)와 쓸 폴더(`out.*`)가 전부 여기서 유도된다. 한 번만 바꿔 돌리려면 파일을 고치지 말고 `run.sh <단계> --mode hold` (또는 `env SI_MODE=hold`) |
 | `out.cache` | `auto` | `auto` = `cache/<mode>/<design>/<temp>/dataset.npz` |
 | `out.runs` | `auto` | `auto` = `runs/<mode>/<design>/<temp>/` + `runs/<mode>/_all/` |
 | `files.subdir` | `auto` | `auto` = `<mode>`. 폴더명이 다르면 직접 적는다 (`reports`) |
@@ -159,7 +159,7 @@ corners:
 | `crosstalk_subdir` | `null` | SI 리포트 위치. `null` = SI 없이 학습 |
 | `crosstalk_regex` / `crosstalk_suffix` | — | 위와 동일 형식 |
 | `annotated_contains` / `crosstalk_contains` | `null` | annotated 와 crosstalk 이 **같은 폴더**에 있을 때 파일명으로 구분 (pt_si_re 배치) |
-| `parsing.cell_taxonomy` | `{}` | 비-SAED 라이브러리 셀 이름 규칙 ([PARSING.md §3](PARSING.md)) |
+| `parsing.cell_taxonomy` | `{}` | 셀 이름 규칙. **비워두면 build 가 실제 셀 이름을 보고 알아서 정한다** (SAED14 내장 표가 60% 이상 맞으면 그것, 아니면 이름에서 규칙을 유도). 어느 쪽을 썼는지 `[CELLS]` 줄에 찍힌다. 직접 적으면 자동 판정을 끈다 ([PARSING.md §3](PARSING.md)) |
 | `parsing.clock_pins` | `[CK,CLK,CP,C]` | FF 클럭핀 후보. 못 찾으면 `launch_clk`/`capture_clk` 가 조용히 NaN |
 | `parsing.ff_output_pins` | `[Q,QN,QB,Z]` | FF 출력핀 후보. launch_clock→data 전환 지점 |
 | `parsing.strip_path_idx` | `auto` | 경로 키의 `#번호` 를 뗄지. `auto` = 떼서 중복 생기면 유지 |
@@ -174,7 +174,7 @@ corners:
 
 | 키 | 기본 | 의미 |
 |---|---|---|
-| `v_order` / `level_order` | `auto` | 다항식 차수. auto = 식별 가능한 최대치 |
+| `v_order` / `level_order` | `auto` | 다항식 차수. auto = 식별 가능한 최대치 (전압은 6, 레벨은 2 상한). 실제 차수는 `select_basis` 가 seen-LOO 로 고른다 |
 | `cross_terms` / `cross_max_degree` | true / 2 | 교차항 사용 / 총차수 상한 |
 | `weighting` | `adaptive` | `plain` \| `local` \| `adaptive` |
 | `bandwidth` | — | `local` 일 때 필수 |

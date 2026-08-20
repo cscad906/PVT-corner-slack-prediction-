@@ -174,6 +174,16 @@ mode: setup     # -> 읽기 <root>/<회로>/setup/ + setup/xtalk/ , 쓰기 cache
 mode: hold      # -> 읽기 <root>/<회로>/hold/  + hold/xtalk/  , 쓰기 cache/hold/  runs/hold/
 ```
 
+파일을 안 고치고 그 실행에만 적용하려면 `--mode` 를 쓴다 (권장):
+
+```bash
+bash scripts/run.sh all                    # config 의 mode (보통 setup)
+bash scripts/run.sh all --mode hold        # 이 실행만 hold
+env SI_MODE=hold bash scripts/run.sh all   # 같은 뜻
+```
+
+`--mode` 는 되돌리는 걸 잊을 일이 없어서 안전하다. config 를 직접 고치는 방식도 된다:
+
 ```bash
 vi config.yaml                 # mode: setup
 bash scripts/run.sh all
@@ -503,8 +513,12 @@ MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
 
 ### 학습을 중간에 끊었을 때
 
-**끊어도 된다. 그때까지의 최선이 남아 있다.** `best.pt` 는 2 epoch 마다,
-성적이 좋아질 때만 덮어쓰므로 언제 끊든 마지막 개선 지점이 파일로 남는다.
+**끊어도 된다. 그때까지의 최선이 남아 있다.** `best.pt` 는 **매 epoch**,
+히든 코너 성적이 좋아질 때만 덮어쓰므로 언제 끊든 마지막 개선 지점이 파일로 남는다.
+
+> 주의: epoch 을 히든 코너로 고르므로 **보고되는 히든 수치는 낙관적이다** —
+> 고르는 데 쓴 그 값의 최소치이기 때문이다. 학습이 끝날 때 그 사실을 함께 찍고,
+> `summary.json` 에 `selected_on: hidden_corners` 로 남는다.
 
 ```bash
 # Ctrl-C 로 끊은 뒤 -- 학습을 다시 할 필요 없다
@@ -631,7 +645,7 @@ bash scripts/run.sh sweep      # lambda_si {0,0.1,1,10} 비교
 [ ] STEP 7  파싱 0개면: 코너 간 경로 집합 동일한지 확인
 [ ] STEP 8  SI: crosstalk_subdir 채우고 재빌드 -> S=... 확인
 [ ] 학습을 중간에 끊었다면: bundle -> predict -> merge (predict 를 꼭 다시)
-[ ] hold 도 돌린다면: config 의 mode: setup -> hold 로 바꾸고 위를 반복
+[ ] hold 도 돌린다면: `--mode hold` 를 붙여 위를 반복 (또는 config 의 mode 를 바꾼다)
 ```
 
 ## 어디를 볼지

@@ -143,7 +143,24 @@ EOF
    670  gt3_6t_oai211_x1_rvt
 ```
 
-`config.yaml` 에 이렇게 적는다:
+**보통은 아무것도 안 적어도 된다.** `cell_taxonomy` 를 비워두면 build 가 실제
+셀 이름을 보고 스스로 정한다:
+
+- SAED14 내장 표가 이름의 60% 이상을 설명하면 → 그 표를 쓴다 (패밀리가 진짜 함수명)
+- 아니면 → 이름에서 규칙을 유도한다. `_` 로 나눈 토큰 중 **가장 변별력이 큰 위치**를
+  패밀리로 삼고(벤더 토큰은 다 같아서, drive 토큰은 숫자라서 자동 탈락),
+  drive 는 후보 패턴 중 가장 잘 맞는 것을 고른다.
+
+어느 쪽을 썼는지 build 로그의 `[CELLS]` 줄에 예시와 함께 찍힌다:
+
+```
+[CELLS] 232 distinct cell names; built-in SAED14 taxonomy covers 100% -- using it
+[CELLS] 41 distinct cell names; SAED14 taxonomy covers only 0% -- deriving rules from the names instead
+        family from '_'-token #2, 38 families; drive from 'X(\d+(?:P\d+)?)(?:_|$)' (100% of names)
+        e.g. SEC9TCPDLL_HVT_NAND2X4_A9PP96CPDLL_C14_R2 -> NANDX/4
+```
+
+자동 판정이 마음에 안 들 때만 `config.yaml` 에 직접 적는다 (적으면 자동 판정은 꺼진다):
 
 ```yaml
 parsing:

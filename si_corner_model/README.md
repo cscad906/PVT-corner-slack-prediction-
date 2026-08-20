@@ -57,6 +57,7 @@ bash scripts/run.sh bundle         # ⑦ 회로당 가중치 한 파일로 묶�
 ```
 
 회로/온도만 골라서: `bash scripts/run.sh train --design MFC_Timing_Report --temp 125`
+setup/hold 를 그 실행만: `bash scripts/run.sh all --mode hold` (또는 `env SI_MODE=hold`)
 경로만 임시로: `env SI_ROOT=/real/path bash scripts/run.sh list`
 (csh/tcsh 에서는 `env` 를 꼭 붙인다 -- `VAR=값 명령` 접두는 bash/zsh 전용)
 
