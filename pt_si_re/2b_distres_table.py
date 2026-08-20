@@ -278,18 +278,22 @@ def load_value_table(path, kind, scale=1.0):
 
     tab = {}
     bad = 0
+    bad_val = 0          # 넷 이름은 읽었는데 값이 숫자가 아닌 줄
     for ln in body:
         c = split(ln)
         if len(c) < need or not c[i_net].strip():
             bad += 1
             continue
         v = num(c[i_val], scale)
+        if v is None:
+            bad_val += 1
         for nv in name_variants(c[i_net]):
             k = (nv, c[i_drv].strip(), c[i_recv].strip()) if pair else nv
             if k not in tab:
                 tab[k] = v
 
-    st = {"rows": len(body), "bad": bad, "keys": len(tab),
+    st = {"rows": len(body), "bad": bad, "keys": len(tab), "bad_val": bad_val,
+          "col": i_val,
           "delim": {None: "whitespace", ",": "comma", "\t": "tab",
                     ";": "semicolon", "|": "pipe"}[delim],
           "header": has_header, "pair": pair}
@@ -378,6 +382,13 @@ def main():
           % (rst["rows"], rst["keys"], rst["bad"], rst["delim"], rst["header"]))
     print("           dist rows=%d keys=%d bad=%d  delim=%s header=%s"
           % (dst["rows"], dst["keys"], dst["bad"], dst["delim"], dst["header"]))
+    for nm, st in (("res", rst), ("dist", dst)):
+        if st.get("bad_val"):
+            print("  [주의] %s 표에서 %d줄의 값이 숫자가 아닙니다 "
+                  "(%d번째 열을 값으로 봤습니다)."
+                  % (nm, st["bad_val"], st["col"] + 1))
+            print("         열이 3개 이상이면 헤더를 넣어 주시거나 "
+                  "--%s-table 로 값 열이 2번째인 파일을 주세요." % nm)
     tab, pair = merge_value_tables(rt, rp, dt, dp)
     only_res = len([k for k in rt if k not in dt])
     only_dist = len([k for k in dt if k not in rt])
@@ -404,6 +415,7 @@ def main():
     n = hit_d = hit_r = 0
     squashed = 0
     tmp = []
+    miss_d, miss_r = [], []      # 못 채운 넷 이름 예시
     for idx, net, drv, rcv in rows:
         n += 1
         if net in many:
@@ -416,8 +428,12 @@ def main():
                 break
         if dist is not None:
             hit_d += 1
+        elif len(miss_d) < 5 and net not in miss_d:
+            miss_d.append(net)
         if res is not None:
             hit_r += 1
+        elif len(miss_r) < 5 and net not in miss_r:
+            miss_r.append(net)
         tmp.append((idx, net, dist, res))
 
     with wopen(out) as fh:
@@ -429,7 +445,11 @@ def main():
     print("  out       : %s" % out)
     print("  rows      : %d" % n)
     print("  Dist found: %d   (miss %d)" % (hit_d, n - hit_d))
+    if miss_d:
+        print("     못 찾은 넷 예: %s" % ", ".join(miss_d[:5]))
     print("  Res  found: %d   (miss %d)" % (hit_r, n - hit_r))
+    if miss_r:
+        print("     못 찾은 넷 예: %s" % ", ".join(miss_r[:5]))
     if not pair:
         print("  squashed  : %d rows (%.1f%%) sit on a net with >1 receiver"
               % (squashed, 100.0 * squashed / n if n else 0.0))
