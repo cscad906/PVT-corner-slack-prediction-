@@ -106,7 +106,8 @@ temps:                              # Temperature = split dimension (own model).
 #                    write cache/hold/  , runs/hold/
 #   setup and hold are split dimensions and cannot be mixed in one run. Change
 #   this line and re-run; the output paths follow, so setup results are never
-#   overwritten.
+#   overwritten. For a one-off run, override it without editing the file:
+#     bash scripts/run.sh all --mode hold      (or env SI_MODE=hold)
 mode: setup
 
 out:                                # Rarely touched. auto = follows mode.

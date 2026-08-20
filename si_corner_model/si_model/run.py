@@ -72,6 +72,10 @@ docs/START.md top to bottom.
   Options
     --design <circuit>       that circuit only
     --temp <temp tag>        that temperature only
+    --mode setup|hold        override the `mode` line for this run. Switches
+                             where reports are READ and where output is
+                             WRITTEN together, so setup results cannot be
+                             overwritten by a hold run
     --corners hidden|seen|all   corners for predict/merge (default hidden)
     --config <file>          a different project config (default config.yaml)
 
@@ -87,6 +91,7 @@ docs/START.md top to bottom.
 
   Changing paths without editing files
     env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
+    env SI_MODE=hold bash scripts/run.sh all      # same as --mode hold
 
   Docs
     docs/START.md    from the very beginning (per folder-structure case)
@@ -100,6 +105,9 @@ docs/START.md top to bottom.
 def load_project(fp: str) -> dict:
     with open(fp, encoding="utf-8") as f:
         p = yaml.safe_load(f) or {}
+    env_mode = os.environ.get("SI_MODE")
+    if env_mode:
+        p["mode"] = env_mode
     root = os.environ.get("SI_ROOT") or p.get("root") or "auto"
     if str(root) == "auto":
         root = os.path.dirname(REPO_ROOT)
@@ -1001,6 +1009,10 @@ def main(argv=None):
     ap.add_argument("--design", default=None, help="this circuit only")
     ap.add_argument("--temp", default=None, help="this temperature only")
     ap.add_argument("--corners", default="hidden", choices=["hidden", "seen", "all"])
+    ap.add_argument("--mode", default=None, choices=["setup", "hold"],
+                    help="setup or hold for this run, overriding config `mode`. "
+                         "Sets where reports are read AND where output is "
+                         "written, so the two cannot drift apart")
     ap.add_argument("--file", default=None,
                     help="report file to inspect in the check stage "
                          "(omit to use the first file from the config)")
@@ -1011,6 +1023,12 @@ def main(argv=None):
         print(HELP)
         return 0
     p = load_project(args.config)
+    if args.mode:
+        # Overriding here rather than editing the file keeps a hold run from
+        # being left switched on by accident -- `mode` drives the cache and runs
+        # directories too, so a forgotten flip would have a later setup run read
+        # and write the hold tree.
+        p["mode"] = args.mode
     models = select(expand(p), args.design, args.temp)
 
     if args.stage == "list":

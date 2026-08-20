@@ -292,6 +292,33 @@ def test_mode_switches_every_path_at_once(project):
     assert m["cfg"]["train"]["out_dir"].startswith(os.path.join("runs", "hold") + os.sep)
 
 
+def test_env_si_mode_overrides_the_config(project, monkeypatch, tmp_path):
+    """SI_MODE must switch setup/hold without editing the file.
+
+    `mode` drives the cache and runs directories as well as the report
+    location, so the value has to reach expansion through the same single
+    point -- an override that moved only the read path would have a hold run
+    write into the setup tree."""
+    import yaml
+
+    from si_model.run import load_project
+
+    fp = tmp_path / "p.yaml"
+    project["mode"] = "setup"
+    with open(fp, "w") as f:
+        yaml.safe_dump(project, f)
+
+    monkeypatch.setenv("SI_MODE", "hold")
+    d = expand(load_project(str(fp)))[0]["cfg"]
+    assert d["data"]["annotated_dir"].endswith(os.sep + "hold")
+    assert d["data"]["cache"].startswith(os.path.join("cache", "hold") + os.sep)
+    assert d["train"]["out_dir"].startswith(os.path.join("runs", "hold") + os.sep)
+
+    monkeypatch.delenv("SI_MODE")
+    d = expand(load_project(str(fp)))[0]["cfg"]
+    assert d["data"]["annotated_dir"].endswith(os.sep + "setup")
+
+
 def test_mode_does_not_override_an_explicit_subdir(project):
     """Layouts whose folders are not named setup/hold must work too -- any
     value other than auto is used verbatim."""
