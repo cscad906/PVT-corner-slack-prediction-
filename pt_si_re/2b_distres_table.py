@@ -138,24 +138,39 @@ def fmt(v, nd=12):
 
 
 def scan_report(rpt):
-    """리포트 -> [(줄번호, 넷, 드라이버핀, 리시버핀)]
+    """리포트 -> [(줄번호, 넷, 드라이버핀, 리시버핀, 구간)]
 
     '(net)' 줄 바로 앞 핀이 드라이버, 바로 뒤 핀이 리시버. 2a/2b 와 같은 규칙이다.
+
+    구간은 launch_clock / data / capture_clock 이다. 5a 의 파서와 같은 규칙으로
+    가른다. **클럭 구간의 넷은 받은 표에 없는 것이 정상**이라(현장에서 데이터
+    경로만 뽑아 주신다), 빠진 것을 셀 때 데이터 구간과 나눠 봐야 한다.
     """
     out = []
     prev_pin = None
     pending = None
+    seg = ""
+    seen_data = False
     with open(rpt, "r", errors="ignore") as f:
         for idx, line in enumerate(f):
+            stripped = line.strip()
+            if stripped.startswith("data arrival time"):
+                seg = "after_data"
+            if stripped.startswith("clock ") and seg in ("", "after_data"):
+                seg = "capture_clock" if seen_data else "launch_clock"
+
             m = OBJ_RE.match(line)
             if not m:
                 continue
             name, tag = m.group(1), m.group(2).lower()
             if tag == "net":
-                pending = (idx, name, prev_pin)
+                pending = (idx, name, prev_pin, seg)
                 continue
+            if not seen_data and "<-" in line:
+                seg = "data"
+                seen_data = True
             if pending is not None:
-                out.append((pending[0], pending[1], pending[2], name))
+                out.append((pending[0], pending[1], pending[2], name, pending[3]))
                 pending = None
             prev_pin = name
     return out
@@ -408,16 +423,22 @@ def main():
     # 넷 이름만으로 키를 잡을 때, 리시버가 여럿인 넷이 몇 줄이나 되는지 센다.
     # 그 줄들은 전부 같은 값을 받게 되므로 조용히 넘기지 않는다.
     recv_of = {}
-    for _idx, net, _drv, rcv in rows:
+    for _idx, net, _drv, rcv, _sg in rows:
         recv_of.setdefault(net, set()).add(rcv)
     many = set(n for n, r in recv_of.items() if len(r) > 1)
 
     n = hit_d = hit_r = 0
     squashed = 0
     tmp = []
-    miss_d, miss_r = [], []      # 못 채운 넷 이름 예시
-    for idx, net, drv, rcv in rows:
+    miss_d, miss_r = [], []      # 못 채운 넷 이름 예시 (데이터 구간만)
+    n_data = 0                   # 데이터 구간 줄 수
+    miss_data = 0                # 그중 못 채운 줄 수
+    miss_clk = 0                 # 클럭 구간에서 못 채운 줄 수 (정상)
+    for idx, net, drv, rcv, seg in rows:
         n += 1
+        is_data = (seg == "data")
+        if is_data:
+            n_data += 1
         if net in many:
             squashed += 1
         dist = res = None
@@ -428,12 +449,17 @@ def main():
                 break
         if dist is not None:
             hit_d += 1
-        elif len(miss_d) < 5 and net not in miss_d:
+        elif is_data and len(miss_d) < 5 and net not in miss_d:
             miss_d.append(net)
         if res is not None:
             hit_r += 1
-        elif len(miss_r) < 5 and net not in miss_r:
+        elif is_data and len(miss_r) < 5 and net not in miss_r:
             miss_r.append(net)
+        if dist is None or res is None:
+            if is_data:
+                miss_data += 1
+            else:
+                miss_clk += 1
         tmp.append((idx, net, dist, res))
 
     with wopen(out) as fh:
@@ -447,7 +473,7 @@ def main():
     # 줄 수가 아니라 **넷 이름 기준**으로도 알려 준다. 담당자께 "표에 이만큼이
     # 빠졌습니다" 라고 말할 때 필요한 숫자가 이쪽이다. 클럭 넷은 경로마다
     # 반복해서 나오므로, 그것만 빠져도 줄 수로는 절반이 날아간다.
-    rep_nets = set(net for _i, net, _d, _r in rows)
+    rep_nets = set(net for _i, net, _d, _r, sg in rows if sg == "data")
     found_nets = set()
     for net in rep_nets:
         for v in name_variants(net):
@@ -456,14 +482,17 @@ def main():
                 found_nets.add(net)
                 break
     if not pair:
-        print("  넷 이름 기준: 리포트 %d개 중 표에 있는 것 %d개 (없는 것 %d개)"
+        print("  데이터 구간 넷: 리포트 %d개 중 표에 있는 것 %d개 (없는 것 %d개)"
               % (len(rep_nets), len(found_nets), len(rep_nets) - len(found_nets)))
     print("  Dist found: %d   (miss %d)" % (hit_d, n - hit_d))
-    if miss_d:
-        print("     못 찾은 넷 예: %s" % ", ".join(miss_d[:5]))
     print("  Res  found: %d   (miss %d)" % (hit_r, n - hit_r))
-    if miss_r:
-        print("     못 찾은 넷 예: %s" % ", ".join(miss_r[:5]))
+    print("")
+    print("  못 채운 줄을 구간으로 나누면")
+    print("    클럭 구간  : %d 줄   <- 표에 없는 것이 정상입니다" % miss_clk)
+    print("    데이터 구간: %d 줄  (데이터 구간 전체 %d 줄)" % (miss_data, n_data))
+    if miss_d or miss_r:
+        ex = miss_d or miss_r
+        print("      못 찾은 넷 예: %s" % ", ".join(ex[:5]))
     if not pair:
         print("  squashed  : %d rows (%.1f%%) sit on a net with >1 receiver"
               % (squashed, 100.0 * squashed / n if n else 0.0))
@@ -471,13 +500,16 @@ def main():
 
     if n == 0:
         code("E-NOROW", "[ FAILED ] the report has no (net) lines.")
-    if hit_r == 0 and hit_d == 0:
+    if hit_r == 0 and hit_d == 0:   # 한 줄도 못 채웠으면 표가 이 디자인 것이 아니다
         code("E-TABLE0",
              "[ FAILED ] not one net name in the table matched the report.")
-    if hit_r < n * 0.9:
+    # 판정은 **데이터 구간만** 본다. 클럭 구간은 받은 표에 없는 것이 정상이라,
+    # 그걸 같이 세면 매번 경고가 떠서 진짜 문제를 가린다.
+    if n_data and miss_data > n_data * 0.1:
         code("W-RES",
-             "[ CHECK ] Res is empty on %d rows (%.0f%%)."
-             % (n - hit_r, 100.0 * (n - hit_r) / n))
+             "[ CHECK ] 데이터 구간에서 %d줄이 비었습니다 (%.0f%%)."
+             % (miss_data, 100.0 * miss_data / n_data),
+             "          클럭 구간 %d줄은 정상이라 빼고 센 숫자입니다." % miss_clk)
     if not pair and squashed:
         code("W-NETKEY",
              "[ CHECK ] %d rows (%.1f%%) share a net with other receivers,"

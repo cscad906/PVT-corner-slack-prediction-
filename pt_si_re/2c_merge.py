@@ -199,17 +199,34 @@ def main():
     # 줄마다 하는 일이 앞뒤 줄과 무관해서 흘려 써도 결과는 같다.
     header_len = 80
     n_net = n_full = 0
-    na_dr = na_cpin = 0     # N/A 가 SPEF 쪽인지 Cpin 쪽인지
+    na_dr = na_cpin = 0     # N/A 가 Dist/Res 쪽인지 Cpin 쪽인지
     na_pins = []            # Cpin 이 빈 리시버 핀 예시
+    n_data = na_dr_data = na_dr_clk = 0     # Dist/Res N/A 를 구간으로 나눠
 
     with open(rpt, "r", errors="ignore") as fin, wopen(out) as fout:
         # 원본은 "\n".join(outlines) 였다 -- 줄 **사이**에만 개행이 들어가고
         # 마지막 줄 뒤에는 없다. 흘려 쓸 때도 그 형식을 그대로 지킨다.
         first = True
         ended_nl = False
+        seg = ""            # launch_clock / data / capture_clock
+        seen_data = False
         for idx, line in enumerate(fin):
             ended_nl = line.endswith("\n")
             clean = line.rstrip("\n").rstrip("\r")
+
+            # 구간을 가른다. 5a 의 파서와 같은 규칙이다.
+            # **클럭 구간의 넷은 받은 표에 Dist/Res 가 없는 것이 정상**이라
+            # (현장에서 데이터 경로만 뽑아 주신다), N/A 를 셀 때 나눠 봐야 한다.
+            st = clean.strip()
+            if st.startswith("data arrival time"):
+                seg = "after_data"
+            if st.startswith("clock ") and seg in ("", "after_data"):
+                seg = "capture_clock" if seen_data else "launch_clock"
+            if not seen_data and "<-" in clean and OBJ_RE.match(clean):
+                _m0 = OBJ_RE.match(clean)
+                if _m0.group(2).lower() != "net":
+                    seg = "data"
+                    seen_data = True
             if first:
                 first = False
             else:
@@ -231,6 +248,9 @@ def main():
                 continue
 
             n_net += 1
+            is_data = (seg == "data")
+            if is_data:
+                n_data += 1
             sd, sr = dr.get(idx, ("", ""))
             (sc,) = cpin.get(idx, ("",))
             sd = fmt4(sd) or "N/A"
@@ -243,6 +263,10 @@ def main():
                 # Cpin 은 Cpin 표에서 오므로 조치할 곳이 완전히 다르다.
                 if sd == "N/A" or sr == "N/A":
                     na_dr += 1
+                    if is_data:
+                        na_dr_data += 1
+                    else:
+                        na_dr_clk += 1
                 if sc == "N/A":
                     na_cpin += 1
                     if len(na_pins) < 6:
@@ -271,6 +295,18 @@ def main():
     print("  3열 다 있음: %d" % n_full)
     print("  일부 N/A   : %d" % (n_net - n_full))
     print("-" * 68)
+    if na_dr_clk:
+        print("  그중 클럭 구간의 Dist/Res N/A: %d (정상 -- 표에 없는 것이 맞습니다)"
+              % na_dr_clk)
+    # 클럭 구간의 Dist/Res 는 원래 표에 없다. 그것만 비었으면 정상으로 본다.
+    if n_full + na_dr_clk == n_net and not na_cpin:
+        code("OK-MERGE",
+             "[ 정상 ] 3열 %d/%d. 클럭 구간 %d줄은 Dist/Res 가 원래 없습니다."
+             % (n_full, n_net, na_dr_clk),
+             "         다음:  %s 5a_contexts.py --dir %s" % (sys.executable, d))
+        # code() 는 OK- 에서 그냥 돌아온다. 여기서 안 멈추면 아래 W-NA 까지 찍혀
+        # 정상인데 경고가 같이 뜬다.
+        sys.exit(0)
     if n_full == n_net:
         code("OK-MERGE",
              "[ 정상 ] 3열 %d/%d. 다음:  %s 5a_contexts.py --dir %s"
@@ -289,12 +325,14 @@ def main():
             msg.append("            2a 화면의 '1열 판별' 과 'Cpin N/M' 도 함께.")
             msg.append("            get_pins 범위가 좁았거나 이름 규약이 다릅니다.")
         if na_dr:
-            msg.append("  [Dist/Res] %d줄 -- SPEF 에서 못 찾았습니다." % na_dr)
-            msg.append("         -> SPEF 가 이 리포트와 같은 디자인/코너인지,")
-            msg.append("            저항(*RES)을 포함해 뽑았는지 보세요.")
-            msg.append("            넷 단위로 더 잘게 나누려면:")
-            msg.append("              %s 9_diagnose.py --dir %s"
-                       % (sys.executable, d))
+            msg.append("  [Dist/Res] %d줄 -- 받은 표에서 못 찾았습니다." % na_dr)
+            msg.append("             그중 클럭 구간 %d줄은 정상입니다"
+                       % na_dr_clk)
+            msg.append("             (표에는 데이터 경로만 들어 있습니다).")
+            if na_dr_data:
+                msg.append("             데이터 구간 %d줄 (전체 %d줄)이 문제입니다."
+                           % (na_dr_data, n_data))
+                msg.append("         -> 2b 화면의 '못 찾은 넷 예' 를 표에서 찾아보세요.")
         code("W-NA", *msg)
 
 if __name__ == "__main__":
