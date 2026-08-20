@@ -559,13 +559,26 @@ python3 4_all_corners.py --root round2 --phase 1
 
 ### 받은 표를 어디에 어떤 이름으로 두나
 
-`2a` 의 `cpin_map.txt` 와 같은 규약이다. **코너 폴더 안에 `resdist_map.txt`** 로 둔다.
+`2a` 의 `cpin_map.txt` 와 같은 규약이다. **코너 폴더 안에** 둔다. 받은 모양에 따라
+파일이 하나일 수도 둘일 수도 있다.
+
+| 받은 모양 | 파일 이름 | 열 |
+|---|---|---|
+| 한 파일 | `resdist_map.txt` | `net / res / dist` |
+| 따로 | `res_map.txt` + `dist_map.txt` | 각각 `net / 값` |
+
+따로 받으면 넷 이름으로 합쳐서 쓴다. 한쪽에만 있는 넷은 그쪽 값만 채우고 나머지는
+`N/A` 로 남는다 — 조용히 0 을 넣지 않고, 몇 개가 그런지 화면에 찍는다.
+합본이 있으면 합본을 먼저 쓴다.
 
 ```
 round2/TT_0p8V_25C/
   TT_0p8V_25C.rpt      리포트 (원래 있던 것)
-  cpin_map.txt         받은 Cpin 표   -> 2a
-  resdist_map.txt      받은 Dist/Res 표 -> 2b_distres_table.py     ★ 이것
+  cpin_map.txt         받은 Cpin 표      -> 2a
+  resdist_map.txt      받은 Res/Dist 표  -> 2b          ★ 한 파일로 받았을 때
+     또는
+  res_map.txt          받은 Res 표       -> 2b          ★ 따로 받았을 때
+  dist_map.txt         받은 Dist 표      -> 2b
 ```
 
 **코너 폴더마다 하나씩 있어야 한다.** `cpin_map.txt` 와 같다.

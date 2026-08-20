@@ -37,7 +37,9 @@ crosstalk 은 Dist/Res/Cpin 을 안 씁니다. annotated 파일이 없어도 원
 **받은 표는 코너 폴더에 정해진 이름으로 둡니다.** 만들어 주는 코드는 없습니다.
 
 - `cpin_map.txt` → `2a_cpin.py`
-- `resdist_map.txt` → `2b_distres_table.py`  (Res 는 온도마다 다른 표가 필요)
+- `resdist_map.txt` → `2b_distres_table.py`  (한 파일로 받았을 때)
+- `res_map.txt` + `dist_map.txt` → `2b_distres_table.py`  (따로 받았을 때)
+  Res 는 온도마다 다른 표가 필요합니다
 - `design.spef` → `2b_distres.py` (예전 방식. 지금은 안 씀)
 
 ## 2b 는 세 가지입니다 — 셋 다 `distres.tsv` 를 만듭니다
