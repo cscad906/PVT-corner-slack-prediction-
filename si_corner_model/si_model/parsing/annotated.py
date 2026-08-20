@@ -32,6 +32,25 @@ from dataclasses import dataclass, field
 # regexes are the place to fix it (see docs/PARSING.md section 4); `bash scripts/run.sh
 # check <file>` reports which of them match how many lines.
 _TAIL = r"(?:\s+\S+)*\s*$"
+# PrimeTime prints N/A (and some flows a bare --) where a value could not be
+# computed -- an un-annotated net, a check that does not apply. Such a token
+# still OCCUPIES its column, so a row that rejects it does not merely lose that
+# one value: the whole row stops matching and the stage disappears from the
+# path. For a cell row that also shifts the net-to-cell pairing behind it. So a
+# filler is accepted wherever a number is accepted and read as 0.0, which is
+# what an absent Dist/Res/Cpin already did.
+_NA = r"(?:N/?A|n/?a|--+)"
+_VAL = r"(?:-?\d+\.\d+|" + _NA + r")"
+
+
+def _val(tok: "str | None") -> float:
+    """One numeric-column token -> float; a filler (or nothing) -> 0.0."""
+    if not tok:
+        return 0.0
+    try:
+        return float(tok)
+    except ValueError:
+        return 0.0
 # Skip anything that is not the start of a number. Lets a label sit BETWEEN the
 # keyword and its value -- the statistical case, e.g.
 #   'data arrival time (mean)   1.5000'
@@ -65,7 +84,7 @@ CLOCK_EDGE_RE = re.compile(r"^\s+clock \S+ \(rise edge\)")
 # the last value is always Path; Incr and Trans fill in when present.
 CELL_RE = re.compile(
     r"^\s+(\S+/\S+) \((\S+)\)( <-)?\s+"
-    r"((?:-?\d+\.\d+\s+(?:&\s+)?)+)([rf])(?:\s|$)"
+    r"((?:" + _VAL + r"\s+(?:&\s+)?)+)([rf])(?:\s|$)"
 )
 
 # A row whose point text is LONGER than the Point column pushes the whole
@@ -134,7 +153,7 @@ def _cell_nums(blob: str) -> "tuple[float, float, float]":
     Missing leading columns become 0.0 (they are additive/feature inputs, and a
     blank column means the tool reported nothing there, not a real zero delay).
     """
-    v = [float(x) for x in blob.replace("&", " ").split()]
+    v = [_val(x) for x in blob.replace("&", " ").split()]
     if len(v) >= 3:
         return v[-3], v[-2], v[-1]
     if len(v) == 2:
@@ -230,8 +249,8 @@ def _is_header(line: str) -> bool:
 NET_OBJ_RE = re.compile(r"^\s+(\S+) \(net\)")
 # net row: <net> (net)  fanout cap [dist res cpin]  (BEOL parasitics present)
 NET_RE = re.compile(
-    r"^\s+(\S+) \(net\)\s+(\d+)\s+(\d+\.\d+)"
-    r"(?:\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+\.\d+))?" + _TAIL
+    r"^\s+(\S+) \(net\)\s+(\d+|" + _NA + r")\s+(" + _VAL + r")"
+    r"(?:\s+(" + _VAL + r")\s+(" + _VAL + r")\s+(" + _VAL + r"))?" + _TAIL
 )
 
 
@@ -436,10 +455,8 @@ def parse_annotated(fp: str, with_stages: bool = False) -> "dict[int, AnnotatedP
                     if not m2:
                         continue
                     _, fo, cp, dist, res, cpin = m2.groups()
-                    fanout, cap = float(fo), float(cp)
-                    dist = float(dist) if dist else float("nan")
-                    res = float(res) if res else float("nan")
-                    cpin = float(cpin) if cpin else float("nan")
+                    fanout, cap = _val(fo), _val(cp)
+                    dist, res, cpin = _val(dist), _val(res), _val(cpin)
                 z = lambda v: 0.0 if v != v else v          # NaN/N-A -> 0
                 path.stages.append(Stage(
                     segment=segment, kind="net", name=net,
