@@ -192,61 +192,77 @@ def main():
              "[ 실패 ] 붙일 값이 하나도 없습니다.",
              "         2a_cpin.py / 2b_distres.py 를 먼저 돌리세요.")
 
-    with open(rpt, "r", errors="ignore") as f:
-        lines = f.read().split("\n")
-
+    # 리포트를 통째로 올리지 않고 **한 줄씩 흘려 쓴다.**
+    # 예전에는 lines(원본 전체) + outlines(결과 전체) 두 벌을 들고 있어서
+    # 446MB 리포트에 2.4GB 를 썼다. 코너를 여러 개 동시에 돌리면 그만큼 곱해져
+    # 스왑으로 넘어가고, 그러면 병렬로 돌린 의미가 없어진다.
+    # 줄마다 하는 일이 앞뒤 줄과 무관해서 흘려 써도 결과는 같다.
     header_len = 80
     n_net = n_full = 0
     na_dr = na_cpin = 0     # N/A 가 SPEF 쪽인지 Cpin 쪽인지
     na_pins = []            # Cpin 이 빈 리시버 핀 예시
-    outlines = []
-    for idx, line in enumerate(lines):
-        clean = line.rstrip("\r")
 
-        # 표 헤더와 점선을 늘려 3열 자리를 만든다
-        if "Point" in clean and "Path" in clean and "(" not in clean:
-            header_len = len(clean)
-            outlines.append(clean + "       Dist        Res       Cpin")
-            continue
-        if clean.strip() and set(clean.strip()) == set("-"):
-            outlines.append(clean + "---------------------------------")
-            continue
+    with open(rpt, "r", errors="ignore") as fin, wopen(out) as fout:
+        # 원본은 "\n".join(outlines) 였다 -- 줄 **사이**에만 개행이 들어가고
+        # 마지막 줄 뒤에는 없다. 흘려 쓸 때도 그 형식을 그대로 지킨다.
+        first = True
+        ended_nl = False
+        for idx, line in enumerate(fin):
+            ended_nl = line.endswith("\n")
+            clean = line.rstrip("\n").rstrip("\r")
+            if first:
+                first = False
+            else:
+                fout.write("\n")
 
-        m = OBJ_RE.match(clean)
-        is_net = bool(m and m.group(2).lower() == "net")
-        if not is_net:
-            outlines.append(clean)
-            continue
+            # 표 헤더와 점선을 늘려 3열 자리를 만든다
+            if "Point" in clean and "Path" in clean and "(" not in clean:
+                header_len = len(clean)
+                fout.write(clean + "       Dist        Res       Cpin")
+                continue
+            if clean.strip() and set(clean.strip()) == set("-"):
+                fout.write(clean + "---------------------------------")
+                continue
 
-        n_net += 1
-        sd, sr = dr.get(idx, ("", ""))
-        (sc,) = cpin.get(idx, ("",))
-        sd = fmt4(sd) or "N/A"
-        sr = fmt4(sr) or "N/A"
-        sc = fmt4(sc) or "N/A"
-        if "N/A" not in (sd, sr, sc):
-            n_full += 1
-        else:
-            # 어느 쪽이 빈 것인지 나눠 센다. Dist/Res 는 SPEF 에서,
-            # Cpin 은 Cpin 표에서 오므로 조치할 곳이 완전히 다르다.
-            if sd == "N/A" or sr == "N/A":
-                na_dr += 1
-            if sc == "N/A":
-                na_cpin += 1
-                if len(na_pins) < 6:
-                    pin = recv_pin.get(idx)
-                    if pin and pin not in na_pins:
-                        na_pins.append(pin)
+            m = OBJ_RE.match(clean)
+            is_net = bool(m and m.group(2).lower() == "net")
+            if not is_net:
+                fout.write(clean)
+                continue
 
-        m_net = NET_ROW_RE.match(clean)
-        if m_net:
-            outlines.append("%s %10s %10s %10s %10s %10s %10s"
-                            % (m_net.group("prefix"), "", "", "", sd, sr, sc))
-        else:
-            outlines.append("%s %10s %10s %10s" % (clean.ljust(header_len), sd, sr, sc))
+            n_net += 1
+            sd, sr = dr.get(idx, ("", ""))
+            (sc,) = cpin.get(idx, ("",))
+            sd = fmt4(sd) or "N/A"
+            sr = fmt4(sr) or "N/A"
+            sc = fmt4(sc) or "N/A"
+            if "N/A" not in (sd, sr, sc):
+                n_full += 1
+            else:
+                # 어느 쪽이 빈 것인지 나눠 센다. Dist/Res 는 받은 표에서,
+                # Cpin 은 Cpin 표에서 오므로 조치할 곳이 완전히 다르다.
+                if sd == "N/A" or sr == "N/A":
+                    na_dr += 1
+                if sc == "N/A":
+                    na_cpin += 1
+                    if len(na_pins) < 6:
+                        pin = recv_pin.get(idx)
+                        if pin and pin not in na_pins:
+                            na_pins.append(pin)
 
-    with wopen(out) as f:
-        f.write("\n".join(outlines))
+            m_net = NET_ROW_RE.match(clean)
+            if m_net:
+                fout.write("%s %10s %10s %10s %10s %10s %10s"
+                           % (m_net.group("prefix"), "", "", "", sd, sr, sc))
+            else:
+                fout.write("%s %10s %10s %10s"
+                           % (clean.ljust(header_len), sd, sr, sc))
+
+        # 원본이 개행으로 끝났으면 예전 코드에서는 split 이 만든 마지막 빈
+        # 원소 때문에 개행이 하나 더 붙었다. 그 형식을 그대로 지킨다.
+        if ended_nl:
+            fout.write("\n")
+
 
     print("")
     print("-" * 68)

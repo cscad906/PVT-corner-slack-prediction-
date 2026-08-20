@@ -80,7 +80,14 @@ def add_arc(
     rows.append(row)
 
 
-def flush_path(summary: Dict[str, str], rows: List[Dict[str, str]], summaries: List[Dict[str, str]], all_rows: List[Dict[str, str]]) -> None:
+def flush_path(summary: Dict[str, str], rows: List[Dict[str, str]], summaries: List[Dict[str, str]], emit) -> None:
+    """경로 하나가 끝날 때 그 경로의 줄들을 **바로 내보낸다.**
+
+    예전에는 all_rows 에 전부 쌓아 두고 마지막에 한 번에 썼다. 리포트가 크면
+    net 행이 백만 줄이 넘고, 줄마다 dict 하나라 1.8GB 가 넘어간다. 코너를 여러
+    개 동시에 돌리면 그만큼 곱해져 스왑으로 넘어가고, 그러면 병렬로 돌린
+    의미가 없어진다. 경로 단위로 흘려 보내면 메모리가 경로 하나 크기로 준다.
+    """
     if not summary:
         return
     summaries.append(summary.copy())
@@ -95,12 +102,11 @@ def flush_path(summary: Dict[str, str], rows: List[Dict[str, str]], summaries: L
             "slack_status": summary.get("slack_status", ""),
             "slack": summary.get("slack", ""),
         })
-        all_rows.append(row)
+        emit(row)
 
 
-def parse_report(report: Path) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+def parse_report(report: Path, emit) -> List[Dict[str, str]]:
     summaries: List[Dict[str, str]] = []
-    all_rows: List[Dict[str, str]] = []
     summary: Dict[str, str] = {}
     rows: List[Dict[str, str]] = []
     segment = ""
@@ -117,7 +123,7 @@ def parse_report(report: Path) -> Tuple[List[Dict[str, str]], List[Dict[str, str
             stripped = line.strip()
             path_match = PATH_RE.match(line)
             if path_match:
-                flush_path(summary, rows, summaries, all_rows)
+                flush_path(summary, rows, summaries, emit)
                 summary = {
                     "path_id": path_match.group(1),
                     "path_key": path_match.group(2),
@@ -227,8 +233,8 @@ def parse_report(report: Path) -> Tuple[List[Dict[str, str]], List[Dict[str, str
                 last_pin = pin_name
                 last_edge = pin_edge
 
-    flush_path(summary, rows, summaries, all_rows)
-    return summaries, all_rows
+    flush_path(summary, rows, summaries, emit)
+    return summaries
 
 
 def write_tsv(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
@@ -246,15 +252,9 @@ def main() -> int:
     summary_out = Path(sys.argv[2])
     victim_out = Path(sys.argv[3])
 
-    summaries, rows = parse_report(report)
-    write_tsv(
-        summary_out,
-        ["path_id", "path_key", "startpoint", "endpoint", "path_group", "path_type", "slack_status", "slack"],
-        summaries,
-    )
-    write_tsv(
-        victim_out,
-        [
+    # victim 쪽을 먼저 열어 두고, 경로가 끝날 때마다 그 줄들을 바로 쓴다.
+    # 전부 모아 두면 큰 리포트에서 메모리가 GB 단위로 간다.
+    victim_fields = [
             "path_id",
             "path_key",
             "startpoint",
@@ -277,11 +277,27 @@ def main() -> int:
             "res",
             "cpin",
             "raw_net_line",
-        ],
-        rows,
+    ]
+    n_rows = 0
+    with victim_out.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=victim_fields, delimiter="\t",
+                                lineterminator="\n", extrasaction="ignore")
+        writer.writeheader()
+
+        def emit(row):
+            nonlocal n_rows
+            writer.writerow(row)
+            n_rows += 1
+
+        summaries = parse_report(report, emit)
+
+    write_tsv(
+        summary_out,
+        ["path_id", "path_key", "startpoint", "endpoint", "path_group", "path_type", "slack_status", "slack"],
+        summaries,
     )
     print(f"path_count={len(summaries)}")
-    print(f"timing_net_arc_rows={len(rows)}")
+    print(f"timing_net_arc_rows={n_rows}")
     print(f"path_summary={summary_out}")
     print(f"path_victim_nets={victim_out}")
     return 0
