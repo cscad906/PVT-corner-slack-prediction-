@@ -37,9 +37,8 @@ crosstalk 은 Dist/Res/Cpin 을 안 씁니다. annotated 파일이 없어도 원
 **받은 표는 코너 폴더에 정해진 이름으로 둡니다.** 만들어 주는 코드는 없습니다.
 
 - `cpin_map.txt` → `2a_cpin.py`
-- `resdist_map.txt` → `2b_distres_table.py`  (한 파일로 받았을 때)
-- `res_map.txt` + `dist_map.txt` → `2b_distres_table.py`  (따로 받았을 때)
-  Res 는 온도마다 다른 표가 필요합니다
+- `res_map.txt` + `dist_map.txt` → `2b_distres_table.py`
+  (각각 2열. Res 는 온도마다 다른 표가 필요합니다)
 - `design.spef` → `2b_distres.py` (예전 방식. 지금은 안 씀)
 
 ## 2b 는 세 가지입니다 — 셋 다 `distres.tsv` 를 만듭니다
@@ -51,12 +50,12 @@ crosstalk 은 Dist/Res/Cpin 을 안 씁니다. annotated 파일이 없어도 원
 | `2b_distres2.py` | SPEF (NAME_MAP 숫자 ID) | 위가 느릴 때. **아직 커밋 안 됨** |
 
 `4_all_corners.py` 의 묶음 1 은 `2b_distres_table.py` 를 씁니다. **SPEF 가 필요 없습니다.**
-표는 **코너 폴더마다 `resdist_map.txt`** 로 하나씩 있어야 합니다. Res 는 온도에 따라
-달라지므로 그 코너 온도의 표를 그 폴더에 둡니다.
+표는 **코너 폴더마다 `res_map.txt` 와 `dist_map.txt` 두 개**가 있어야 합니다.
+Res 는 온도에 따라 달라지므로 그 코너 온도의 표를 그 폴더에 둡니다.
 
-형식은 **헤더 없이 3열, `net 이름 / res / dist` 순서**입니다. 파일 이름이 그 순서를
-말합니다 — 결과 파일 `distres.tsv` 는 dist 가 먼저라 반대인데, 그건 기존 2b 형식이라
-바꿀 수 없습니다.
+형식은 **각각 2열**입니다 — `res_map.txt` 는 `넷 이름 / res`, `dist_map.txt` 는
+`넷 이름 / dist`. 파일이 갈려 있어 어느 값인지 이름이 말해 주므로 순서를 헷갈릴
+일이 없습니다. 헤더는 있어도 없어도 됩니다.
 
 ## Dist / Res / Cpin 이 코너에 따라 변하는가
 

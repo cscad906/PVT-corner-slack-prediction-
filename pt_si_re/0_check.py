@@ -58,9 +58,11 @@ INPUTS = [
      "pt_shell: redirect -file pin_attr.txt { report_attribute -application [get_pins *] }"),
     ("net_attr.txt", "넷 attribute 덤프 (crosstalk)",
      "pt_shell: redirect -file net_attr.txt { report_attribute -application [get_nets *] }"),
-    ("resdist_map.txt", "받은 Res/Dist 표 (2b 가 쓴다)",
-     "코너 폴더마다 하나씩 둔다. 헤더 없이 3열: net 이름 / res / dist.\n"
+    ("res_map.txt", "받은 Res 표 (2b 가 쓴다)",
+     "코너 폴더마다 둔다. 2열: 넷 이름 / res.\n"
      "               Res 는 온도마다 다르므로 그 코너 온도의 표를 둔다."),
+    ("dist_map.txt", "받은 Dist 표 (2b 가 쓴다)",
+     "코너 폴더마다 둔다. 2열: 넷 이름 / dist. 코너가 달라도 값은 같다."),
 ]
 
 OK = "[ OK ]"

@@ -9,8 +9,8 @@
     python3 4_all_corners.py --root setup --skip-done        # 이어서
 
 Dist/Res 는 **받은 표**로 채운다(2b_distres_table.py). 표는 코너 폴더마다
-resdist_map.txt 로 들어 있어야 한다. Res 는 온도에 따라 다르므로, 코너 폴더에
-그 코너의 온도에 맞는 표를 두는 것이다.
+res_map.txt 와 dist_map.txt 두 개가 들어 있어야 한다. Res 는 온도에 따라 다르므로,
+코너 폴더에 그 코너의 온도에 맞는 표를 두는 것이다.
 
 SPEF 는 이제 묶음 1 에 필요 없다. --spef / --spef-root 는 2c 가 N/A 원인을
 진단할 때만 쓰이는 선택 사항이다.

@@ -4,14 +4,16 @@
 
     python3 2b_distres_table.py --dir <코너폴더>
 
-표는 코너 폴더 안에 둔다. 받은 모양에 따라 둘 중 하나다.
+표는 코너 폴더 안에 **두 개**를 둔다. 2a 의 cpin_map.txt 와 같은 규약이다.
 
-    resdist_map.txt              한 파일로 받았을 때.  net / res / dist
-    res_map.txt + dist_map.txt   따로 받았을 때.       각각 net / 값
+    res_map.txt      넷 이름 / res
+    dist_map.txt     넷 이름 / dist
 
-    따로 받으면 넷 이름으로 합쳐서 쓴다. 한쪽에만 있는 넷은 그쪽 값만 채우고
-    나머지는 N/A 로 둔다 -- 조용히 0 을 넣지 않는다.
-    합본이 있으면 합본을 먼저 쓴다. 2a 의 cpin_map.txt 와 같은
+    각각 2열이면 된다. 파일이 갈려 있어 어느 값인지 이름이 말해 주므로 열 순서를
+    헷갈릴 일이 없다. 헤더는 있어도 없어도 되고, 있으면 열 이름으로 찾는다.
+
+    넷 이름으로 둘을 합쳐서 쓴다. 한쪽에만 있는 넷은 그쪽 값만 채우고 나머지는
+    N/A 로 둔다 -- 조용히 0 을 넣지 않는다. 0 은 "저항이 0" 과 구분이 안 된다. 2a 의 cpin_map.txt 와 같은
 규약이다. Res 는 온도에 따라 다르므로, 코너마다 그 코너 온도의 표를 둔다.
 (--table 로 다른 경로를 줄 수도 있으나 보통 쓸 일이 없다)
 
@@ -24,15 +26,14 @@
     SPEF 가 있으면 2b_distres2.py 쪽이 정확하다(아래 "정확도" 참조).
 
 표 형식
-    **헤더 없이 열 3개.  net 이름 / res / dist  이 순서다.**
-        n57401      11.1137     7.3315
-        clock       51.5246   131.1135
+    각각 **2열**이면 된다. 헤더는 있어도 없어도 된다.
 
-    순서가 곧 의미이므로 res 와 dist 를 바꿔 넣으면 그대로 뒤바뀐 채 들어간다
-    (둘 다 숫자라 에러가 안 난다). 파일 이름을 resdist_map.txt 로 둔 것이 그
-    순서를 상기시키려는 것이다.
+        res_map.txt                 dist_map.txt
+          n57401     11.1137          n57401      7.3315
+          clock      51.5246          clock     131.1135
 
-    헤더가 붙어 와도 알아본다(그때는 열 순서가 달라도 이름으로 찾는다).
+    헤더가 붙어 오면 열 이름으로 찾으므로 열이 더 있어도 되고 순서가 달라도 된다
+    (resistance, length 같은 이름도 알아본다). 헤더가 없으면 두 번째 열을 값으로 본다.
     구분자는 공백/탭/쉼표/세미콜론/파이프 중에서 알아서 고른다.
     '#' 이나 '//' 로 시작하는 줄과 빈 줄은 건너뛴다.
 
@@ -73,10 +74,8 @@ OBJ_RE = re.compile(r"^\s{2,}(\S+)\s+\(([^)]+)\)")
 # 먼저라 반대인데, 그건 기존 2b 형식이라 못 바꾼다. 그래서 입력 쪽 이름을
 # resdist 로 두어 헷갈리지 않게 한다.
 # (--table 로 직접 주면 이름은 상관없다)
-TABLE_NAME = "resdist_map.txt"
-
-# res 와 dist 를 따로 받았을 때 쓰는 이름. 둘 다 있으면 합쳐서 쓴다.
-# 한 파일로 받으면 위 resdist_map.txt 하나만 두면 된다.
+# 받은 표를 코너 폴더에 둘 때 쓰는 이름. 2a 의 cpin_map.txt 와 같은 규약이다.
+# res 와 dist 는 **따로** 받는다. 파일이 갈려 있어 어느 값인지 이름이 말해 준다.
 RES_NAME = "res_map.txt"
 DIST_NAME = "dist_map.txt"
 
@@ -92,9 +91,9 @@ COL_RECV = ("receiver", "recv", "receiver_pin", "recv_pin", "load", "sink", "tar
 # 화면 출력은 영어로 둔다 (한글이 깨지는 터미널이 있다).
 # 설명이 필요하면 이 파일 맨 위 설명글과 코드표.md 를 본다.
 CODE_INFO = {
-    "E-NOTABLE":  ("this corner folder has no resdist_map.txt",
-                   "every corner folder needs its own. Res differs per "
-                   "temperature, so the table does too."),
+    "E-NOTABLE":  ("this corner folder has no res_map.txt / dist_map.txt",
+                   "every corner folder needs both. Res differs per "
+                   "temperature, so its table does too."),
     "E-TABLE":    ("the supplied table could not be read",
                    "check it has net/res/dist columns, and the header/delimiter."),
     "E-TABLE0":   ("not one net name in the table matches the report",
@@ -326,80 +325,6 @@ def merge_value_tables(res_tab, res_pair, dist_tab, dist_pair):
     return out, pair
 
 
-def load_table(path, res_scale=1.0, dist_scale=1.0):
-    """표 -> ({키: (dist, res)}, 핀쌍키인가, 통계)"""
-    with open(path, "r", errors="ignore") as f:
-        raw = [ln.rstrip("\n\r") for ln in f]
-    lines = [ln for ln in raw
-             if ln.strip() and not ln.lstrip().startswith(("#", "//"))]
-    if not lines:
-        return {}, False, {"rows": 0, "bad": 0, "keys": 0,
-                           "delim": "?", "header": False, "pair": False}
-
-    delim = sniff(lines[:20])
-    if delim:
-        split = lambda s: [c.strip() for c in s.split(delim)]
-    else:
-        split = lambda s: s.split()
-
-    first = split(lines[0])
-    numeric = 0
-    for tok in first[1:3]:
-        try:
-            float(tok)
-            numeric += 1
-        except ValueError:
-            pass
-    # 헤더 판별. 숫자가 하나도 없다는 것만으로는 부족하다 -- 첫 줄의 res/dist 가
-    # 둘 다 N/A 인 데이터 줄일 수도 있고, 그러면 그 줄을 헤더로 먹어 버린다.
-    # 그래서 아는 열 이름이 실제로 보일 때만 헤더로 본다.
-    known = set(COL_NET) | set(COL_RES) | set(COL_DIST) | set(COL_DRV) | set(COL_RECV)
-    looks_named = any(t.strip().lower().lstrip("#").strip() in known for t in first)
-    has_header = numeric < 1 and looks_named
-
-    if has_header:
-        i_net = find_col(first, COL_NET)
-        i_res = find_col(first, COL_RES)
-        i_dist = find_col(first, COL_DIST)
-        i_drv = find_col(first, COL_DRV)
-        i_recv = find_col(first, COL_RECV)
-        body = lines[1:]
-        if i_net is None or i_res is None or i_dist is None:
-            code("E-TABLE",
-                 "[ FAILED ] cannot tell which column is which.",
-                 "           header was: %s" % first,
-                 "           rename the header, or drop it (then: net res dist)")
-    else:
-        i_net, i_res, i_dist, i_drv, i_recv = 0, 1, 2, None, None
-        body = lines
-
-    pair = i_drv is not None and i_recv is not None
-    need = max(x for x in (i_net, i_res, i_dist, i_drv, i_recv) if x is not None) + 1
-
-    tab = {}
-    bad = 0
-    conflict = 0
-    for ln in body:
-        c = split(ln)
-        if len(c) < need or not c[i_net].strip():
-            bad += 1
-            continue
-        val = (num(c[i_dist], dist_scale), num(c[i_res], res_scale))
-        for v in name_variants(c[i_net]):
-            k = (v, c[i_drv].strip(), c[i_recv].strip()) if pair else v
-            if k in tab:
-                if tab[k] != val:
-                    conflict += 1
-                continue
-            tab[k] = val
-
-    st = {"rows": len(body), "bad": bad, "keys": len(tab), "conflict": conflict,
-          "delim": {None: "whitespace", ",": "comma", "\t": "tab",
-                    ";": "semicolon", "|": "pipe"}[delim],
-          "header": has_header, "pair": pair}
-    return tab, pair, st
-
-
 # ------------------------------------------------------------------ main
 
 def main():
@@ -408,8 +333,6 @@ def main():
     ap.add_argument("--dir", default=".",
                     help="corner folder that holds timing.rpt")
     ap.add_argument("--rpt", default=None)
-    ap.add_argument("--table", default=None,
-                    help="combined table, if it is not <dir>/" + TABLE_NAME)
     ap.add_argument("--res-table", default=None,
                     help="res-only table, if it is not <dir>/" + RES_NAME)
     ap.add_argument("--dist-table", default=None,
@@ -427,31 +350,18 @@ def main():
     if err:
         print("[ FAILED ] %s" % err)
         sys.exit(1)
-    # 표를 찾는 순서
-    #   1) --table (합본)                    2) 코너 폴더의 resdist_map.txt
-    #   3) --res-table / --dist-table (따로)  4) 코너 폴더의 res_map.txt + dist_map.txt
-    # res 와 dist 를 따로 받는 경우가 있어서 둘 다 받는다.
-    combined = args.table or os.path.join(d, TABLE_NAME)
+    # 표를 찾는 순서: 1) --res-table / --dist-table  2) 코너 폴더의 정해진 이름
     res_p = args.res_table or os.path.join(d, RES_NAME)
     dist_p = args.dist_table or os.path.join(d, DIST_NAME)
 
-    use_combined = bool(args.table) or os.path.isfile(combined)
-    use_split = (not use_combined) and os.path.isfile(res_p) and os.path.isfile(dist_p)
-
-    if not use_combined and not use_split:
+    miss = [os.path.basename(x) for x in (res_p, dist_p) if not os.path.isfile(x)]
+    if miss:
         # code() 로 끝내야 한다. 그냥 exit 하면 4_all_corners 의 결과표에 "?" 로
         # 남아서 무엇 때문에 걸렸는지 표만 봐서는 알 수 없다.
-        miss = []
-        if not os.path.isfile(res_p):
-            miss.append(os.path.basename(res_p))
-        if not os.path.isfile(dist_p):
-            miss.append(os.path.basename(dist_p))
         code("E-NOTABLE",
-             "[ FAILED ] no table in %s" % d,
-             "           looked for : %s" % os.path.basename(combined),
-             "                  or  : %s + %s"
-             % (os.path.basename(res_p), os.path.basename(dist_p)),
-             "           missing    : %s" % ", ".join(miss))
+             "[ FAILED ] table not found in %s" % d,
+             "           needs   : %s + %s" % (RES_NAME, DIST_NAME),
+             "           missing : %s" % ", ".join(miss))
 
     out = args.out or os.path.join(d, "distres.tsv")
 
@@ -460,29 +370,20 @@ def main():
     print("=" * 68)
     print("  report : %s" % rpt)
 
-    if use_combined:
-        print("  table  : %s" % combined)
-        tab, pair, st = load_table(combined, args.res_scale, args.dist_scale)
-        print("  parsed : rows=%d keys=%d bad=%d  delim=%s header=%s"
-              % (st["rows"], st["keys"], st["bad"], st["delim"], st["header"]))
-        if st.get("conflict"):
-            print("  note   : %d duplicate names with different values, first kept"
-                  % st["conflict"])
-    else:
-        print("  res    : %s" % res_p)
-        print("  dist   : %s" % dist_p)
-        rt, rp, rst = load_value_table(res_p, "res", args.res_scale)
-        dt, dp, dst = load_value_table(dist_p, "dist", args.dist_scale)
-        print("  parsed : res  rows=%d keys=%d bad=%d  delim=%s header=%s"
-              % (rst["rows"], rst["keys"], rst["bad"], rst["delim"], rst["header"]))
-        print("           dist rows=%d keys=%d bad=%d  delim=%s header=%s"
-              % (dst["rows"], dst["keys"], dst["bad"], dst["delim"], dst["header"]))
-        tab, pair = merge_value_tables(rt, rp, dt, dp)
-        only_res = len([k for k in rt if k not in dt])
-        only_dist = len([k for k in dt if k not in rt])
-        if only_res or only_dist:
-            print("  note   : res 에만 있는 넷 %d개, dist 에만 있는 넷 %d개 "
-                  "-> 그 줄은 한쪽만 채워집니다" % (only_res, only_dist))
+    print("  res    : %s" % res_p)
+    print("  dist   : %s" % dist_p)
+    rt, rp, rst = load_value_table(res_p, "res", args.res_scale)
+    dt, dp, dst = load_value_table(dist_p, "dist", args.dist_scale)
+    print("  parsed : res  rows=%d keys=%d bad=%d  delim=%s header=%s"
+          % (rst["rows"], rst["keys"], rst["bad"], rst["delim"], rst["header"]))
+    print("           dist rows=%d keys=%d bad=%d  delim=%s header=%s"
+          % (dst["rows"], dst["keys"], dst["bad"], dst["delim"], dst["header"]))
+    tab, pair = merge_value_tables(rt, rp, dt, dp)
+    only_res = len([k for k in rt if k not in dt])
+    only_dist = len([k for k in dt if k not in rt])
+    if only_res or only_dist:
+        print("  note   : res 에만 있는 넷 %d개, dist 에만 있는 넷 %d개 "
+              "-> 그 줄은 한쪽만 채워집니다" % (only_res, only_dist))
     print("  key    : %s" % ("net + driver pin + receiver pin"
                              if pair else "net name only"))
     if not tab:
