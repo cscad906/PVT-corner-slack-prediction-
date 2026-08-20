@@ -444,6 +444,20 @@ def main():
     print("-" * 68)
     print("  out       : %s" % out)
     print("  rows      : %d" % n)
+    # 줄 수가 아니라 **넷 이름 기준**으로도 알려 준다. 담당자께 "표에 이만큼이
+    # 빠졌습니다" 라고 말할 때 필요한 숫자가 이쪽이다. 클럭 넷은 경로마다
+    # 반복해서 나오므로, 그것만 빠져도 줄 수로는 절반이 날아간다.
+    rep_nets = set(net for _i, net, _d, _r in rows)
+    found_nets = set()
+    for net in rep_nets:
+        for v in name_variants(net):
+            k = v if not pair else None
+            if (k in tab) if not pair else False:
+                found_nets.add(net)
+                break
+    if not pair:
+        print("  넷 이름 기준: 리포트 %d개 중 표에 있는 것 %d개 (없는 것 %d개)"
+              % (len(rep_nets), len(found_nets), len(rep_nets) - len(found_nets)))
     print("  Dist found: %d   (miss %d)" % (hit_d, n - hit_d))
     if miss_d:
         print("     못 찾은 넷 예: %s" % ", ".join(miss_d[:5]))
