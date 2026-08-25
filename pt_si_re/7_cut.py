@@ -68,6 +68,7 @@
 import argparse
 import os
 import sys
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
@@ -346,20 +347,46 @@ def main():
              "[ FAILED ] %d output file(s) already there, e.g." % len(exists),
              "           %s" % exists[0])
 
+    total_mb = 0.0
+    for _, src, _ in jobs:
+        try:
+            total_mb += os.path.getsize(src) / (1024.0 * 1024.0)
+        except OSError:
+            pass
     print("  from   : %s" % os.path.abspath(args.root or args.file))
     print("  to     : %s" % os.path.abspath(out_root))
-    print("  files  : %d" % len(jobs))
+    print("  files  : %d   (%.0f MB to read)" % (len(jobs), total_mb))
     print("")
     print("  %-20s %-40s %10s %-16s %8s"
           % ("corner", "file", "kept", "idx kept", "measured"))
     print("  " + "-" * 100)
+    # 한 줄은 그 파일이 끝나는 대로 바로 찍는다. 다 끝나고 한꺼번에 내면 큰 파일을
+    # 돌릴 때 화면이 몇 분씩 멈춘 것처럼 보인다(4_all_corners.py 와 같은 이유).
+    # 그래서 순서는 폴더 순이 아니라 **끝난 순**이다. 줄마다 코너와 파일 이름이
+    # 붙어 있어 헷갈리지 않는다.
+    lock = threading.Lock()
+
+    def say(line):
+        with lock:
+            print(line)
+            sys.stdout.flush()
 
     def one(job):
         name, src, dst = job
+        base = os.path.basename(src)
         try:
-            return (name, src) + cut_one(src, dst, args.keep) + (None,)
+            kept, total, meas, noidx, idxs = cut_one(src, dst, args.keep)
         except Exception as e:                       # noqa: BLE001
+            say("  %-20s %-40s %10s %-16s %8s"
+                % (name[:20], base[:40], "FAILED", "-", "-"))
             return name, src, None, None, None, None, None, str(e)
+        if total == 0:
+            say("  %-20s %-40s %10s %-16s %8s"
+                % (name[:20], base[:40], "no marker", "-", "-"))
+        else:
+            say("  %-20s %-40s %5d /%4d %-16s %8d"
+                % (name[:20], base[:40], kept, total, rng(idxs), meas))
+        return name, src, kept, total, meas, noidx, idxs, None
 
     n = max(1, min(args.jobs, len(jobs)))
     if n > 1:
@@ -378,12 +405,8 @@ def main():
         base = os.path.basename(src)
         if err:
             failed.append("%s : %s" % (base, err))
-            print("  %-20s %-40s %10s %-16s %8s"
-                  % (name[:20], base[:40], "FAILED", "-", "-"))
             continue
         if total == 0:
-            print("  %-20s %-40s %10s %-16s %8s"
-                  % (name[:20], base[:40], "no marker", "-", "-"))
             continue
         n_block_files += (0 if src.endswith(".tcl") else 1)
         noidx_all += noidx
@@ -396,8 +419,6 @@ def main():
             if meas < kept:
                 empties.append("%s / %s : %d of %d kept blocks hold no path"
                                % (name, base, kept - meas, kept))
-        print("  %-20s %-40s %5d /%4d %-16s %8d"
-              % (name[:20], base[:40], kept, total, rng(idxs), meas))
 
     print("")
     print("-" * 68)
