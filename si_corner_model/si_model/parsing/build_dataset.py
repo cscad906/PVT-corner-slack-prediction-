@@ -22,6 +22,7 @@ before training):
 """
 import argparse
 import os
+import shutil
 import re
 import sys
 
@@ -510,8 +511,12 @@ def build(cfg: dict) -> str:
     # The same content as int64/float32 columns is about fifty times smaller.
     # The net name is interned to an int so a key packs into one int64.
     net_ids: "dict[str, int]" = {}
-    vwin_c: "list[tuple]" = []       # (packed key, lo, hi, delta) per corner
-    adata_c: "list[tuple]" = []      # (stage, slot, bump, lo, hi, slew, cc)
+    # One corner at a time on disk. The scratch directory sits next to the
+    # cache file and is removed when the build finishes or fails.
+    spill = os.path.join(os.path.dirname(os.path.abspath(out_fp)) or ".",
+                         "_si_spill")
+    shutil.rmtree(spill, ignore_errors=True)
+    os.makedirs(spill, exist_ok=True)
 
     idx_order: "list[int]" = []
     stage_seqs: "dict[int, tuple]" = {}
@@ -625,12 +630,16 @@ def build(cfg: dict) -> str:
                     as_.append(s); aa_.append(a); ab_.append(ag.bump)
                     alo_.append(ag.min_arrival); ahi_.append(ag.max_arrival)
                     asl_.append(ag.slew); acc_.append(ag.cc_ff)
-        vwin_c.append((np.asarray(vk_, np.int64), np.asarray(vlo_, np.float32),
-                       np.asarray(vhi_, np.float32), np.asarray(vdl_, np.float32)))
-        adata_c.append((np.asarray(as_, np.int32), np.asarray(aa_, np.int32),
-                        np.asarray(ab_, np.float32), np.asarray(alo_, np.float32),
-                        np.asarray(ahi_, np.float32), np.asarray(asl_, np.float32),
-                        np.asarray(acc_, np.float32)))
+        # Spill this corner and forget it. Holding every corner is what makes
+        # peak memory scale with the whole drop rather than with one corner.
+        np.savez(os.path.join(spill, "c%d.npz" % ci),
+                 vk=np.asarray(vk_, np.int64), vlo=np.asarray(vlo_, np.float32),
+                 vhi=np.asarray(vhi_, np.float32), vdl=np.asarray(vdl_, np.float32),
+                 ast=np.asarray(as_, np.int32), aslot=np.asarray(aa_, np.int32),
+                 ab=np.asarray(ab_, np.float32), alo=np.asarray(alo_, np.float32),
+                 ahi=np.asarray(ahi_, np.float32), asw=np.asarray(asl_, np.float32),
+                 ac=np.asarray(acc_, np.float32))
+        del vk_, vlo_, vhi_, vdl_, as_, aa_, ab_, alo_, ahi_, asl_, acc_
         print(f"[{ci + 1:2d}/{C}] {corner}: paths={len(ann)} si_stages={len(stage_meta)}", flush=True)
 
     # densify SI tensors
@@ -639,19 +648,32 @@ def build(cfg: dict) -> str:
     stage_path = np.asarray([m[0] for m in stage_meta], np.int32)
     stage_seg = np.asarray([m[1] for m in stage_meta], np.int8)
     n_aggr = np.asarray([len(m) for m in aggr_meta], np.int16)
-    vwin = np.full((S, C, 2), np.nan, np.float32)
-    arc_delta = np.full((S, C), np.nan, np.float32)
-    abump = np.full((S, A, C), np.nan, np.float32)
-    awin = np.full((S, A, C, 2), np.nan, np.float32)
-    aslew = np.full((S, A, C), np.nan, np.float32)
-    acc = np.full((S, A), np.nan, np.float32)
+    # These are the largest things this build produces -- S x A x C -- so they
+    # are created ON DISK and written through. Nothing here has to fit in RAM,
+    # which is what lets a drop larger than the machine still build.
+    def _mm(name, shape):
+        a = np.lib.format.open_memmap(os.path.join(spill, name + ".npy"),
+                                      mode="w+", dtype=np.float32, shape=shape)
+        a[...] = np.nan
+        return a
+
+    si_bytes = (np.prod((S, A, C)) * 4 * 4 + np.prod((S, C, 2)) * 4) / 1e9
+    print("[SI] densifying %d stages x %d aggressors x %d corners (%.1f GB on "
+          "disk, streamed)" % (S, A, C, si_bytes), flush=True)
+    vwin = _mm("vwin", (S, C, 2))
+    arc_delta = _mm("arc_delta", (S, C))
+    abump = _mm("abump", (S, A, C))
+    awin = _mm("awin", (S, A, C, 2))
+    aslew = _mm("aslew", (S, A, C))
+    acc = _mm("acc", (S, A))
     # Map each corner's arc keys onto stage rows in one vectorised lookup
     # rather than a per-entry dict get.
     sk = np.asarray(stage_keys, np.int64)
     order = np.argsort(sk) if S else np.empty(0, np.int64)
     sk_sorted = sk[order] if S else sk
     for ci in range(C):
-        vk, vlo, vhi, vdl = vwin_c[ci]
+        z = np.load(os.path.join(spill, "c%d.npz" % ci))
+        vk, vlo, vhi, vdl = z["vk"], z["vlo"], z["vhi"], z["vdl"]
         if S and len(vk):
             pos = np.searchsorted(sk_sorted, vk)
             pos[pos >= S] = 0
@@ -660,14 +682,16 @@ def build(cfg: dict) -> str:
             vwin[rows, ci, 0] = vlo[hit]
             vwin[rows, ci, 1] = vhi[hit]
             arc_delta[rows, ci] = vdl[hit]
-        ast, aslot, ab, alo, ahi, asw, ac = adata_c[ci]
+        ast, aslot = z["ast"], z["aslot"]
+        ab, alo, ahi, asw, ac = z["ab"], z["alo"], z["ahi"], z["asw"], z["ac"]
         if len(ast):
             abump[ast, aslot, ci] = ab
             awin[ast, aslot, ci, 0] = alo
             awin[ast, aslot, ci, 1] = ahi
             aslew[ast, aslot, ci] = asw
             acc[ast, aslot] = ac  # Cc is V/RC-independent (SPEF); last write wins
-        vwin_c[ci] = adata_c[ci] = None          # release as we go
+        z.close()
+        os.remove(os.path.join(spill, "c%d.npz" % ci))   # release as we go
 
     # ---- INTERSECTION PASS ---------------------------------------------------
     # A union-then-re-measure flow asks every corner for the SAME path list, but
@@ -760,6 +784,8 @@ def build(cfg: dict) -> str:
         print(f"[QUERY] appended {Q} unmeasured query corners: {qlabs}", flush=True)
 
     os.makedirs(os.path.dirname(os.path.abspath(out_fp)), exist_ok=True)
+    # savez_compressed handles one array at a time, so writing the on-disk SI
+    # arrays costs one array of RAM, not all of them.
     np.savez_compressed(
         out_fp,
         measured=measured,
@@ -778,6 +804,8 @@ def build(cfg: dict) -> str:
         vwin=vwin, arc_delta=arc_delta,
         abump=abump, awin=awin, aslew=aslew, acc=acc,
     )
+    del vwin, arc_delta, abump, awin, aslew, acc
+    shutil.rmtree(spill, ignore_errors=True)
     print(f"wrote {out_fp}: N={len(idx_order)} C={C} S={S} A={A}")
     return out_fp
 

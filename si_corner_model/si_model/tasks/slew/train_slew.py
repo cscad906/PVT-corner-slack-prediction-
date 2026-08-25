@@ -74,6 +74,7 @@ class Trainer:
         self.ax_gapcap = gap_caps(cfg)
         self._prep_base()
         self._prep_tensors()
+        self._release_ds()
         # Seed BEFORE building the model: weight init draws from the torch RNG,
         # so seeding only inside run() left every run with different initial
         # weights -- two identical-input runs then reported different losses,
@@ -122,11 +123,24 @@ class Trainer:
         self.slew_ns = t(ds["slew"])                            # [N,C] ns (for MAPE)
         self.base_ns = t(self.base_hat)                         # [N,C] ns
 
+
+    # Everything in the npz has been copied into tensors by this point. Holding
+    # the numpy originals as well doubles the footprint of the large ones: on a
+    # 30k-path drop that is 1.26 GB of awin/abump/aslew/node_feat/edge_feat kept
+    # alive for the entire run, to serve a handful of small arrays that really
+    # are still read later. Keep those and drop the rest.
+    _DS_KEEP = ("fam_vocab", "vt", "path_keys", "slew", "cap")
+
+    def _release_ds(self):
+        self.n_node_feat = int(self.ds["node_feat"].shape[-1])
+        self.n_edge_feat = int(self.ds["edge_feat"].shape[-1])
+        self.ds = {k: v for k, v in self.ds.items() if k in self._DS_KEEP}
+
     def _prep_model(self):
         cfg = self.cfg["model"]
         self.enc = PathEncoder(
-            n_families=len(self.ds["fam_vocab"]), node_dim=self.ds["node_feat"].shape[-1],
-            edge_dim=self.ds["edge_feat"].shape[-1], d=cfg.get("enc_dim", 128),
+            n_families=len(self.ds["fam_vocab"]), node_dim=self.n_node_feat,
+            edge_dim=self.n_edge_feat, d=cfg.get("enc_dim", 128),
             num_blocks=cfg.get("enc_blocks", 3), dropout=cfg["dropout"]).to(self.dev)
         n_sig = self.sig.shape[1] + self.enc.out_dim
         self.model = SlewModel(n_token_feat=self.tokens.shape[-1], n_sig=n_sig,

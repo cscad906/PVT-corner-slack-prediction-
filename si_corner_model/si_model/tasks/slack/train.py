@@ -85,14 +85,32 @@ class Trainer:
         self.ax_tscale = np.asarray(token_scales(cfg))  # token/query coord units
         self.ax_gapcap = gap_caps(cfg)                  # extrapolation-gap clamps
         self.base = compute_base(ds, self.split, cfg)
-        sf_fp = cfg["data"]["cache"].replace("dataset", "si_features")
-        if os.path.exists(sf_fp):
-            sf = dict(np.load(sf_fp))
+        # SI features live in a DIRECTORY of .npy rather than one compressed
+        # .npz, because a .npz cannot be memory-mapped: reading it means pulling
+        # every array fully into RAM. These are the largest arrays in training
+        # ([S, A, C, ...]), and a batch touches only a few hundred stage rows of
+        # them, so mapping lets the kernel keep just the pages actually used.
+        # A legacy .npz next to it is still read if that is what is there.
+        sf_dir = cfg["data"]["cache"].replace("dataset", "si_features")
+        sf_dir = sf_dir[:-4] if sf_dir.endswith(".npz") else sf_dir
+        legacy = sf_dir + ".npz"
+        if os.path.isdir(sf_dir):
+            sf = {os.path.splitext(f)[0]: np.load(os.path.join(sf_dir, f), mmap_mode="r")
+                  for f in sorted(os.listdir(sf_dir)) if f.endswith(".npy")}
+        elif os.path.exists(legacy):
+            sf = dict(np.load(legacy))
         else:
             sf = build_si_features(ds, self.base.phi, self.split.seen)
-            np.savez_compressed(sf_fp, **sf)
+            os.makedirs(sf_dir, exist_ok=True)
+            for k, v in sf.items():
+                np.save(os.path.join(sf_dir, k + ".npy"), v)
+            del sf
+            sf = {os.path.splitext(f)[0]: np.load(os.path.join(sf_dir, f), mmap_mode="r")
+                  for f in sorted(os.listdir(sf_dir)) if f.endswith(".npy")}
+        self.sf_dir = sf_dir
         self.N, self.C = ds["slack"].shape
         self._prep_tensors(sf)
+        self._release_ds()
         # Seed BEFORE building the model: weight init draws from the torch RNG,
         # so seeding only inside run() left every run with different initial
         # weights -- two identical-input runs then reported different losses,
@@ -172,36 +190,97 @@ class Trainer:
         self.stage_pad = t(pad, torch.long)                           # [N,Smax]
         self.stage_mask = t(smask, torch.bool)
 
-        vw_width = sf["vwin_hat"][:, :, 1] - sf["vwin_hat"][:, :, 0]  # [S,C]
-        feats = np.stack([
-            np.broadcast_to(np.nan_to_num(ds["acc"])[:, :, None], sf["overlap"].shape),
-            sf["bump_hat"], sf["overlap"], sf["aslew_hat"],
-            np.broadcast_to(vw_width[:, None, :], sf["overlap"].shape),
-        ], -1).astype(np.float32)                                     # [S,A_agg,C,5]
-        feats = np.nan_to_num(feats)
+        # Built ONE CHANNEL AT A TIME, straight into the tensor. Stacking all
+        # five first materialises an [S,A,C,5] float32 copy and then a second
+        # one for the standardised result, so the SI features were held three
+        # times over at the moment of peak -- the npz, the stack, the tensor.
+        # On a 30k-path drop that alone is ~3 GB of the peak, and the peak is
+        # what runs a machine out of memory, not the steady state.
+        S_, A_, C_ = sf["overlap"].shape
         pres = sf["present"]
-        m = feats[:, :, self.split.seen_idx][pres].reshape(-1, 5)
-        # an SI-free dataset (no crosstalk drop) has zero stages -> nothing to
-        # standardize against; leave the (empty) features untouched.
-        self.has_si = m.size > 0
+        seen_ = self.split.seen_idx
+        self.has_si = bool(pres.any()) and len(seen_) > 0
         if not self.has_si:
             print("[SI] dataset has no crosstalk stages -- SI branch disabled "
                   "(lambda_si forced to 0); model = OLS base + attention.", flush=True)
-        mu, sd = ((m.mean(0), m.std(0) + 1e-8) if self.has_si
-                  else (np.zeros(5, np.float32), np.ones(5, np.float32)))
-        self.si_x = t((feats - mu) / sd)                              # [S,A_agg,C,5]
-        self.si_awin = t(sf["awin_hat"])                              # [S,A_agg,C,2]
-        self.si_vwin = t(sf["vwin_hat"])                              # [S,C,2]
-        self.si_bump = t(np.nan_to_num(sf["bump_hat"]))               # [S,A_agg,C]
-        self.si_present = t(np.broadcast_to(pres[:, :, None], sf["overlap"].shape).copy(),
-                            torch.bool)
+
+        def _chan(i):
+            if i == 0:
+                return np.broadcast_to(np.nan_to_num(ds["acc"])[:, :, None], (S_, A_, C_))
+            if i == 1:
+                return sf["bump_hat"]
+            if i == 2:
+                return sf["overlap"]
+            if i == 3:
+                return sf["aslew_hat"]
+            vw = sf["vwin_hat"]
+            return np.broadcast_to((vw[:, :, 1] - vw[:, :, 0])[:, None, :], (S_, A_, C_))
+
+        # The standardised features are written to disk once and mapped back,
+        # never held whole. A batch reads a few hundred stage rows out of them.
+        # The file records which corners were seen when it was built: change the
+        # holdout and the statistics change, so a stale one has to be rebuilt.
+        # The directory may not exist yet when a legacy si_features.npz was the
+        # thing that got read.
+        os.makedirs(self.sf_dir, exist_ok=True)
+        xp = os.path.join(self.sf_dir, "si_x.npy")
+        sp_ = os.path.join(self.sf_dir, "si_x_seen.npy")
+        fresh = (os.path.exists(xp) and os.path.exists(sp_)
+                 and np.array_equal(np.load(sp_), seen_))
+        if not fresh:
+            xm = np.lib.format.open_memmap(xp, mode="w+", dtype=np.float32,
+                                           shape=(S_, A_, C_, 5))
+            for i in range(5):
+                x = np.nan_to_num(np.asarray(_chan(i), np.float32))
+                if self.has_si:
+                    mi = x[:, :, seen_][pres]
+                    mu_i, sd_i = float(mi.mean()), float(mi.std()) + 1e-8
+                    del mi
+                else:
+                    mu_i, sd_i = 0.0, 1.0
+                x -= mu_i
+                x /= sd_i
+                xm[..., i] = x
+                del x
+            xm.flush(); del xm
+            np.save(sp_, np.asarray(seen_))
+        self.si_x = np.load(xp, mmap_mode="r")                        # [S,A_agg,C,5]
+
+        # bump needs its NaNs replaced; do it once to disk so the batch path can
+        # map it like the rest.
+        bp = os.path.join(self.sf_dir, "si_bump.npy")
+        if not os.path.exists(bp):
+            bh = sf["bump_hat"]
+            bm = np.lib.format.open_memmap(bp, mode="w+", dtype=np.float32,
+                                           shape=bh.shape)
+            step = max(1, 1_000_000 // max(1, bh.shape[1] * bh.shape[2]))
+            for lo in range(0, bh.shape[0], step):     # chunked: never whole
+                bm[lo:lo + step] = np.nan_to_num(np.asarray(bh[lo:lo + step], np.float32))
+            bm.flush(); del bm
+        self.si_bump = np.load(bp, mmap_mode="r")                     # [S,A_agg,C]
+        self.si_awin = sf["awin_hat"]                                 # [S,A_agg,C,2]
+        self.si_vwin = sf["vwin_hat"]                                 # [S,C,2]
+        self.si_present = pres                                        # [S,A_agg] bool
+
+
+    # Everything in the npz has been copied into tensors by this point. Holding
+    # the numpy originals as well doubles the footprint of the large ones: on a
+    # 30k-path drop that is 1.26 GB of awin/abump/aslew/node_feat/edge_feat kept
+    # alive for the entire run, to serve a handful of small arrays that really
+    # are still read later. Keep those and drop the rest.
+    _DS_KEEP = ("fam_vocab", "vt", "path_keys")
+
+    def _release_ds(self):
+        self.n_node_feat = int(self.ds["node_feat"].shape[-1])
+        self.n_edge_feat = int(self.ds["edge_feat"].shape[-1])
+        self.ds = {k: v for k, v in self.ds.items() if k in self._DS_KEEP}
 
     def _prep_model(self):
         cfg = self.cfg["model"]
         self.enc = PathEncoder(
             n_families=len(self.ds["fam_vocab"]),
-            node_dim=self.ds["node_feat"].shape[-1],
-            edge_dim=self.ds["edge_feat"].shape[-1],
+            node_dim=self.n_node_feat,
+            edge_dim=self.n_edge_feat,
             d=cfg.get("enc_dim", 128), num_blocks=cfg.get("enc_blocks", 3),
             dropout=cfg["dropout"]).to(self.dev)
         n_sig = self.sig.shape[1] + self.enc.out_dim
@@ -306,6 +385,11 @@ class Trainer:
         query = torch.cat([q[None].expand(B, -1), torch.stack(gaps, -1)], -1)  # [B,3A]
 
         sp = self.stage_pad[P]                        # [B,Smax]
+        spn = sp.detach().cpu().numpy()                # same, for the memmaps
+
+        def _mt(a, dt=torch.float32):
+            return torch.as_tensor(np.ascontiguousarray(a), dtype=dt, device=dev)
+
         return {
             "tokens": tokens, "token_mask": tmask,
             "query_vt": query,
@@ -313,11 +397,14 @@ class Trainer:
             "edge": self.edge_feat[P], "nmask": self.node_mask[P],
             "crit": self.critical[P],
             "sig_feats": self.sig[P],
-            "si_x_raw": self.si_x[sp][:, :, :, ci, :],       # [B,Smax,A_agg,5]
-            "si_awin": self.si_awin[sp][:, :, :, ci, :],      # [B,Smax,A_agg,2] (ns)
-            "si_vwin": self.si_vwin[sp][:, :, ci, :],         # [B,Smax,2]   (ns)
-            "si_bump": self.si_bump[sp][..., ci],             # [B,Smax,A_agg] ratio
-            "si_present": self.si_present[sp][..., ci] & self.stage_mask[P][:, :, None],
+            # The SI arrays stay on disk (numpy memmaps); only this batch's
+            # stage rows are read and turned into tensors.
+            "si_x_raw": _mt(self.si_x[spn][:, :, :, ci, :]),  # [B,Smax,A_agg,5]
+            "si_awin": _mt(self.si_awin[spn][:, :, :, ci, :]),  # [B,Smax,A_agg,2] (ns)
+            "si_vwin": _mt(self.si_vwin[spn][:, :, ci, :]),   # [B,Smax,2]   (ns)
+            "si_bump": _mt(self.si_bump[spn][..., ci]),       # [B,Smax,A_agg] ratio
+            "si_present": (_mt(self.si_present[spn], torch.bool)[:, :, :]
+                           & self.stage_mask[P][:, :, None]),
             "si_stage_mask": self.stage_mask[P],
             "resid_target": self.resid[P, ci],
             # SI aux target = the residual of the per-path SI smooth fit.
