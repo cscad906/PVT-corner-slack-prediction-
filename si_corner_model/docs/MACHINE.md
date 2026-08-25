@@ -126,18 +126,31 @@ chmod +x run_here.sh
 
 ## 4. 실행 순서
 
-```bash
-P="env PY=/usr/bin/python3"        # bash 기준. csh 면 setenv 후 이 변수 없이
+> **셸 변수를 쓰지 말 것.** `P="env PY=..."` 같은 축약은 bash 전용이라 csh/tcsh
+> 에서는 안 풀리고, `$P` 가 그대로 파이썬까지 넘어가 `unrecognized argument $`
+> 로 죽는다. 아래처럼 **매번 전부 적는 쪽**이 어느 셸에서도 안전하다.
 
-$P bash scripts/run.sh recon       # ① 데이터 정찰 -> recon_out.txt
-$P bash scripts/run.sh check       # ② 리포트 한 개를 파서에 통과시켜 본다
-$P bash scripts/run.sh list        # ③ 뭐가 돌지 확인 (파일 안 건드림)
-$P bash scripts/run.sh build       # ④ 리포트 -> cache/.../dataset.npz
-$P bash scripts/run.sh base        # ⑤ OLS base 오차만 (수 초, torch 불필요)
-$P bash scripts/run.sh train       # ⑥ 학습 (몇 시간, §5)
-$P bash scripts/run.sh bundle
-$P bash scripts/run.sh predict
-$P bash scripts/run.sh merge
+```
+env PY=/usr/bin/python3 bash scripts/run.sh recon   # ① 데이터 정찰 -> recon_out.txt
+env PY=/usr/bin/python3 bash scripts/run.sh check   # ② 리포트 하나를 파서에 통과
+env PY=/usr/bin/python3 bash scripts/run.sh list    # ③ 뭐가 돌지 확인 (파일 안 건드림)
+env PY=/usr/bin/python3 bash scripts/run.sh build   # ④ 리포트 -> cache/.../dataset.npz
+env PY=/usr/bin/python3 bash scripts/run.sh base    # ⑤ OLS base 오차만 (수 초, torch 불필요)
+env PY=/usr/bin/python3 bash scripts/run.sh train   # ⑥ 학습 (몇 시간, §5)
+env PY=/usr/bin/python3 bash scripts/run.sh bundle
+env PY=/usr/bin/python3 bash scripts/run.sh predict
+env PY=/usr/bin/python3 bash scripts/run.sh merge
+```
+
+매번 치기 싫으면 셸에 한 번 등록한다 (그러면 `env PY=...` 를 빼고 쓴다):
+
+```csh
+setenv PY /usr/bin/python3          # csh / tcsh
+bash scripts/run.sh list
+```
+```bash
+export PY=/usr/bin/python3          # bash / zsh
+bash scripts/run.sh list
 ```
 
 `all` 은 ④~⑨ 를 한 번에 돈다. 처음에는 **한 단계씩** 돌려 각 단계 출력을 확인하는
@@ -216,14 +229,21 @@ $P bash scripts/run.sh merge
 
 xterm 을 닫아도 죽지 않게 `nohup` 으로 띄우고 로그를 남긴다.
 
+**리다이렉트 문법이 셸마다 다르다.** csh/tcsh 에 `2>&1` 은 없고 `>&` 를 쓴다 —
+bash 문법을 그대로 치면 `ambiguous output redirect` 가 난다.
+
+```csh
+# csh / tcsh   -- 모델 하나씩, 로그를 따로
+nohup env PY=/usr/bin/python3 bash scripts/run.sh train --design MFC_Timing_Report --temp 125 >& log.mfc.125 &
+nohup env PY=/usr/bin/python3 bash scripts/run.sh train --design MFC_Timing_Report --temp m25 >& log.mfc.m25 &
+```
 ```bash
-# 모델 하나씩, 로그를 따로
+# bash / zsh
 nohup env PY=/usr/bin/python3 bash scripts/run.sh train \
       --design MFC_Timing_Report --temp 125 > log.mfc.125 2>&1 &
-
-nohup env PY=/usr/bin/python3 bash scripts/run.sh train \
-      --design MFC_Timing_Report --temp m25 > log.mfc.m25 2>&1 &
 ```
+
+셸이 헷갈리면 `bash` 를 한 번 치고 들어가서 아래쪽 문법으로 통일하는 게 편하다.
 
 진행 상황 보기:
 
@@ -252,7 +272,7 @@ kill <PID>
 한 번에 못 섞는다. 그 실행에만 적용하려면 파일을 고치지 말고 `--mode` 를 쓴다:
 
 ```bash
-$P bash scripts/run.sh all --mode hold
+env PY=/usr/bin/python3 bash scripts/run.sh all --mode hold
 env SI_MODE=hold PY=/usr/bin/python3 bash scripts/run.sh all    # 같은 뜻
 ```
 
@@ -396,5 +416,8 @@ quota, 그리고 LSF 의 종료 사유. LSF 는 `TERM_*` 로 이유를 남긴다
 | `degenerate split: N seen < min_seen` | 리포트가 빠졌다. `list` 의 코너 수와 실제 파일 수를 대조 |
 | `could not convert string to float` | 고쳐졌다. 그래도 나면 그 줄을 그대로 공유할 것 |
 | xterm 닫으니 죽음 | §6 의 `nohup` 으로 띄운다 |
+| `ambiguous output redirect` | csh 다. `> f 2>&1` 대신 `>& f` |
+| `unrecognized argument $...` | 셸 변수가 안 풀렸다. `$P` 같은 축약 쓰지 말고 전부 적는다 |
+| `Undefined variable` | 같은 원인 (csh). §4 의 형태로 |
 | `Killed` 만 뜨고 이유 없음 | §8.5 — `bash scripts/why_killed.sh <로그>` |
 | 아무것도 안 찍힘 | 첫 코너를 읽는 중이다. 경로가 많으면 몇 분 걸린다. `ps` 로 살아있는지 확인 |
