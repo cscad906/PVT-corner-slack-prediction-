@@ -1023,6 +1023,7 @@ def main(argv=None):
         print(HELP)
         return 0
     from si_model import memlog
+    memlog.report_job()
     memlog.report_limits()
     memlog.start()
     p = load_project(args.config)

@@ -64,7 +64,20 @@ fi
 
 say ""
 say " job scheduler"
+# The id from the environment if we are still inside the job, else the one the
+# run itself printed into the log -- that is the whole reason it is printed.
+JID="${LSB_JOBID:-${SLURM_JOB_ID:-${PBS_JOBID:-}}}"
+if [ -z "$JID" ] && [ -n "$LOG" ] && [ -r "$LOG" ]; then
+  JID=$(grep -m1 '\[JOB\]' "$LOG" 2>/dev/null | sed -n 's/.*job \([0-9][0-9]*\).*/\1/p')
+fi
+[ -n "$JID" ] && say "   job id: $JID" || say "   job id: unknown (none in env, none in the log)"
 if command -v bjobs >/dev/null 2>&1; then
+  if [ -n "$JID" ]; then
+    say "   --- bhist -l $JID (termination reason) ---"
+    bhist -l "$JID" 2>&1 | grep -iE 'TERM_|Exited|Completed|MEM|Killed' | head -8 | sed 's/^/     /'
+    say "   --- bjobs -l $JID ---"
+    bjobs -l "$JID" 2>&1 | grep -iE 'TERM_|MEMLIMIT|RUNLIMIT|Status' | head -6 | sed 's/^/     /'
+  fi
   say "   LSF present. A job killed for exceeding a limit shows it in:"
   say "     bjobs -l <jobid>     |  bhist -l <jobid>"
   say "   Look for TERM_* :  TERM_MEMLIMIT (memory) TERM_RUNLIMIT (wall clock)"

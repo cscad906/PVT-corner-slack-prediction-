@@ -108,6 +108,35 @@ def log(tag: str) -> None:
     print(line(tag), flush=True)
 
 
+# Scheduler identifiers, in the order they are worth reporting. Without the
+# job id in the log there is no way back to the scheduler's own record of why
+# a job ended -- and that record is the only place a wall-clock or admin kill
+# is written down.
+_JOB_VARS = (("LSF", "LSB_JOBID"), ("LSF", "LSB_BATCH_JID"),
+             ("Slurm", "SLURM_JOB_ID"), ("PBS", "PBS_JOBID"),
+             ("SGE", "JOB_ID"))
+
+
+def report_job() -> None:
+    """Host, pid and job id -- printed once, so a killed run can be looked up."""
+    import socket
+    bits = ["host %s" % socket.gethostname(), "pid %d" % os.getpid()]
+    seen = set()
+    for kind, var in _JOB_VARS:
+        v = os.environ.get(var)
+        if v and v not in seen:
+            seen.add(v)
+            bits.append("%s job %s" % (kind, v))
+    for var, label in (("LSB_QUEUE", "queue"), ("LSB_JOBNAME", "name")):
+        if os.environ.get(var):
+            bits.append("%s %s" % (label, os.environ[var]))
+    print("[JOB] %s" % "  ".join(bits), flush=True)
+    if not seen:
+        print("[JOB] no scheduler job id in the environment -- if this was "
+              "submitted (ub_sub / bsub), run from inside that job so a kill "
+              "can be traced back to it", flush=True)
+
+
 def report_limits() -> None:
     """Print every ceiling that is visible, not just the memory one.
 
