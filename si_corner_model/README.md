@@ -31,6 +31,7 @@ si_model/            엔진. 리포트 형식이 아주 다르지 않으면 열 
 tests/               python -m pytest tests/ -q
 
 docs/START.md        ★ 도착해서 처음부터 (폴더 구조 케이스별 · 단계별 · 체크리스트)
+docs/MACHINE.md      ★ 회사 장비에서 돌리기 (장비 할당 · python 경로 · 소요 시간/메모리)
 docs/HOLDOUT.md      어떤 코너를 숨길지 · 온도마다 따로 주는 법
 docs/CONFIG.md       config.yaml 키 전부 + 에러표
 docs/OLS.md          base(예측의 뼈대)가 뭘 하는지 + 차수/대역폭 튜닝

@@ -2,6 +2,9 @@
 
 **이 문서 하나만 위에서 아래로 따라가면 된다.** 막히면 각 STEP 끝의 표를 본다.
 
+> 회사 장비 할당(`ub_sub`), python 인터프리터 경로 지정, 실측 소요 시간·메모리는
+> **[MACHINE.md](MACHINE.md)** 에 따로 있다. 장비에서 처음 돌린다면 그쪽을 먼저.
+
 명령은 `bash scripts/run.sh <단계>` 하나뿐이고, 설정은 `config.yaml` 하나뿐이다.
 아무 인자 없이 `bash scripts/run.sh` 를 치면 단계 목록이 나온다.
 
