@@ -280,6 +280,64 @@ si_corner_model/
 
 ---
 
+## 8.5 `Killed` 만 뜨고 이유가 안 남을 때
+
+`Killed` 는 SIGKILL 이다. **프로세스가 잡을 수 없어서 죽는 순간에는 아무것도 못 남긴다** —
+파이썬 traceback 도, 커널 메시지도 그 프로세스에는 안 온다. 대신 두 가지가 있다.
+
+### ① 죽기 직전까지의 궤적 (로그에 남는다)
+
+실행 중 `[MEM]` 줄이 주기적으로 찍힌다. **마지막 줄이 어디까지 올라갔는지** 말해준다:
+
+```
+[MEM] limit: cgroup 40.0 GB
+[MEM] corner 1/8             anon   4.21 GB  file   0.30 GB  cgroup 5.1/40.0 GB
+[MEM] corner 2/8             anon   8.40 GB  file   0.31 GB  cgroup 9.3/40.0 GB
+[MEM] corner 3/8             anon  12.6  GB  file   0.31 GB  cgroup 13.5/40.0 GB
+```
+
+`anon` 과 `file` 을 나눠 찍는 이유가 있다. **둘 중 하나만 죽일 수 있다:**
+
+| | 뜻 | 부족할 때 |
+|---|---|---|
+| `anon` | 원본이 RAM 에만 있음 | **회수 불가 → 죽는다** |
+| `file` | 원본이 디스크에 있음 (memory-map) | 커널이 버리고 다시 읽음 — 안 죽는다 |
+
+`file` 이 커도 문제가 아니다. **`anon` 이 한도에 다가가는지**만 보면 된다.
+
+로그가 없으면 `nohup ... > log 2>&1` 로 남기고 돌린다 (§6).
+
+### ② 죽은 뒤 원인 조회
+
+```bash
+bash scripts/why_killed.sh log.mfc.125
+```
+
+프로세스보다 오래 남는 것들을 읽어준다:
+
+- **cgroup 카운터** — `failcnt` 가 0 이 아니면 메모리 한도에 실제로 부딪힌 것이다.
+  `max_usage` 로 얼마나 올라갔는지도 나온다.
+- **커널 OOM killer** — `dmesg` 가 읽히면 그 기록
+- **스케줄러** — LSF 면 `bjobs -l <jobid>` / `bhist -l <jobid>` 에
+  `TERM_MEMLIMIT` / `TERM_RUNLIMIT` 이 있는지
+
+> **같은 셸/작업 안에서 돌려야 한다.** cgroup 카운터는 그 세션 것이라
+> 새 창을 열면 안 보인다.
+
+`failcnt` 가 0 인데도 죽었다면 메모리가 아니다 — 시간 제한, 디스크 할당량,
+관리자 정책일 수 있다. 그때는 스케줄러 쪽(`bhist -l`)을 본다.
+
+### 메모리가 원인일 때 줄이는 순서
+
+```
+① 모델 하나씩            run.sh build --design <회로> --temp <온도>
+② SI 끄기                config.yaml: crosstalk_subdir: null
+③ 배치 줄이기            train.batch_paths: 256 -> 128
+④ 용량 줄이기            model.enc_dim: 128 -> 48, enc_blocks: 3 -> 2
+```
+
+---
+
 ## 9. 자주 막히는 것
 
 | 증상 | 원인 / 대처 |
@@ -292,4 +350,5 @@ si_corner_model/
 | `degenerate split: N seen < min_seen` | 리포트가 빠졌다. `list` 의 코너 수와 실제 파일 수를 대조 |
 | `could not convert string to float` | 고쳐졌다. 그래도 나면 그 줄을 그대로 공유할 것 |
 | xterm 닫으니 죽음 | §6 의 `nohup` 으로 띄운다 |
+| `Killed` 만 뜨고 이유 없음 | §8.5 — `bash scripts/why_killed.sh <로그>` |
 | 아무것도 안 찍힘 | 첫 코너를 읽는 중이다. 경로가 많으면 몇 분 걸린다. `ps` 로 살아있는지 확인 |

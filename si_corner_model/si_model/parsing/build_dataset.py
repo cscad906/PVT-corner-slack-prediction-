@@ -28,6 +28,7 @@ import sys
 
 import numpy as np
 
+from si_model import memlog
 from .annotated import configure_pins, parse_annotated
 from .crosstalk import parse_crosstalk, SEGMENTS
 from .discovery import corner_levels, discover
@@ -641,6 +642,7 @@ def build(cfg: dict) -> str:
                  ac=np.asarray(acc_, np.float32))
         del vk_, vlo_, vhi_, vdl_, as_, aa_, ab_, alo_, ahi_, asl_, acc_
         print(f"[{ci + 1:2d}/{C}] {corner}: paths={len(ann)} si_stages={len(stage_meta)}", flush=True)
+        memlog.log("corner %d/%d" % (ci + 1, C))
 
     # densify SI tensors
     S = len(stage_meta)

@@ -26,6 +26,7 @@ import sys
 import numpy as np
 import torch
 
+from si_model import memlog
 from si_model.compat import load_checkpoint
 from si_model.config import gap_caps, load_config, token_scales
 from si_model.features.si_features import build_si_features
@@ -509,6 +510,8 @@ class Trainer:
                   f"| val-seen {val['mae'].mean():6.2f}ps "
                   f"| val-hidden {hid['mae'].mean():6.2f}ps"
                   f" lr={lr_:.1e}{tag}", flush=True)
+            if ep == 0 or (ep + 1) % 5 == 0:
+                memlog.log("epoch %d" % (ep + 1))
 
         ck = load_checkpoint(f"{out_dir}/best.pt", map_location=self.dev)
         self.model.load_state_dict(ck["model"]); self.enc.load_state_dict(ck["enc"])
