@@ -21,6 +21,11 @@ crosstalk 은 Dist/Res/Cpin 을 안 씁니다. annotated 파일이 없어도 원
 
 `6_collect.py` 가 위 두 파일만 모아 넘길 형태로 만듭니다.
 
+경로 수를 줄여야 하면 그 앞에 `7_cut.py --root <폴더> --keep N` 을 끼웁니다.
+`### FIXED_PATH` 블록을 **파일 순서대로 앞에서 N개** 남긴 사본을
+`<폴더>_top<N>/` 에 만듭니다(원본은 안 건드립니다). **번호로 자르지 않습니다** —
+PT 가 못 잡은 경로는 그 idx 가 빠지므로 `idx <= N` 으로 걸면 N개보다 적게 남습니다.
+
 ## 헷갈리기 쉬운 것들
 
 **`unique_contexts.tsv` 는 담당자분 쪽 산출물입니다.** `pt/xtalk_all.tcl` 이 PT

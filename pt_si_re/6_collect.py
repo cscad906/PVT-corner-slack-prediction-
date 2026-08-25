@@ -115,7 +115,7 @@ def main():
     args = ap.parse_args()
 
     print("=" * 68)
-    print("7 - 최종 결과 모으기  (%s)" % args.mode)
+    print("6 - 최종 결과 모으기  (%s)" % args.mode)
     print("=" * 68)
 
     if not os.path.isdir(args.root):
