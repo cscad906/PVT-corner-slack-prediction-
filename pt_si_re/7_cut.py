@@ -289,6 +289,28 @@ def targets_in(d):
     return hits
 
 
+def fmt_dur(sec):
+    """초 -> '3m 12s' 처럼. 진행 상황에 쓰므로 대충이면 된다.
+    (4_all_corners.py 의 fmt_dur 과 같은 규약. 화면 글자만 영어다)"""
+    sec = int(sec)
+    if sec < 60:
+        return "%ds" % sec
+    if sec < 3600:
+        return "%dm %ds" % (sec // 60, sec % 60)
+    return "%dh %dm" % (sec // 3600, (sec % 3600) // 60)
+
+
+def kind_of(src):
+    """화면에 쓸 짧은 이름. 파일 이름은 길어서 줄이 넘친다."""
+    if src.endswith(".tcl"):
+        return "tcl"
+    if src.endswith(WANTED[0]):
+        return "annotation"
+    if src.endswith(WANTED[1]):
+        return "crosstalk"
+    return "file"
+
+
 def rng(idxs):
     """남은 idx 를 'first..last' 로. 구멍이 있으면 개수를 덧붙인다."""
     got = [i for i in idxs if i is not None]
@@ -406,14 +428,16 @@ def main():
                 print("      %s" % m)
 
     print("")
-    print("  %-20s %-38s %11s %-14s %8s  %s"
-          % ("corner", "file", "kept", "idx kept", "measured", "note"))
-    print("  " + "-" * 104)
-    # 한 줄은 그 파일이 끝나는 대로 바로 찍는다. 다 끝나고 한꺼번에 내면 큰 파일을
-    # 돌릴 때 화면이 몇 분씩 멈춘 것처럼 보인다(4_all_corners.py 와 같은 이유).
-    # 그래서 순서는 폴더 순이 아니라 **끝난 순**이다. 줄마다 코너와 파일 이름이
-    # 붙어 있어 헷갈리지 않는다.
+    print("  %d file(s) at a time." % max(1, min(args.jobs, len(jobs))))
+    print("  a start line when a file begins, a reading line every %ds while it "
+          "runs," % int(TICK_SEC))
+    print("  and a done line when it ends. the ordered table comes at the end.")
+    print("")
+    # 4_all_corners.py 와 같은 모양으로 낸다: 시작 [n/m] / 도는 중 / 끝 [n/m].
+    # 다 끝나고 한꺼번에 내면 큰 파일에서는 화면이 몇 분씩 멈춘 것처럼 보인다.
     lock = threading.Lock()
+    t_start = time.time()
+    state = {"started": 0, "done": 0, "running": 0}
 
     def say(line):
         with lock:
@@ -422,7 +446,17 @@ def main():
 
     def one(job):
         name, src, dst = job
-        base = os.path.basename(src)
+        who = "%s / %s" % (name, kind_of(src))
+        with lock:
+            state["started"] += 1
+            state["running"] += 1
+            # 시작할 때도 한 줄 찍는다. 안 그러면 첫 파일이 끝날 때까지 화면이
+            # 완전히 멈춰 있어, 도는 중인지 죽었는지 알 수 없다.
+            print("  start [%2d/%d] %-34s %9s   (%d running)"
+                  % (state["started"], len(jobs), who[:34], mb(src),
+                     state["running"]))
+            sys.stdout.flush()
+
         # 파일 하나가 커서 오래 걸릴 때, 읽는 도중에도 살아 있다는 줄을 낸다.
         # 몇 초에 한 번만 낸다 -- 매번 내면 화면이 그것으로만 찬다.
         last = [time.time()]
@@ -432,33 +466,48 @@ def main():
             if now - last[0] < TICK_SEC:
                 return
             last[0] = now
-            say("  %-20s %-40s %10s reading %d blocks / %d MB"
-                % (name[:20], base[:40], "...", blocks, nbytes // (1024 * 1024)))
+            say("        %-34s  reading %d blocks / %d MB"
+                % (who[:34], blocks, nbytes // (1024 * 1024)))
 
+        t0 = time.time()
+        err = None
+        kept = total = meas = noidx = None
+        idxs = []
         try:
             kept, total, meas, noidx, idxs = cut_one(src, dst, args.keep, tick)
         except Exception as e:                       # noqa: BLE001
-            say("  %-20s %-38s %11s %-14s %8s  %s"
-                % (name[:20], base[:38], "FAILED", "-", "-", str(e)[:30]))
-            return name, src, None, None, None, None, None, str(e)
-        if total == 0:
-            say("  %-20s %-38s %11s %-14s %8s  %s"
-                % (name[:20], base[:38], "no marker", "-", "-",
-                   "not a fixed_paths report?"))
-            return name, src, kept, total, meas, noidx, idxs, None
+            err = str(e)
+        took = time.time() - t0
+
         # 그 파일에서 이상한 점은 **그 줄에 바로** 붙인다. 끝까지 가서야 알면
         # 큰 작업에서는 이미 한참 지난 뒤가 된다.
-        note = []
-        if total < args.keep:
-            note.append("short")
-        if meas < kept:
-            note.append("empty:%d" % (kept - meas))
-        if noidx:
-            note.append("noidx:%d" % noidx)
-        say("  %-20s %-38s %5d /%5d %-14s %8d  %s"
-            % (name[:20], base[:38], kept, total, rng(idxs), meas,
-               ", ".join(note) if note else "ok"))
-        return name, src, kept, total, meas, noidx, idxs, None
+        if err:
+            tail = "FAILED  %s" % err[:40]
+        elif total == 0:
+            tail = "no '### FIXED_PATH' marker -- is this a fixed_paths report?"
+        else:
+            note = []
+            if total < args.keep:
+                note.append("short")
+            if meas < kept:
+                note.append("empty:%d" % (kept - meas))
+            if noidx:
+                note.append("noidx:%d" % noidx)
+            tail = "kept %d/%d  idx %s  measured %d  %s" % (
+                kept, total, rng(idxs), meas, ", ".join(note) if note else "ok")
+
+        with lock:
+            state["done"] += 1
+            state["running"] -= 1
+            k = state["done"]
+            eta = ""
+            if k < len(jobs):
+                per = (time.time() - t_start) / k
+                eta = "   eta %s" % fmt_dur(per * (len(jobs) - k))
+            print("  done  [%2d/%d] %-34s %s   (%s)%s"
+                  % (k, len(jobs), who[:34], tail, fmt_dur(took), eta))
+            sys.stdout.flush()
+        return name, src, kept, total, meas, noidx, idxs, err
 
     n = max(1, min(args.jobs, len(jobs)))
     if n > 1:
@@ -492,6 +541,35 @@ def main():
                 empties.append("%s / %s : %d of %d kept blocks hold no path"
                                % (name, base, kept - meas, kept))
 
+    # 위의 진행 줄은 **끝난 순**이라 돌릴 때마다 순서가 달라진다. 그래서 마지막에
+    # 폴더 순으로 한 번 더 낸다(4_all_corners.py 와 같은 규약). 이 표가 결과다.
+    print("")
+    print("  result (in folder order)")
+    print("  %-20s %-38s %11s %-14s %8s  %s"
+          % ("corner", "file", "kept", "idx kept", "measured", "note"))
+    print("  " + "-" * 104)
+    for name, src, kept, total, meas, noidx, idxs, err in done:
+        base = os.path.basename(src)
+        if err:
+            print("  %-20s %-38s %11s %-14s %8s  %s"
+                  % (name[:20], base[:38], "FAILED", "-", "-", err[:24]))
+            continue
+        if total == 0:
+            print("  %-20s %-38s %11s %-14s %8s  %s"
+                  % (name[:20], base[:38], "no marker", "-", "-",
+                     "not a fixed_paths report?"))
+            continue
+        note = []
+        if total < args.keep:
+            note.append("short")
+        if meas < kept:
+            note.append("empty:%d" % (kept - meas))
+        if noidx:
+            note.append("noidx:%d" % noidx)
+        print("  %-20s %-38s %5d /%5d %-14s %8d  %s"
+              % (name[:20], base[:38], kept, total, rng(idxs), meas,
+                 ", ".join(note) if note else "ok"))
+
     print("")
     print("-" * 68)
     for f in failed:
@@ -500,6 +578,7 @@ def main():
         code("E-NOMARK", "")
 
     print("  kept per file : %s" % (", ".join(str(c) for c in sorted(counts)) or "-"))
+    print("  total time    : %s" % fmt_dur(time.time() - t_start))
     print("  output        : %s" % os.path.abspath(out_root))
     if args.root:
         # 결과가 딴 데 있으면 상대경로가 ../../.. 로 길어진다. 그럴 땐 절대경로로.

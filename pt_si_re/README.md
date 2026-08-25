@@ -393,18 +393,31 @@ python3 6_collect.py --root round2_top300 --out deliver --mode setup
   그래서 그대로 `6_collect.py --root` 에 넣으면 된다. **원본은 안 건드린다.**
 - 두 산출물(annotation, crosstalk)을 같이 자른다. `fixed_paths.tcl` 도 자를 수 있다.
 
-돌리는 동안 이렇게 알려 준다.
+돌리는 동안 `4_all_corners.py` 와 같은 모양으로 알려 준다.
+
+```
+  input   corner                       annotation      crosstalk
+  ------------------------------------------------------------------
+          good                             4.2 MB         1.9 MB
+          half                             4.2 MB        MISSING      <- 시작 전
+
+  start [ 1/5] good / annotation                     4.2 MB   (2 running)
+        good / annotation                   reading 9786 blocks / 140 MB
+  done  [ 1/5] good / annotation   kept 4/294  idx 1..4  measured 4  ok   (0s)  eta 1s
+```
 
 - **시작 전** — 코너마다 최종 2종이 다 있는지 `input` 표로 먼저 보여 준다.
   없으면 `MISSING` 이고 그 코너는 건너뛴다(`W-NOFINAL`).
-- **읽는 중** — 파일이 커서 오래 걸리면 3초에 한 번 `... reading N blocks / M MB`.
-- **파일이 끝날 때마다** — 그 줄을 바로 찍는다. `note` 열에 그 파일의 문제가
-  같이 나온다: `ok` / `empty:1`(빈 블록) / `short`(원본이 더 적었음) /
+- **파일이 시작할 때** — `start [n/m]` 과 크기, 지금 몇 개가 도는 중인지.
+- **읽는 중** — 오래 걸리면 3초에 한 번 `reading N blocks / M MB`.
+- **파일이 끝날 때** — `done [n/m]` 과 결과, **걸린 시간**, **남은 시간(eta)**.
+  `note` 가 같이 나온다: `ok` / `empty:1`(빈 블록) / `short`(원본이 더 적었음) /
   `noidx:2`(idx 를 못 읽음).
-- **맨 끝** — 코너 사이를 비교해야 아는 것만 남는다(`W-IDXDIFF`).
+- **맨 끝** — 폴더 순으로 정렬한 결과표, 총 걸린 시간, 그리고 코너 사이를
+  비교해야 아는 것(`W-IDXDIFF`).
 
-병렬로 도니까 줄 순서는 폴더 순이 아니라 **끝난 순**이다. 줄마다 코너와 파일
-이름이 붙어 있어 헷갈리지 않는다. `-j 1` 로 두면 순서대로 나온다.
+진행 줄은 병렬이라 **끝난 순**이다. 마지막 결과표는 항상 **폴더 순**이라
+돌릴 때마다 같다. `-j 1` 로 두면 진행 줄도 순서대로 나온다.
 
 화면에 `idx kept` 열로 실제로 남은 번호 범위가 찍힌다. `3..8 (-2)` 는 3번부터
 8번까지인데 그 사이에 2개가 비었다는 뜻이다. 코너끼리 남은 번호 집합이 다르면
