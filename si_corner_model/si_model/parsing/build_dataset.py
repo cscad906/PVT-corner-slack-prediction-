@@ -500,11 +500,18 @@ def build(cfg: dict) -> str:
     slack = arrival = required = si_label = None
     stage_id: "dict[tuple[int, int, str], int]" = {}
     stage_meta: "list[tuple[int, int, str]]" = []
+    stage_keys: "list[int]" = []       # same order, as packed int64
     aggr_id: "dict[tuple[int, str], int]" = {}
     aggr_meta: "list[list[str]]" = []
-    vwin_c: "list[dict]" = []
-    adata_c: "list[dict]" = []
-    arc_delta_c: "list[dict]" = []
+    # Per corner these were dicts keyed by (path, segment, net-name). On a
+    # 33k-path drop that is millions of entries at roughly a kilobyte each --
+    # tuple key, interned-or-not net string, boxed floats -- and they are held
+    # for EVERY corner at once, so the build ran out of memory partway through.
+    # The same content as int64/float32 columns is about fifty times smaller.
+    # The net name is interned to an int so a key packs into one int64.
+    net_ids: "dict[str, int]" = {}
+    vwin_c: "list[tuple]" = []       # (packed key, lo, hi, delta) per corner
+    adata_c: "list[tuple]" = []      # (stage, slot, bump, lo, hi, slew, cc)
 
     idx_order: "list[int]" = []
     stage_seqs: "dict[int, tuple]" = {}
@@ -567,9 +574,8 @@ def build(cfg: dict) -> str:
                 print("[KEYS] %s: %d of %d reference paths absent here -- left "
                       "unmeasured" % (corner, missing, len(ref_keys)), flush=True)
 
-        vw: "dict[tuple[int, int, str], tuple[float, float]]" = {}
-        ad: "dict[tuple[int, int], tuple]" = {}
-        dl: "dict[tuple[int, int, str], float]" = {}
+        vk_, vlo_, vhi_, vdl_ = [], [], [], []
+        as_, aa_, ab_, alo_, ahi_, asl_, acc_ = [], [], [], [], [], [], []
         for r, idx in enumerate(idx_order):
             pa = ann.get(idx)
             if pa is None or pa.slack != pa.slack:   # absent/unresolved -> NaN
@@ -590,16 +596,24 @@ def build(cfg: dict) -> str:
                 stage_seqs[r] = stage_sequence(pa.stages)
 
             for arc in (px.arcs if px is not None else ()):
-                skey = (r, SEG_CODE[arc.segment], arc.net)
-                vw[skey] = (arc.min_arrival, arc.max_arrival)
-                dl[skey] = arc.delta
+                nid = net_ids.get(arc.net)
+                if nid is None:
+                    nid = len(net_ids)
+                    net_ids[arc.net] = nid
+                skey = (r << 26) | (SEG_CODE[arc.segment] << 24) | nid
+                # Every arc is recorded, with or without an aggressor here: an
+                # arc can pick one up at another corner, and the window from
+                # this corner is still wanted once it does.
+                vk_.append(skey); vlo_.append(arc.min_arrival)
+                vhi_.append(arc.max_arrival); vdl_.append(arc.delta)
                 if not arc.aggressors:
                     continue
                 s = stage_id.get(skey)
                 if s is None:
                     s = len(stage_meta)
                     stage_id[skey] = s
-                    stage_meta.append(skey)
+                    stage_meta.append((r, SEG_CODE[arc.segment], arc.net))
+                    stage_keys.append(skey)
                     aggr_meta.append([])
                 for ag in arc.aggressors:
                     akey = (s, ag.net)
@@ -608,10 +622,15 @@ def build(cfg: dict) -> str:
                         a = len(aggr_meta[s])
                         aggr_id[akey] = a
                         aggr_meta[s].append(ag.net)
-                    ad[(s, a)] = (ag.bump, ag.min_arrival, ag.max_arrival, ag.slew, ag.cc_ff)
-        vwin_c.append(vw)
-        adata_c.append(ad)
-        arc_delta_c.append(dl)
+                    as_.append(s); aa_.append(a); ab_.append(ag.bump)
+                    alo_.append(ag.min_arrival); ahi_.append(ag.max_arrival)
+                    asl_.append(ag.slew); acc_.append(ag.cc_ff)
+        vwin_c.append((np.asarray(vk_, np.int64), np.asarray(vlo_, np.float32),
+                       np.asarray(vhi_, np.float32), np.asarray(vdl_, np.float32)))
+        adata_c.append((np.asarray(as_, np.int32), np.asarray(aa_, np.int32),
+                        np.asarray(ab_, np.float32), np.asarray(alo_, np.float32),
+                        np.asarray(ahi_, np.float32), np.asarray(asl_, np.float32),
+                        np.asarray(acc_, np.float32)))
         print(f"[{ci + 1:2d}/{C}] {corner}: paths={len(ann)} si_stages={len(stage_meta)}", flush=True)
 
     # densify SI tensors
@@ -626,20 +645,29 @@ def build(cfg: dict) -> str:
     awin = np.full((S, A, C, 2), np.nan, np.float32)
     aslew = np.full((S, A, C), np.nan, np.float32)
     acc = np.full((S, A), np.nan, np.float32)
+    # Map each corner's arc keys onto stage rows in one vectorised lookup
+    # rather than a per-entry dict get.
+    sk = np.asarray(stage_keys, np.int64)
+    order = np.argsort(sk) if S else np.empty(0, np.int64)
+    sk_sorted = sk[order] if S else sk
     for ci in range(C):
-        for skey, (lo, hi) in vwin_c[ci].items():
-            s = stage_id.get(skey)
-            if s is not None:
-                vwin[s, ci] = (lo, hi)
-        for skey, d in arc_delta_c[ci].items():
-            s = stage_id.get(skey)
-            if s is not None:
-                arc_delta[s, ci] = d
-        for (s, a), (bump, lo, hi, slew, cc) in adata_c[ci].items():
-            abump[s, a, ci] = bump
-            awin[s, a, ci] = (lo, hi)
-            aslew[s, a, ci] = slew
-            acc[s, a] = cc  # Cc is V/RC-independent (SPEF); last write wins
+        vk, vlo, vhi, vdl = vwin_c[ci]
+        if S and len(vk):
+            pos = np.searchsorted(sk_sorted, vk)
+            pos[pos >= S] = 0
+            hit = sk_sorted[pos] == vk          # arcs that became SI stages
+            rows = order[pos[hit]]
+            vwin[rows, ci, 0] = vlo[hit]
+            vwin[rows, ci, 1] = vhi[hit]
+            arc_delta[rows, ci] = vdl[hit]
+        ast, aslot, ab, alo, ahi, asw, ac = adata_c[ci]
+        if len(ast):
+            abump[ast, aslot, ci] = ab
+            awin[ast, aslot, ci, 0] = alo
+            awin[ast, aslot, ci, 1] = ahi
+            aslew[ast, aslot, ci] = asw
+            acc[ast, aslot] = ac  # Cc is V/RC-independent (SPEF); last write wins
+        vwin_c[ci] = adata_c[ci] = None          # release as we go
 
     # ---- INTERSECTION PASS ---------------------------------------------------
     # A union-then-re-measure flow asks every corner for the SAME path list, but
