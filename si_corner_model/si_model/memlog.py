@@ -23,22 +23,97 @@ import shutil
 import threading
 import time
 
-_CG = "/sys/fs/cgroup/memory"
 _GB = 1024.0 ** 3
 
 
 def _read_int(path):
     try:
         with open(path) as f:
-            v = int(f.read().split()[0])
-        return None if v > (1 << 62) else v      # "unlimited" sentinel
+            t = f.read().split()[0]
+        if t == "max":                           # cgroup v2 "no limit"
+            return None
+        v = int(t)
+        return None if v > (1 << 62) else v      # v1 "unlimited" sentinel
     except Exception:
         return None
 
 
+def _cg_paths():
+    """Directories to look in, nearest first: this process's own memory cgroup,
+    then each ancestor up to the root.
+
+    Reading the cgroup ROOT is close to useless -- it is almost always
+    unlimited. A batch system puts the limit on the job's own cgroup, or on a
+    slice above it, so the answer is somewhere along this chain and nowhere
+    else. Getting this wrong is why a run with a real 40 GB ceiling reported
+    "no limit visible" while being killed for exceeding it.
+    """
+    out, sub, v2 = [], None, False
+    try:
+        with open("/proc/self/cgroup") as f:
+            for line in f:
+                parts = line.strip().split(":", 2)
+                if len(parts) != 3:
+                    continue
+                if parts[1] == "memory":                 # v1
+                    sub = parts[2]
+                elif parts[0] == "0" and sub is None:    # v2 unified
+                    sub, v2 = parts[2], True
+    except Exception:
+        pass
+    base = "/sys/fs/cgroup" if v2 else "/sys/fs/cgroup/memory"
+    if sub:
+        cur = sub.rstrip("/")
+        while True:
+            out.append(base + cur if cur else base)
+            if not cur:
+                break
+            cur = cur.rsplit("/", 1)[0]
+    else:
+        out.append(base)
+    return out, v2
+
+
+_CG_PATHS, _CG_V2 = _cg_paths()
+
+
+def _cg_read(names):
+    """First readable value of `names`, searching this cgroup then its parents."""
+    for d in _CG_PATHS:
+        for n in names:
+            v = _read_int(os.path.join(d, n))
+            if v is not None:
+                return v, d
+    return None, None
+
+
+def cg_oom_kills():
+    """How many times the OOM killer fired in this cgroup -- the one number
+    that says outright that memory is what ended a run."""
+    for d in _CG_PATHS:
+        p = os.path.join(d, "memory.events")             # v2
+        try:
+            with open(p) as f:
+                for line in f:
+                    if line.startswith("oom_kill"):
+                        return int(line.split()[1])
+        except Exception:
+            pass
+        p = os.path.join(d, "memory.oom_control")        # v1
+        try:
+            with open(p) as f:
+                for line in f:
+                    if line.startswith("oom_kill "):
+                        return int(line.split()[1])
+        except Exception:
+            pass
+    return None
+
+
 def limits() -> dict:
     """The ceilings this process is running under, as far as they are visible."""
-    out = {"cgroup_limit": _read_int(os.path.join(_CG, "memory.limit_in_bytes"))}
+    lim, where = _cg_read(("memory.limit_in_bytes", "memory.max"))
+    out = {"cgroup_limit": lim, "cgroup_path": where}
     try:
         import resource
         v = resource.getrlimit(resource.RLIMIT_AS)[0]
@@ -60,9 +135,10 @@ def snapshot() -> dict:
                     d["file"] = int(line.split()[1]) * 1024.0
     except Exception:
         pass
-    d["cg_usage"] = _read_int(os.path.join(_CG, "memory.usage_in_bytes"))
-    d["cg_limit"] = _read_int(os.path.join(_CG, "memory.limit_in_bytes"))
-    d["cg_failcnt"] = _read_int(os.path.join(_CG, "memory.failcnt"))
+    d["cg_usage"] = _cg_read(("memory.usage_in_bytes", "memory.current"))[0]
+    d["cg_limit"] = _cg_read(("memory.limit_in_bytes", "memory.max"))[0]
+    d["cg_failcnt"] = _cg_read(("memory.failcnt",))[0]
+    d["cg_oom"] = cg_oom_kills()
     return d
 
 
@@ -83,6 +159,8 @@ def line(tag: str) -> str:
         txt += "  cgroup %.1f/%.1f GB" % (s["cg_usage"] / _GB, s["cg_limit"] / _GB)
     if s["cg_failcnt"]:
         txt += "  (limit hit %d x)" % s["cg_failcnt"]
+    if s.get("cg_oom"):
+        txt += "  (OOM-killed %d x)" % s["cg_oom"]
     # Memory is only one of the ways a run is killed. Wall and CPU time are
     # what a scheduler enforces, and free disk is a risk this pipeline created
     # for itself by streaming the large arrays to files.
@@ -147,7 +225,9 @@ def report_limits() -> None:
     lim = limits()
     parts = []
     if lim["cgroup_limit"]:
-        parts.append("memory cgroup %.1f GB" % (lim["cgroup_limit"] / _GB))
+        parts.append("memory cgroup %.1f GB (%s)"
+                     % (lim["cgroup_limit"] / _GB,
+                        (lim["cgroup_path"] or "").replace("/sys/fs/cgroup", "") or "/"))
     if lim["rlimit_as"]:
         parts.append("ulimit -v %.1f GB" % (lim["rlimit_as"] / _GB))
     for label, attr, scale, unit in (("cpu-time", "RLIMIT_CPU", 3600.0, "h"),

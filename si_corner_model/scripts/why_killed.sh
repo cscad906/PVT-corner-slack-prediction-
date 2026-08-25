@@ -8,8 +8,29 @@
 # belong to that session, and starting a new one resets what you can see.
 set -uo pipefail
 LOG="${1:-}"
-CG=/sys/fs/cgroup/memory
 GB=$((1024*1024*1024))
+
+# The limit is on THIS process's cgroup or one of its ancestors, not on the
+# cgroup root -- the root is practically always unlimited, so reading it says
+# "no limit" for a job that has one and is being killed by it.
+SUB=$(awk -F: '$2=="memory"{print $3}' /proc/self/cgroup 2>/dev/null)
+BASE=/sys/fs/cgroup/memory
+[ -d "$BASE" ] || { BASE=/sys/fs/cgroup; SUB=$(awk -F: '$1=="0"{print $3}' /proc/self/cgroup 2>/dev/null); }
+CG_CHAIN=""
+cur="$SUB"
+while : ; do
+  CG_CHAIN="$CG_CHAIN $BASE$cur"
+  [ -z "$cur" ] && break
+  cur=$(dirname "$cur"); [ "$cur" = "/" ] && cur=""
+done
+
+# first readable value of $1 anywhere along the chain
+cg() {
+  for d in $CG_CHAIN; do
+    [ -r "$d/$1" ] && { cat "$d/$1" 2>/dev/null; return; }
+  done
+}
+CG=$(set -- $CG_CHAIN; echo "$1")
 
 say() { printf '%s\n' "$*"; }
 num() { [ -r "$1" ] && cat "$1" 2>/dev/null || echo ""; }
@@ -18,18 +39,22 @@ say "=================================================================="
 say " why was it killed"
 say "=================================================================="
 
-lim=$(num $CG/memory.limit_in_bytes)
-peak=$(num $CG/memory.max_usage_in_bytes)
-fail=$(num $CG/memory.failcnt)
+lim=$(cg memory.limit_in_bytes);  [ -n "$lim" ] || lim=$(cg memory.max)
+peak=$(cg memory.max_usage_in_bytes)
+fail=$(cg memory.failcnt)
+oom=$(cg memory.oom_control | awk '/^oom_kill /{print $2}')
+[ -n "$oom" ] || oom=$(cg memory.events | awk '/^oom_kill/{print $2}')
 if [ -n "$lim" ]; then
   if [ "$lim" -gt $((1<<62)) ] 2>/dev/null; then limtxt="unlimited";
   else limtxt="$((lim/GB)) GB"; fi
   say ""
   say " memory cgroup (survives the process)"
+  say "   cgroup       : ${SUB:-/}"
   say "   limit        : $limtxt"
   [ -n "$peak" ] && say "   peak usage   : $((peak/GB)) GB"
   [ -n "$fail" ] && say "   limit hit    : $fail times"
-  if [ -n "$fail" ] && [ "$fail" != "0" ]; then
+  [ -n "$oom" ] && say "   OOM-killed   : $oom times"
+  if { [ -n "$oom" ] && [ "$oom" != "0" ]; } || { [ -n "$fail" ] && [ "$fail" != "0" ]; }; then
     say "   -> MEMORY. The limit was reached. Lower it: run one model at a"
     say "      time (--design/--temp), set crosstalk_subdir: null to drop SI,"
     say "      or reduce train.batch_paths / model.enc_dim."
