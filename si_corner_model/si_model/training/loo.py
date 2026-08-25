@@ -177,10 +177,11 @@ def build_design(cfg: dict, split: Split, y=None):
         from si_model.run import select_basis
         cfg = select_basis(y, split, coords, cfg)
     exps, names, dropped = expand_terms(cfg, seen_levels)
-    if dropped:
+    if dropped and not _base_quiet():
         print(f"[BASIS] dropped rank-deficient terms {dropped} "
               f"(seen levels per axis = {seen_levels})", flush=True)
-    print(f"[BASIS] {len(exps)} terms: {names}", flush=True)
+    if not _base_quiet():
+        print(f"[BASIS] {len(exps)} terms: {names}", flush=True)
     phi = design_matrix(coords, exps)
     return phi, coords, exps, names
 
@@ -195,6 +196,18 @@ def _adaptive_kwargs(cfg: dict) -> dict:
 
 def _mode(cfg: dict) -> str:
     return cfg["base"].get("weighting", cfg["base"].get("local_bandwidth", "adaptive"))
+
+
+def _base_quiet() -> bool:
+    """True when base diagnostics should stay silent.
+
+    They are printed only when `base` was asked for by name. Under `all` that
+    stage still runs, between build and train, where every line of it sits
+    between the reader and the epochs they are waiting for. Nothing about the
+    computation changes -- `run.sh base` prints all of it.
+    """
+    import os
+    return os.environ.get("SI_STAGE", "base") != "base"
 
 
 _ADAPTIVE_WARNED = set()
@@ -231,7 +244,7 @@ def _effective_mode(cfg: dict, split: Split) -> str:
     if n_seen > k:
         return mode
     key = (n_seen, k, tuple(split.corners[:2]))
-    if key not in _ADAPTIVE_WARNED:
+    if key not in _ADAPTIVE_WARNED and not _base_quiet():
         _ADAPTIVE_WARNED.add(key)
         print(f"[BASE] {n_seen} seen corners <= adaptive_k {k} -- the neighbourhood "
               f"becomes the whole grid, so adaptive cannot select a bandwidth. "
@@ -260,7 +273,7 @@ def compute_base(ds, split: Split, cfg: dict) -> BaseArtifacts:
     phi, coords, exps, _ = build_design(cfg, split, y=ds["slack"])
     slack_loo, picks = fit_field(ds["slack"], phi, split, coords, cfg)
     si_loo, _ = fit_field(ds["si_label"], phi, split, coords, cfg)
-    if picks:
+    if picks and not _base_quiet():
         print("[BASE-ADAPTIVE] per-corner bandwidth picks: "
               + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)),
               flush=True)

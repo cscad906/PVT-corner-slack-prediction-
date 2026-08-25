@@ -217,6 +217,15 @@ def spread_hidden(volts, levels, n, ref_v, ref_lv) -> list:
     return out
 
 
+# The running stage, for output that depends on it. Kept in the environment
+# rather than a module global because `python -m si_model.run` loads this file
+# TWICE -- once as __main__, once as si_model.run when another module imports
+# from it -- so a global set in main() is invisible to the copy that loo.py
+# uses. The environment is one per process and does not split like that.
+def _stage() -> str:
+    return os.environ.get("SI_STAGE", "")
+
+
 def select_basis(y, sp, coords, cfg, verbose=True):
     """Pick the polynomial basis by SEEN-corner leave-one-out error.
 
@@ -282,12 +291,18 @@ def select_basis(y, sp, coords, cfg, verbose=True):
         "no usable basis -- too few seen corners. Reduce the holdout or add "
         "more corners")
     err, vo, cross, cmd, names = best
-    if verbose:
+    if verbose and _stage() == "base":
         print(f"[BASIS] picked by seen-LOO: v^{vo} cross={cross}"
               + (f"(deg{cmd})" if cross else "")
               + f" -> {len(names) + 1} params, seen-LOO {err * 1000:.2f} ps", flush=True)
+        # The full candidate table is what makes the choice checkable, but it
+        # is up to 18 rows and it prints again for every model. In `base`, whose
+        # entire job is to show the base numbers, that is the point. Anywhere
+        # else it buries the line the reader is waiting for, so it is behind a
+        # switch there: SI_BASIS_TABLE=1.
         for e, v, cr, cd, k in sorted(tried):
-            print(f"          v^{v} cross={str(cr):5s} {k} params  {e * 1000:8.2f} ps", flush=True)
+            print(f"          v^{v} cross={str(cr):5s} {k} params  {e * 1000:8.2f} ps",
+                  flush=True)
     cfg["base"]["axes"][0]["order"] = vo
     cfg["base"]["cross_terms"] = cross
     cfg["base"]["cross_max_degree"] = cmd
@@ -731,6 +746,12 @@ def stage_base(m: dict) -> None:
     split = make_split(ds["corners"].tolist(), ds["vt"], cfg, measured=measured)
     phi, coords, _, _ = build_design(cfg, split, y=y)
     loo, picks = fit_field(y, phi, split, coords, cfg)
+    if _stage() != "base":
+        # This stage is diagnostic only: it writes nothing, and train fits its
+        # own base. Under `all` it still runs (asked for: compute unchanged)
+        # but stays silent, so build is followed straight by epochs.
+        # `run.sh base` is where these numbers are meant to be read.
+        return
     if picks:
         print("  [adaptive] " + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)))
 
@@ -1017,6 +1038,7 @@ def main(argv=None):
                     help="report file to inspect in the check stage "
                          "(omit to use the first file from the config)")
     args = ap.parse_args(argv)
+    os.environ["SI_STAGE"] = args.stage
 
     os.chdir(REPO_ROOT)
     if args.stage == "help":
