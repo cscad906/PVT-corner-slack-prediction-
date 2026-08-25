@@ -64,6 +64,19 @@ if [ -n "$lim" ]; then
 fi
 
 say ""
+say " machine-wide memory (this is the ceiling when no cgroup limit is set)"
+awk '/MemTotal|MemAvailable|SwapTotal|SwapFree/{printf "   %-14s %6.1f GB\n", $1, $2/1048576}' \
+    /proc/meminfo 2>/dev/null
+say "   -> with no per-job limit the kernel kills the LARGEST process on the"
+say "      machine, which may be yours even if you did nothing wrong. Check"
+say "      whether others were running at the same time."
+if command -v ps >/dev/null 2>&1; then
+  say "   biggest processes right now:"
+  ps -eo rss,user,comm --sort=-rss 2>/dev/null | head -4 \
+    | awk 'NR==1{next}{printf "     %6.1f GB  %-10s %s\n", $1/1048576, $2, $3}'
+fi
+
+say ""
 say " kernel OOM killer (needs dmesg access)"
 if dmesg 2>/dev/null | grep -qiE 'out of memory|oom-kill'; then
   dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill|Killed process' | tail -5 | sed 's/^/   /'

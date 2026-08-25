@@ -123,6 +123,23 @@ def limits() -> dict:
     return out
 
 
+def meminfo() -> dict:
+    """Machine-wide memory. This is the ceiling that matters when there is no
+    cgroup limit and no batch job: the kernel OOM killer then picks the largest
+    process on a machine shared with everyone else, and nothing in this process
+    is consulted first."""
+    out = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k = line.split(":")[0]
+                if k in ("MemTotal", "MemAvailable", "SwapFree"):
+                    out[k] = int(line.split()[1]) * 1024.0
+    except Exception:
+        pass
+    return out
+
+
 def snapshot() -> dict:
     """Current anon/file split, plus the cgroup counters if readable."""
     d = {"anon": 0.0, "file": 0.0}
@@ -164,6 +181,12 @@ def line(tag: str) -> str:
     # Memory is only one of the ways a run is killed. Wall and CPU time are
     # what a scheduler enforces, and free disk is a risk this pipeline created
     # for itself by streaming the large arrays to files.
+    mi = meminfo()
+    if mi.get("MemAvailable") is not None and not s["cg_limit"]:
+        # With no cgroup limit this is the real headroom, and it moves with
+        # what everyone else on the machine is doing.
+        txt += "  machine-free %.1f/%.0f GB" % (mi["MemAvailable"] / _GB,
+                                                mi.get("MemTotal", 0) / _GB)
     cpu = resource.getrusage(resource.RUSAGE_SELF).ru_utime
     txt += "  | %.0fm wall %.0fm cpu" % ((time.time() - _T0) / 60.0, cpu / 60.0)
     d = _WATCH_DIR[0]
@@ -244,8 +267,22 @@ def report_limits() -> None:
             parts.append("disk-free %.0f GB" % (shutil.disk_usage(d).free / _GB))
         except Exception:
             pass
+    mi = meminfo()
+    if mi.get("MemTotal"):
+        parts.append("machine %.0f GB total, %.1f GB free now"
+                     % (mi["MemTotal"] / _GB, mi.get("MemAvailable", 0) / _GB))
     print("[MEM] limits: %s" % (", ".join(parts) if parts else "none visible"),
           flush=True)
+    if not lim["cgroup_limit"] and not lim["rlimit_as"]:
+        # Worth saying plainly: with no per-job ceiling, the kernel picks a
+        # victim by size across the whole machine and writes nothing to this
+        # process. Self-imposing RLIMIT_AS was tried as a way to turn that into
+        # a catchable MemoryError and does NOT work here -- it caps virtual
+        # address space, and numpy/torch reserve enough of that at import time
+        # that any useful ceiling kills the process before it starts.
+        print("[MEM] no per-job memory limit is set: if this run grows too "
+              "large the kernel kills it with no message. Watch machine-free "
+              "above, and keep one model per run.", flush=True)
 
 
 _started = False
