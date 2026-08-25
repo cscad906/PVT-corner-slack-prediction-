@@ -296,6 +296,19 @@ si_corner_model/
 [MEM] corner 3/8             anon  12.6  GB  file   0.31 GB  cgroup 13.5/40.0 GB
 ```
 
+줄 뒤쪽에는 **메모리 말고 다른 한도**도 같이 나온다. 이것들로 죽어도 화면에는
+똑같이 `Killed` 만 뜨기 때문이다:
+
+```
+... | 42m wall 38m cpu  disk-free 120 GB  threads 65
+```
+
+| 보이는 값 | 의심할 것 |
+|---|---|
+| `wall` 이 스케줄러 한도에 근접 | 실행시간 초과로 스케줄러가 죽임 |
+| `disk-free` 가 줄어듦 | 이 파이프라인이 큰 배열을 파일로 쓴다. 꽉 차면 죽는다 |
+| `threads` 가 계속 늘어남 | 프로세스/스레드 한도 |
+
 `anon` 과 `file` 을 나눠 찍는 이유가 있다. **둘 중 하나만 죽일 수 있다:**
 
 | | 뜻 | 부족할 때 |
@@ -324,8 +337,19 @@ bash scripts/why_killed.sh log.mfc.125
 > **같은 셸/작업 안에서 돌려야 한다.** cgroup 카운터는 그 세션 것이라
 > 새 창을 열면 안 보인다.
 
-`failcnt` 가 0 인데도 죽었다면 메모리가 아니다 — 시간 제한, 디스크 할당량,
-관리자 정책일 수 있다. 그때는 스케줄러 쪽(`bhist -l`)을 본다.
+`failcnt` 가 0 인데도 죽었다면 **메모리가 아니다.** `why_killed.sh` 는 그 경우를
+위해 나머지도 같이 찍는다 — `ulimit` (cpu-time / file-size / nproc), 디스크 여유와
+quota, 그리고 LSF 의 종료 사유. LSF 는 `TERM_*` 로 이유를 남긴다:
+
+| | 뜻 |
+|---|---|
+| `TERM_MEMLIMIT` | 메모리 초과 |
+| `TERM_RUNLIMIT` | 실행시간(wall) 초과 |
+| `TERM_CPULIMIT` | CPU 시간 초과 |
+| `TERM_OWNER` / `TERM_ADMIN` | 사람이 죽임 |
+
+`bhist -l <jobid>` 로 본다. 여기서 아무것도 안 나오면 관리자 정책(유휴 종료 등)일
+수 있으니 담당자에게 jobid 와 함께 문의한다.
 
 ### 메모리가 원인일 때 줄이는 순서
 

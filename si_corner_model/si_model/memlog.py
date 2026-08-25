@@ -18,6 +18,8 @@ outlive the process: a non-zero ``failcnt`` means the memory limit really was
 hit, and ``max_usage`` says how high it got.
 """
 import os
+import resource
+import shutil
 import threading
 import time
 
@@ -64,6 +66,15 @@ def snapshot() -> dict:
     return d
 
 
+_T0 = time.time()
+_WATCH_DIR = [None]          # filesystem the cache/spill lives on
+
+
+def watch_dir(path: str) -> None:
+    """Point the disk figure at the filesystem this run actually writes to."""
+    _WATCH_DIR[0] = path
+
+
 def line(tag: str) -> str:
     s = snapshot()
     txt = "[MEM] %-22s anon %6.2f GB  file %6.2f GB" % (tag, s["anon"] / _GB,
@@ -72,6 +83,24 @@ def line(tag: str) -> str:
         txt += "  cgroup %.1f/%.1f GB" % (s["cg_usage"] / _GB, s["cg_limit"] / _GB)
     if s["cg_failcnt"]:
         txt += "  (limit hit %d x)" % s["cg_failcnt"]
+    # Memory is only one of the ways a run is killed. Wall and CPU time are
+    # what a scheduler enforces, and free disk is a risk this pipeline created
+    # for itself by streaming the large arrays to files.
+    cpu = resource.getrusage(resource.RUSAGE_SELF).ru_utime
+    txt += "  | %.0fm wall %.0fm cpu" % ((time.time() - _T0) / 60.0, cpu / 60.0)
+    d = _WATCH_DIR[0]
+    if d:
+        try:
+            free = shutil.disk_usage(d).free / _GB
+            txt += "  disk-free %.0f GB" % free
+        except Exception:
+            pass
+    try:
+        n = len(os.listdir("/proc/self/task"))
+        if n > 64:
+            txt += "  threads %d" % n
+    except Exception:
+        pass
     return txt
 
 
@@ -80,13 +109,33 @@ def log(tag: str) -> None:
 
 
 def report_limits() -> None:
+    """Print every ceiling that is visible, not just the memory one.
+
+    A run killed for wall-clock or CPU time looks exactly like one killed for
+    memory -- a bare "Killed" -- so the limits worth blaming are all listed up
+    front, before anything has had a chance to hit one.
+    """
     lim = limits()
     parts = []
     if lim["cgroup_limit"]:
-        parts.append("cgroup %.1f GB" % (lim["cgroup_limit"] / _GB))
+        parts.append("memory cgroup %.1f GB" % (lim["cgroup_limit"] / _GB))
     if lim["rlimit_as"]:
         parts.append("ulimit -v %.1f GB" % (lim["rlimit_as"] / _GB))
-    print("[MEM] limit: %s" % (", ".join(parts) if parts else "none visible"),
+    for label, attr, scale, unit in (("cpu-time", "RLIMIT_CPU", 3600.0, "h"),
+                                     ("file-size", "RLIMIT_FSIZE", _GB, "GB")):
+        try:
+            v = resource.getrlimit(getattr(resource, attr))[0]
+            if v != resource.RLIM_INFINITY:
+                parts.append("%s %.1f%s" % (label, v / scale, unit))
+        except Exception:
+            pass
+    d = _WATCH_DIR[0]
+    if d:
+        try:
+            parts.append("disk-free %.0f GB" % (shutil.disk_usage(d).free / _GB))
+        except Exception:
+            pass
+    print("[MEM] limits: %s" % (", ".join(parts) if parts else "none visible"),
           flush=True)
 
 

@@ -518,6 +518,7 @@ def build(cfg: dict) -> str:
                          "_si_spill")
     shutil.rmtree(spill, ignore_errors=True)
     os.makedirs(spill, exist_ok=True)
+    memlog.watch_dir(spill)      # this build writes here; watch its free space
 
     idx_order: "list[int]" = []
     stage_seqs: "dict[int, tuple]" = {}

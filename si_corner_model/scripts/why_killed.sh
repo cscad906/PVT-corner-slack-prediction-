@@ -47,11 +47,28 @@ else
 fi
 
 say ""
+say " other limits (a run killed for these looks identical to an OOM)"
+say "   wall/CPU time, file size, processes -- current shell:"
+bash -c 'printf "     cpu-time  %s s\n     file-size %s blocks\n     nproc     %s\n     virtual   %s\n" \
+         "$(ulimit -t)" "$(ulimit -f)" "$(ulimit -u)" "$(ulimit -v)"' 2>/dev/null
+
+say ""
+say " disk (this pipeline streams large arrays to files)"
+for d in . /tmp "${TMPDIR:-/tmp}"; do
+  [ -d "$d" ] && df -h "$d" 2>/dev/null | tail -1 | sed "s|^|   $d  |"
+done
+if command -v quota >/dev/null 2>&1; then
+  q=$(quota -s 2>/dev/null | tail -2)
+  [ -n "$q" ] && { say "   quota:"; printf '%s\n' "$q" | sed 's/^/     /'; }
+fi
+
+say ""
 say " job scheduler"
 if command -v bjobs >/dev/null 2>&1; then
   say "   LSF present. A job killed for exceeding a limit shows it in:"
   say "     bjobs -l <jobid>     |  bhist -l <jobid>"
-  say "   TERM_MEMLIMIT / TERM_RUNLIMIT there means the scheduler killed it."
+  say "   Look for TERM_* :  TERM_MEMLIMIT (memory) TERM_RUNLIMIT (wall clock)"
+  say "                      TERM_CPULIMIT (cpu) TERM_OWNER/TERM_ADMIN (killed by hand)"
 else
   say "   no LSF client on PATH"
 fi
