@@ -69,6 +69,7 @@ import argparse
 import os
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
@@ -81,6 +82,8 @@ TCL_LIST = "set FIXED_PATHS"
 # 그 블록에 진짜 타이밍 경로가 담겼는지 보는 표시. fixed_paths.tcl 이 끝에
 # "paths measured" 를 셀 때 쓰는 것과 같은 표시라 숫자가 서로 맞는다.
 MEASURED = "Startpoint:"
+# 큰 파일 하나를 읽는 동안 이 간격으로 "아직 읽는 중" 줄을 낸다.
+TICK_SEC = 3.0
 
 # 코너 폴더에서 찾을 것. 파일 이름은 그대로 유지한다(6_collect.py 가 꼬리로 찾는다).
 WANTED = (
@@ -116,6 +119,10 @@ CODE_INFO = {
                   "a corner is missing an idx the others have, so row 7 of one "
                   "corner is not row 7 of another. Compare the idx ranges above "
                   "before handing the data over."),
+    "W-NOFINAL": ("a corner is missing one of the two final files",
+                  "that corner was skipped for the missing one. Run "
+                  "4_all_corners.py --phase 1 (annotation) or --phase 2 "
+                  "(crosstalk) for it before handing the data over."),
     "W-NOIDX":   ("some marker lines carry no readable idx",
                   "the block was still kept -- cutting goes by order, not by "
                   "number. But idx is how corners are paired, so check the file."),
@@ -164,7 +171,7 @@ def idx_of(line):
     return n if got else None
 
 
-def cut_blocks(src, dst, keep):
+def cut_blocks(src, dst, keep, tick=None):
     """앞에서부터 블록 N개만 남긴다. 한 줄씩 흘려 보낸다.
 
     첫 블록 앞의 머리말은 그대로 옮긴다. 지금 산출물에는 머리말이 없지만,
@@ -181,9 +188,15 @@ def cut_blocks(src, dst, keep):
     idxs = []
     this_ok = False
     writing = True
+    nbytes = 0
     with open(src, "r", errors="ignore") as fi, wopen(dst) as fo:
         for line in fi:
+            nbytes += len(line)
             if line.startswith(MARK):
+                if tick is not None:
+                    # 큰 파일 하나를 읽는 동안 화면이 조용하지 않게. 부르는 쪽이
+                    # 시간으로 걸러서 실제로 찍는 것은 몇 초에 한 번이다.
+                    tick(total, nbytes)
                 if writing and this_ok:
                     measured += 1
                 this_ok = False
@@ -237,7 +250,7 @@ def cut_tcl(src, dst, keep):
     return kept, total, kept, 0, list(range(1, kept + 1))
 
 
-def cut_one(src, dst, keep):
+def cut_one(src, dst, keep, tick=None):
     """확장자를 보고 알맞은 방식으로 자른다."""
     d = os.path.dirname(os.path.abspath(dst))
     if not os.path.isdir(d):
@@ -250,7 +263,7 @@ def cut_one(src, dst, keep):
                 raise
     if src.endswith(".tcl"):
         return cut_tcl(src, dst, keep)
-    return cut_blocks(src, dst, keep)
+    return cut_blocks(src, dst, keep, tick)
 
 
 def corner_dirs(root):
@@ -314,6 +327,8 @@ def main():
 
     # ---- 자를 것 모으기 : (코너이름, 원본, 결과) ------------------------
     jobs = []
+    found = []      # (코너, {annot: 경로, xtalk: 경로}) -- 무엇이 들어갔나
+    nofinal = []    # 최종 산출물이 빠진 코너
     if args.file:
         if not os.path.isfile(args.file):
             code("E-NOROOT", "[ FAILED ] no such file: %s" % args.file)
@@ -336,8 +351,16 @@ def main():
         out_root = args.out or (os.path.abspath(args.root.rstrip("/\\"))
                                 + "_top%d" % args.keep)
         for name, d in corners:
+            got = {"annot": None, "xtalk": None}
             for src, rel in targets_in(d):
+                # 어느 산출물인지 꼬리로 가른다. 둘 다 있어야 정상이다.
+                kind = "annot" if src.endswith(WANTED[0]) else "xtalk"
+                got[kind] = src
                 jobs.append((name, src, os.path.join(out_root, name, rel)))
+            found.append((name, got))
+            for k in ("annot", "xtalk"):
+                if got[k] is None:
+                    nofinal.append("%s : no %s file" % (name, k))
         if not jobs:
             code("E-NOTHING", "[ FAILED ] nothing to cut under %s" % args.root)
 
@@ -353,13 +376,39 @@ def main():
             total_mb += os.path.getsize(src) / (1024.0 * 1024.0)
         except OSError:
             pass
+    def mb(path):
+        try:
+            return "%.1f MB" % (os.path.getsize(path) / (1024.0 * 1024.0))
+        except OSError:
+            return "?"
+
     print("  from   : %s" % os.path.abspath(args.root or args.file))
     print("  to     : %s" % os.path.abspath(out_root))
+    print("  keep   : first %d paths per file" % args.keep)
     print("  files  : %d   (%.0f MB to read)" % (len(jobs), total_mb))
+
+    # 무엇이 들어갔는지 **돌리기 전에** 보여 준다. 코너마다 최종 2종이 다 있는지가
+    # 여기서 바로 보인다. 하나라도 없으면 MISSING 으로 뜬다.
+    if found:
+        print("")
+        print("  input   %-24s %14s %14s" % ("corner", "annotation", "crosstalk"))
+        print("  " + "-" * 66)
+        for name, got in found:
+            print("          %-24s %14s %14s"
+                  % (name[:24],
+                     mb(got["annot"]) if got["annot"] else "MISSING",
+                     mb(got["xtalk"]) if got["xtalk"] else "MISSING"))
+        if nofinal:
+            print("")
+            print("  [ CHECK ] %d corner file(s) missing -- those are skipped:"
+                  % len(nofinal))
+            for m in nofinal[:10]:
+                print("      %s" % m)
+
     print("")
-    print("  %-20s %-40s %10s %-16s %8s"
-          % ("corner", "file", "kept", "idx kept", "measured"))
-    print("  " + "-" * 100)
+    print("  %-20s %-38s %11s %-14s %8s  %s"
+          % ("corner", "file", "kept", "idx kept", "measured", "note"))
+    print("  " + "-" * 104)
     # 한 줄은 그 파일이 끝나는 대로 바로 찍는다. 다 끝나고 한꺼번에 내면 큰 파일을
     # 돌릴 때 화면이 몇 분씩 멈춘 것처럼 보인다(4_all_corners.py 와 같은 이유).
     # 그래서 순서는 폴더 순이 아니라 **끝난 순**이다. 줄마다 코너와 파일 이름이
@@ -374,18 +423,41 @@ def main():
     def one(job):
         name, src, dst = job
         base = os.path.basename(src)
+        # 파일 하나가 커서 오래 걸릴 때, 읽는 도중에도 살아 있다는 줄을 낸다.
+        # 몇 초에 한 번만 낸다 -- 매번 내면 화면이 그것으로만 찬다.
+        last = [time.time()]
+
+        def tick(blocks, nbytes):
+            now = time.time()
+            if now - last[0] < TICK_SEC:
+                return
+            last[0] = now
+            say("  %-20s %-40s %10s reading %d blocks / %d MB"
+                % (name[:20], base[:40], "...", blocks, nbytes // (1024 * 1024)))
+
         try:
-            kept, total, meas, noidx, idxs = cut_one(src, dst, args.keep)
+            kept, total, meas, noidx, idxs = cut_one(src, dst, args.keep, tick)
         except Exception as e:                       # noqa: BLE001
-            say("  %-20s %-40s %10s %-16s %8s"
-                % (name[:20], base[:40], "FAILED", "-", "-"))
+            say("  %-20s %-38s %11s %-14s %8s  %s"
+                % (name[:20], base[:38], "FAILED", "-", "-", str(e)[:30]))
             return name, src, None, None, None, None, None, str(e)
         if total == 0:
-            say("  %-20s %-40s %10s %-16s %8s"
-                % (name[:20], base[:40], "no marker", "-", "-"))
-        else:
-            say("  %-20s %-40s %5d /%4d %-16s %8d"
-                % (name[:20], base[:40], kept, total, rng(idxs), meas))
+            say("  %-20s %-38s %11s %-14s %8s  %s"
+                % (name[:20], base[:38], "no marker", "-", "-",
+                   "not a fixed_paths report?"))
+            return name, src, kept, total, meas, noidx, idxs, None
+        # 그 파일에서 이상한 점은 **그 줄에 바로** 붙인다. 끝까지 가서야 알면
+        # 큰 작업에서는 이미 한참 지난 뒤가 된다.
+        note = []
+        if total < args.keep:
+            note.append("short")
+        if meas < kept:
+            note.append("empty:%d" % (kept - meas))
+        if noidx:
+            note.append("noidx:%d" % noidx)
+        say("  %-20s %-38s %5d /%5d %-14s %8d  %s"
+            % (name[:20], base[:38], kept, total, rng(idxs), meas,
+               ", ".join(note) if note else "ok"))
         return name, src, kept, total, meas, noidx, idxs, None
 
     n = max(1, min(args.jobs, len(jobs)))
@@ -462,6 +534,10 @@ def main():
         issues.append(("W-SHORT",
                        ["  [ CHECK ] fewer paths than asked:"]
                        + ["    %s" % s for s in short]))
+    if nofinal:
+        issues.append(("W-NOFINAL",
+                       ["  [ CHECK ] corners missing a final file (skipped):"]
+                       + ["    %s" % s for s in nofinal[:12]]))
 
     if not issues:
         code("OK-CUT")
