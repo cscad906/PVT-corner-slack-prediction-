@@ -220,9 +220,9 @@ E  2/40 loss=  218.36  lr=2.0e-03
 | 무엇 | 어디에 |
 |---|---|
 | 코너별 모델 오차 · SI 오차 | `runs/<mode>/<회로>/<온도>/summary.json` 의 `by_corner` |
+| 전체 통합 코너 표 | `runs/<mode>/_all/summary.json` (코너 단위. 모델별 분할은 없다) |
 | train/val/test 별 요약, best epoch | 같은 파일 |
 | 경로별 예측 (truth · base · model) | `predictions_hidden.csv` |
-| 전 회로·온도 코너별 표 | `runs/<mode>/_all/summary.json` |
 
 ### 설정은 `config.yaml` 의 `run:` 에 있다
 

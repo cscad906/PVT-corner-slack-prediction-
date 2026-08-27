@@ -225,9 +225,10 @@ def test_corner_table_is_keyed_by_corner_not_by_model(tmp_path):
     assert q["n_paths"] == 1 and q["mae_ps"] is None and q["worst_ps"] is None
 
 
-def test_merge_flags_a_summary_older_than_its_checkpoint(project, tmp_path, capsys):
-    """An interrupted train updates best.pt only, leaving the previous run's
-    summary.json behind. That must not ride out silently as by_model."""
+def test_merge_flags_predictions_older_than_the_weights(project, tmp_path, capsys):
+    """Retraining without re-running predict leaves prediction files describing
+    the previous weights. The merged table is built from those files, so that
+    must not ride out silently."""
     import json as _json
 
     from si_model.run import stage_merge
@@ -240,12 +241,12 @@ def test_merge_flags_a_summary_older_than_its_checkpoint(project, tmp_path, caps
                 "A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n")
     with open(os.path.join(d, "summary.json"), "w") as f:
         _json.dump({"all": {"hidden_mae_ps": 1.0}}, f)
-    open(os.path.join(d, "best.pt"), "w").close()          # newer than summary
-    os.utime(os.path.join(d, "summary.json"), (1, 1))
+    open(os.path.join(d, "best.pt"), "w").close()          # weights are newer
+    os.utime(os.path.join(d, "predictions_hidden.csv"), (1, 1))
 
     project["out"] = {"runs": str(tmp_path / "out"), "cache": str(tmp_path / "c")}
     stage_merge(models, project, "hidden")
-    assert "stale" in capsys.readouterr().out
+    assert "older than the weights" in capsys.readouterr().out
 
 
 def test_adaptive_downgrades_to_plain_on_a_grid_too_small_for_it(project):

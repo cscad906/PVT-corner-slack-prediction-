@@ -654,8 +654,10 @@ class Trainer:
             print(f"\n=== hidden-corner results (best epoch {best_ep + 1}) ===")
             for i, cn in enumerate(hnames):
                 print(f"  {cn:16s} model={r['mae'][i]:7.2f}ps  si={r['si_mae'][i]:6.2f}ps")
-        else:
-            print(f"\n=== hidden-corner results (best epoch {best_ep + 1}) ===")
+        # Quiet: nothing per model. Six of these blocks in a run read as six
+        # results, when the deliverable is one predictor; the merged corner
+        # table at the end is the place to read it. summary.json in this
+        # directory keeps every number either way.
         summary = {
             name: {"hidden_mae_ps": float(r["mae"].mean()),
                    "hidden_worst_ps": float(r["mae"].max())}
@@ -676,9 +678,10 @@ class Trainer:
         # so printing four rows invites reading "test" as the real score. All
         # four are still written to summary.json.
         s = summary["all"]
-        print(f"  [all paths] model {s['hidden_mae_ps']:.2f} ps "
-              f"(worst {s['hidden_worst_ps']:.2f})")
-        if len(self.eval_hidden_idx):
+        if _verbose():
+            print(f"  [all paths] model {s['hidden_mae_ps']:.2f} ps "
+                  f"(worst {s['hidden_worst_ps']:.2f})")
+        if _verbose() and len(self.eval_hidden_idx):
             # Say it plainly: the epoch was chosen by this same number, so it is
             # a best-case, not a held-out estimate. Quote it as such.
             print("  NOTE: the epoch was selected on these corners, so this "

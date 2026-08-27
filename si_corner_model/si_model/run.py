@@ -1002,31 +1002,33 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         print(f"  (!) missing models: {missing}")
     print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
 
-    summ = {"by_corner": _corner_table(out_fp), "by_model": {}}
+    # Corners only. A model per (circuit, temperature) is how this is trained,
+    # not how it is delivered -- the deliverable is one predictor, and splitting
+    # the summary by model invited reading the split as a result. Each model
+    # still writes its own summary.json in its own directory; what is merged
+    # here is the corner table, which is what the numbers are about. The
+    # by_model copy also went stale silently when a training was interrupted,
+    # since a checkpoint updates and its summary does not.
+    # The merged numbers come from the prediction files. If a model was
+    # retrained and predict was not re-run, they describe the PREVIOUS weights
+    # -- the same silent mixing the old by_model check guarded against, moved
+    # to where the numbers now actually come from.
     stale = []
     for m in models:
         d = m["cfg"]["train"]["out_dir"]
-        sfp, ckpt = os.path.join(d, "summary.json"), os.path.join(d, "best.pt")
-        if not os.path.exists(sfp):
-            continue
-        # An interrupted train still updates best.pt, but summary.json is only
-        # written when training runs to the end. So a previous run's summary can
-        # sit next to a new checkpoint and be mixed in silently. by_corner comes
-        # from the predictions just made and is always right; by_model is that
-        # stale file, so it is called out.
-        if os.path.exists(ckpt) and os.path.getmtime(sfp) < os.path.getmtime(ckpt):
+        pred = os.path.join(d, f"predictions_{corners}.csv")
+        ckpt = os.path.join(d, "best.pt")
+        if (os.path.exists(pred) and os.path.exists(ckpt)
+                and os.path.getmtime(pred) < os.path.getmtime(ckpt)):
             stale.append(m["name"])
-        with open(sfp, encoding="utf-8") as f:
-            summ["by_model"][m["name"]] = json.load(f)
     if stale:
-        print(f"  (!) by_model is stale (older than best.pt): {stale}\n"
-              f"      if training was interrupted, that model's by_model numbers "
-              f"are from the previous run. The per-corner scores (by_corner) "
-              f"come from the predictions just made, so they are correct.")
+        print(f"  (!) predictions older than the weights for: {stale}\n"
+              f"      these were trained again after predicting, so the numbers "
+              f"below are the previous model's. Re-run predict.", flush=True)
+    summ = {"by_corner": _corner_table(out_fp)}
     with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summ, f, indent=2)
-    print(f"  wrote {out_dir}/summary.json "
-          f"({len(summ['by_corner'])} corners, {len(summ['by_model'])} models)")
+    print(f"  wrote {out_dir}/summary.json ({len(summ['by_corner'])} corners)")
     _print_corner_table(summ["by_corner"])
     return out_fp
 
@@ -1067,19 +1069,26 @@ def _corner_table(csv_fp: str) -> list:
 def _print_corner_table(rows: list) -> None:
     if not rows:
         return
-    print("\n  Per-corner scores (keyed by corner, not by model)")
-    print(f"    {'circuit':<22}{'temp':<6}{'corner':<20}"
+    print("\n  Per-corner scores")
+    print(f"    {'circuit':<22}{'corner':<26}"
           f"{'paths':>7}{'MAE':>10}{'worst':>10}")
     for r in rows:
         mae = "-" if r["mae_ps"] is None else f"{r['mae_ps']:.2f}ps"
         wst = "-" if r["worst_ps"] is None else f"{r['worst_ps']:.2f}ps"
-        print(f"    {r['design']:<22}{r['temp']:<6}{r['corner']:<20}"
+        # Temperature is part of which corner this is, not a separate axis of
+        # the result: one line per corner, whatever produced it.
+        corner = f"{r['temp']}C {r['corner']}" if r.get("temp") else r["corner"]
+        print(f"    {r['design']:<22}{corner:<26}"
               f"{r['n_paths']:>7}{mae:>10}{wst:>10}")
     scored = [r for r in rows if r["mae_ps"] is not None]
     if scored:
         print(f"    {'total':<48}{sum(r['n_paths'] for r in rows):>7}"
               f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
               f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
+        # Said once, here, because the per-model blocks that used to carry it
+        # are gone: the epoch was chosen on these same corners.
+        print("\n    NOTE: training picked its stopping epoch on these corners,"
+              "\n          so these are best-case figures, not held-out ones.")
 
 
 # ----------------------------------------------------------------------- main
