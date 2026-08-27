@@ -110,6 +110,46 @@ temps:                              # Temperature = split dimension (own model).
 #     bash scripts/run.sh all --mode hold      (or env SI_MODE=hold)
 mode: setup
 
+# --- Run options -------------------------------------------------------------
+#  Every one of these can also be given as an environment variable, and the
+#  environment WINS -- so a one-off run does not need the file edited:
+#      env SI_VERBOSE=1 bash scripts/run.sh all
+#  (csh/tcsh: `setenv SI_VERBOSE 1` first, or keep the `env` prefix.)
+run:
+  verbose: false                    # SI_VERBOSE
+                                    #   false = follow a run without reading it:
+                                    #     epoch number, loss, learning rate, and
+                                    #     one combined figure at the end.
+                                    #   true  = also the OLS basis table, the
+                                    #     [BASE] notices, per-epoch val-seen /
+                                    #     val-hidden / si, and the per-corner
+                                    #     results.
+                                    #   Nothing is lost either way: every number
+                                    #   is written to summary.json (see
+                                    #   by_corner) and predictions_*.csv.
+                                    #   `run.sh base` always prints in full --
+                                    #   showing those numbers is what it is for.
+
+  rebuild: false                    # SI_REBUILD
+                                    #   Under `all`, build is skipped when
+                                    #   dataset.npz is newer than every report
+                                    #   AND newer than this file -- so re-running
+                                    #   after an interrupted training does not
+                                    #   re-parse for hours. true forces it.
+                                    #   `run.sh build` by name ALWAYS rebuilds,
+                                    #   with or without this.
+
+  memlog: true                      # SI_MEMLOG
+                                    #   The [MEM] trail: anonymous vs file-backed
+                                    #   memory, the cgroup figure against its
+                                    #   limit, wall/cpu time and free disk, at
+                                    #   each build corner and every fifth epoch.
+                                    #   A run killed by the OOM killer cannot
+                                    #   write anything itself, so this trail and
+                                    #   scripts/why_killed.sh are the only record
+                                    #   of how it got there. Turn it off only if
+                                    #   the lines are in the way.
+
 out:                                # Rarely touched. auto = follows mode.
   cache: auto                       # cache/<mode>/<design>/<temp>/dataset.npz
   runs: auto                        # runs/<mode>/<design>/<temp>/ + runs/<mode>/_all/

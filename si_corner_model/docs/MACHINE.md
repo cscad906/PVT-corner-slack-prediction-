@@ -224,6 +224,26 @@ E  2/40 loss=  218.36  lr=2.0e-03
 | 경로별 예측 (truth · base · model) | `predictions_hidden.csv` |
 | 전 회로·온도 코너별 표 | `runs/<mode>/_all/summary.json` |
 
+### 설정은 `config.yaml` 의 `run:` 에 있다
+
+```yaml
+run:
+  verbose: false      # 수치를 다 볼지
+  rebuild: false      # all 안에서 build 를 강제할지
+  memlog: true        # [MEM] 추적
+```
+
+**환경변수가 파일을 이긴다** — 그 실행에만 바꾸고 싶을 때 쓴다:
+
+| 환경변수 | config 키 | 하는 일 |
+|---|---|---|
+| `SI_VERBOSE=1` | `run.verbose` | OLS·학습 수치 전부 표시 |
+| `SI_REBUILD=1` | `run.rebuild` | `all` 안에서도 build 강제 |
+| `SI_MEMLOG=0` | `run.memlog` | `[MEM]` 추적 끄기 |
+| `SI_MODE=hold` | `mode` | setup/hold (`--mode` 와 같음) |
+| `SI_ROOT=/경로` | `root` | 데이터 위치 |
+| `SI_DESIGNS=a,b` | `designs` | 그 회로만 |
+
 ### 다 보고 싶으면
 
 ```csh

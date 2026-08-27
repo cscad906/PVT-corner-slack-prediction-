@@ -21,6 +21,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import sys
 
 import numpy as np
@@ -106,19 +107,52 @@ class Trainer:
         sf_dir = cfg["data"]["cache"].replace("dataset", "si_features")
         sf_dir = sf_dir[:-4] if sf_dir.endswith(".npz") else sf_dir
         legacy = sf_dir + ".npz"
+
+        def _load_sf(d):
+            return {os.path.splitext(f)[0]: np.load(os.path.join(d, f), mmap_mode="r")
+                    for f in sorted(os.listdir(d)) if f.endswith(".npy")}
+
+        def _matches(cand) -> bool:
+            """Do these features belong to THIS dataset?
+
+            They were reused whenever the directory existed. Rebuild the
+            dataset -- more paths, a different corner set, a cell library that
+            yields a different family count -- and the stale features are
+            indexed with the new dataset's row numbers, which surfaces as
+            "index N is out of bounds for axis 0 with size M" somewhere far
+            from the cause. The shapes have to agree.
+            """
+            want = ds["abump"].shape                       # [S, A, C]
+            try:
+                return (tuple(cand["bump_hat"].shape) == tuple(want)
+                        and tuple(cand["vwin_hat"].shape[:1]) == (want[0],)
+                        and tuple(cand["present"].shape) == tuple(want[:2]))
+            except KeyError:
+                return False
+
+        sf = None
         if os.path.isdir(sf_dir):
-            sf = {os.path.splitext(f)[0]: np.load(os.path.join(sf_dir, f), mmap_mode="r")
-                  for f in sorted(os.listdir(sf_dir)) if f.endswith(".npy")}
+            sf = _load_sf(sf_dir)
+            if not _matches(sf):
+                print("[SI] cached features do not match this dataset "
+                      "(%s vs %s) -- rebuilding"
+                      % (tuple(sf["bump_hat"].shape) if "bump_hat" in sf else "?",
+                         tuple(ds["abump"].shape)), flush=True)
+                shutil.rmtree(sf_dir, ignore_errors=True)
+                sf = None
         elif os.path.exists(legacy):
-            sf = dict(np.load(legacy))
-        else:
-            sf = build_si_features(ds, self.base.phi, self.split.seen)
+            cand = dict(np.load(legacy))
+            sf = cand if _matches(cand) else None
+            if sf is None:
+                print("[SI] legacy si_features.npz does not match this dataset "
+                      "-- rebuilding", flush=True)
+        if sf is None:
+            built = build_si_features(ds, self.base.phi, self.split.seen)
             os.makedirs(sf_dir, exist_ok=True)
-            for k, v in sf.items():
+            for k, v in built.items():
                 np.save(os.path.join(sf_dir, k + ".npy"), v)
-            del sf
-            sf = {os.path.splitext(f)[0]: np.load(os.path.join(sf_dir, f), mmap_mode="r")
-                  for f in sorted(os.listdir(sf_dir)) if f.endswith(".npy")}
+            del built
+            sf = _load_sf(sf_dir)
         self.sf_dir = sf_dir
         self.N, self.C = ds["slack"].shape
         self._prep_tensors(sf)
@@ -238,7 +272,10 @@ class Trainer:
         xp = os.path.join(self.sf_dir, "si_x.npy")
         sp_ = os.path.join(self.sf_dir, "si_x_seen.npy")
         fresh = (os.path.exists(xp) and os.path.exists(sp_)
-                 and np.array_equal(np.load(sp_), seen_))
+                 and np.array_equal(np.load(sp_), seen_)
+                 # the shape has to match too: the seen set can be unchanged
+                 # while the dataset behind it grew
+                 and tuple(np.load(xp, mmap_mode="r").shape) == (S_, A_, C_, 5))
         if not fresh:
             xm = np.lib.format.open_memmap(xp, mode="w+", dtype=np.float32,
                                            shape=(S_, A_, C_, 5))
@@ -261,6 +298,9 @@ class Trainer:
         # bump needs its NaNs replaced; do it once to disk so the batch path can
         # map it like the rest.
         bp = os.path.join(self.sf_dir, "si_bump.npy")
+        if (os.path.exists(bp)
+                and tuple(np.load(bp, mmap_mode="r").shape) != (S_, A_, C_)):
+            os.remove(bp)
         if not os.path.exists(bp):
             bh = sf["bump_hat"]
             bm = np.lib.format.open_memmap(bp, mode="w+", dtype=np.float32,

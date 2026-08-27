@@ -105,6 +105,17 @@ docs/START.md top to bottom.
 def load_project(fp: str) -> dict:
     with open(fp, encoding="utf-8") as f:
         p = yaml.safe_load(f) or {}
+    # config `run:` -> the environment the rest of the code already reads, so
+    # there is one place to set these and one place to read them. The
+    # environment is filled in ONLY where it is not already set, which keeps the
+    # documented rule intact: an env var beats the file, for a one-off run.
+    for key, var in (("verbose", "SI_VERBOSE"), ("rebuild", "SI_REBUILD"),
+                     ("memlog", "SI_MEMLOG")):
+        if var in os.environ:
+            continue
+        v = (p.get("run") or {}).get(key)
+        if v is not None:
+            os.environ[var] = "1" if v is True else ("0" if v is False else str(v))
     env_mode = os.environ.get("SI_MODE")
     if env_mode:
         p["mode"] = env_mode
@@ -905,8 +916,21 @@ def stage_predict(m: dict, corners: str) -> None:
         ckpt = os.path.join(out_dir, "best.pt")
         assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (run train first)"
         ck = load_checkpoint(ckpt, map_location=tr.dev)
-    tr.model.load_state_dict(ck["model"])
-    tr.enc.load_state_dict(ck["enc"])
+    try:
+        tr.model.load_state_dict(ck["model"])
+        tr.enc.load_state_dict(ck["enc"])
+    except RuntimeError as e:
+        # Shape mismatches here mean the weights were trained against a
+        # different dataset -- most often a different cell-family count, which
+        # changes the embedding. The torch message names tensor sizes and not
+        # the cause, so say what it is and what to do.
+        raise RuntimeError(
+            "the saved weights do not fit this dataset: %s\n"
+            "  This happens when the cache was rebuilt after training -- a\n"
+            "  different path or corner count, or a cell library that yields a\n"
+            "  different number of families, changes the model shape.\n"
+            "  Re-run train for this model (its weights are stale), or restore\n"
+            "  the dataset the weights were trained on." % (str(e).split("\n")[0],))
     idx = {"hidden": tr.split.hidden_idx, "seen": tr.split.seen_idx,
            "all": np.arange(tr.C)}[corners]
     tr.export_predictions(out_dir, idx, tag=corners)
