@@ -681,6 +681,9 @@ def build(cfg: dict) -> str:
                  ahi=np.asarray(ahi_, np.float32), asw=np.asarray(asl_, np.float32),
                  ac=np.asarray(acc_, np.float32))
         del vk_, vlo_, vhi_, vdl_, as_, aa_, ab_, alo_, ahi_, asl_, acc_
+        # Written and not needed until densify: inside a cgroup its page cache
+        # counts against the limit exactly like anonymous memory would.
+        memlog.drop_cache(os.path.join(spill, "c%d.npz" % ci))
         print(f"[{ci + 1:2d}/{C}] {corner}: paths={len(ann)} si_stages={len(stage_meta)}", flush=True)
         memlog.log("corner %d/%d" % (ci + 1, C))
 
@@ -846,7 +849,14 @@ def build(cfg: dict) -> str:
         vwin=vwin, arc_delta=arc_delta,
         abump=abump, awin=awin, aslew=aslew, acc=acc,
     )
+    for _a in (vwin, arc_delta, abump, awin, aslew, acc):
+        try:
+            _a.flush()
+        except AttributeError:
+            pass
     del vwin, arc_delta, abump, awin, aslew, acc
+    for _n in ("vwin", "arc_delta", "abump", "awin", "aslew", "acc"):
+        memlog.drop_cache(os.path.join(spill, _n + ".npy"))
     shutil.rmtree(spill, ignore_errors=True)
     print(f"wrote {out_fp}: N={len(idx_order)} C={C} S={S} A={A}")
     return out_fp

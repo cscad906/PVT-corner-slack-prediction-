@@ -35,14 +35,38 @@ def _interp_rows(flat: np.ndarray, seen: np.ndarray, phi: np.ndarray) -> np.ndar
                     np.arange(min(6, phi.shape[1]))]
 
     out = np.full((M, C), np.nan, np.float64)
-    groups: "dict[tuple[bytes, int], list[int]]" = defaultdict(list)
-    for i in range(M):
-        if n_anchor[i] == 0:
-            continue
-        groups[(anchors[i].tobytes(), int(rank[i]))].append(i)
 
-    for (mbytes, rk), rows in groups.items():
-        mask = np.frombuffer(mbytes, dtype=bool)
+    # Rows that share an anchor pattern and a rank share a fit, so they are
+    # grouped first. Doing that row by row in Python meant a .tobytes() and a
+    # list append EACH -- millions of temporary objects on a real drop, all on
+    # one thread, and arriving faster than any sampling interval can show. The
+    # same grouping is a single np.unique once the boolean mask is packed into
+    # an integer, which any real corner count permits.
+    if C <= 63:
+        bits = (1 << np.arange(C, dtype=np.int64))
+        key = (anchors * bits[None, :]).sum(1) * 4 + rank      # rank is 0..2
+        key[n_anchor == 0] = -1
+        uniq, inv = np.unique(key, return_inverse=True)
+        order = np.argsort(inv, kind="stable")
+        starts = np.searchsorted(inv[order], np.arange(len(uniq)))
+        ends = np.r_[starts[1:], len(order)]
+        items = []
+        for gi, k in enumerate(uniq):
+            if k < 0:
+                continue
+            packed = int(k) >> 2
+            mask = ((packed >> np.arange(C)) & 1).astype(bool)
+            items.append((mask, int(k) & 3, order[starts[gi]:ends[gi]]))
+    else:
+        g: "dict[tuple[bytes, int], list[int]]" = defaultdict(list)
+        for i in range(M):
+            if n_anchor[i] == 0:
+                continue
+            g[(anchors[i].tobytes(), int(rank[i]))].append(i)
+        items = [(np.frombuffer(mb, dtype=bool), rk, np.asarray(rows))
+                 for (mb, rk), rows in g.items()]
+
+    for mask, rk, rows in items:
         cols = cols_by_rank[rk]
         p = phi[np.ix_(mask, cols)]                    # [n, k]
         gram_inv = np.linalg.pinv(p.T @ p)

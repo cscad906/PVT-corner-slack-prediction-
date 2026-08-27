@@ -285,14 +285,43 @@ def report_limits() -> None:
               "above, and keep one model per run.", flush=True)
 
 
+def drop_cache(path: str) -> None:
+    """Ask the kernel to forget the page cache for a file we are done writing.
+
+    Inside a memory cgroup, page cache counts against the limit like anything
+    else -- the streaming this pipeline does to keep data out of RAM otherwise
+    just moves the same pressure into the cache, and freshly written pages
+    cannot be reclaimed until they reach disk. Flushing and then dropping them
+    keeps the cgroup figure honest. Advisory: if the platform lacks it, nothing
+    happens and nothing breaks.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    except (AttributeError, OSError):
+        pass
+    finally:
+        os.close(fd)
+
+
 _started = False
 
 
-def start(interval: float = 60.0, step_gb: float = 0.5) -> None:
+def start(interval: float = 5.0, step_gb: float = 0.5) -> None:
     """Trace in the background: print whenever anon has moved by step_gb.
 
     Quiet while nothing changes, so the log stays readable; the point is that
-    the LAST line before a kill shows how far it had climbed.
+    the LAST line before a kill shows how far it had climbed. Sampled every few
+    seconds rather than every minute: a run was killed a minute after a line
+    reading 13.6 GB of a 40 GB limit, so whatever took it there was never seen.
+    Reading /proc costs nothing, and the step threshold keeps the log short.
     """
     global _started
     if _started or os.environ.get("SI_MEMLOG", "1") == "0":
