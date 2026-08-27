@@ -1085,10 +1085,11 @@ def _print_corner_table(rows: list) -> None:
         print(f"    {'total':<48}{sum(r['n_paths'] for r in rows):>7}"
               f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
               f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
-        # Said once, here, because the per-model blocks that used to carry it
-        # are gone: the epoch was chosen on these same corners.
-        print("\n    NOTE: training picked its stopping epoch on these corners,"
-              "\n          so these are best-case figures, not held-out ones.")
+        # The caveat that belongs with these numbers -- the stopping epoch was
+        # chosen on these same corners, so they are best-case rather than
+        # held-out -- is not printed, by request. It stays in each model's
+        # summary.json as selected_on, which is the record that outlives the
+        # terminal.
 
 
 # ----------------------------------------------------------------------- main
