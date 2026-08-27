@@ -104,7 +104,36 @@ docs/START.md top to bottom.
 # ------------------------------------------------------------------ expansion
 def load_project(fp: str) -> dict:
     with open(fp, encoding="utf-8") as f:
-        p = yaml.safe_load(f) or {}
+        text = f.read()
+    try:
+        p = yaml.safe_load(text) or {}
+    except yaml.YAMLError as e:
+        # The raw error names neither the file nor anything actionable, and it
+        # arrives from run.py, so it reads as a problem with the code rather
+        # than with the edit that caused it.
+        mark = getattr(e, "problem_mark", None)
+        where = ""
+        if mark is not None:
+            lines = text.split("\n")
+            lo = max(0, mark.line - 2)
+            snippet = "\n".join("    %4d | %s" % (i + 1, lines[i])
+                                 for i in range(lo, min(len(lines), mark.line + 2)))
+            where = ("\n  line %d, column %d:\n%s\n%s^\n"
+                     % (mark.line + 1, mark.column + 1, snippet,
+                        " " * (mark.column + 12)))
+        raise SystemExit(
+            "config file is not valid YAML: %s\n%s"
+            "  %s\n"
+            "  Most often one of:\n"
+            "    - designs mixes the two forms. It is EITHER a list\n"
+            "        designs: [a, b]\n"
+            "      OR a mapping, with every circuit indented the same\n"
+            "        designs:\n"
+            "          a: {}\n"
+            "          b: {corners: {voltages: [0.5, 0.6]}}\n"
+            "    - a tab character. YAML forbids tabs for indentation; use spaces\n"
+            "    - a line indented by a different amount than its siblings"
+            % (fp, where, getattr(e, "problem", str(e))))
     # config `run:` -> the environment the rest of the code already reads, so
     # there is one place to set these and one place to read them. The
     # environment is filled in ONLY where it is not already set, which keeps the
