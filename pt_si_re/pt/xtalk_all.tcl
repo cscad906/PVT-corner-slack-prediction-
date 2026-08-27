@@ -36,10 +36,20 @@ set XTALK_DIR  ""         ;# 결과를 쓸 폴더. 비워 두면 **로드된 db 
 set DELAY_TYPE "max"      ;# setup=max, hold=min
 #######################################################################
 if {[info exists XT_DELAY]} { set DELAY_TYPE $XT_DELAY }  ;# 루프가 준 값이 있으면 그것
-if {[info exists XT_RPT]}   { set RPT_FILE   $XT_RPT   }  ;# 위 RPT_FILE 을 안 고치고
-if {[info exists XT_DIR]}   { set XTALK_DIR  $XT_DIR   }  ;# 밖에서 넘기고 싶을 때 쓴다
+# XT_RPT / XT_DIR 은 **쓰고 바로 지운다(일회용)**.
+# 세션에 남겨 두면 다음 디자인·다음 코너까지 따라온다. 실제로 PERI 를 돌린
+# 세션에서 MFC 를 돌렸더니 PERI 리포트가 그대로 읽힌 일이 있었다.
+if {[info exists XT_RPT]}   { set RPT_FILE   $XT_RPT ; unset XT_RPT }
+if {[info exists XT_DIR]}   { set XTALK_DIR  $XT_DIR ; unset XT_DIR }
                                                           #   set XT_RPT "/data/.../<코너>.rpt"
                                                           #   source .../xtalk_all.tcl
+
+# 디자인 대조를 일부러 건너뛰고 싶을 때만 쓴다. 이것도 일회용이다.
+set XT_SKIPDES 0
+if {[info exists XT_SKIP_DESIGN_CHECK]} {
+    set XT_SKIPDES $XT_SKIP_DESIGN_CHECK
+    unset XT_SKIP_DESIGN_CHECK
+}
 
 if {[sizeof_collection [get_designs -quiet *]] == 0} {
     puts "=================================================================="
@@ -207,6 +217,29 @@ proc xt_scrape_aggressors {text} {
 #   XT_NPATH  "### FIXED_PATH" 줄 수      = 리포트에 담긴 경로 수
 #   XT_NSLACK "slack (" 줄 수             = 끝까지 온전히 적힌 경로 수
 # 리포트가 도중에 잘리면 마지막 블록에 slack 줄이 없어 둘이 어긋난다.
+# 리포트 머리말의 "Design : <이름>" 을 읽는다. 못 찾으면 "" 를 준다.
+# report_timing 이 경로마다 머리말을 다시 찍으므로 맨 앞에서 바로 나온다.
+# 그래도 못 찾을 때를 대비해 200줄만 보고 그만둔다.
+proc xt_report_design {rpt} {
+    set d ""
+    if {[catch {set fh [open $rpt r]}]} { return "" }
+    set n 0
+    while {[gets $fh line] >= 0} {
+        incr n
+        if {[regexp {^Design\s*:\s*(\S+)} $line -> d]} { break }
+        if {$n > 200} { set d "" ; break }
+    }
+    close $fh
+    return $d
+}
+
+# 지금 PT 에 물려 있는 디자인 이름. 못 읽으면 "".
+proc xt_current_design {} {
+    if {[catch {set d [get_object_name [current_design]]}]} { return "" }
+    return $d
+}
+
+
 proc xt_build_contexts {rpt} {
     global XT_NPATH XT_NSLACK
     set XT_NPATH 0
@@ -266,15 +299,13 @@ if {![file exists $CTX]} {
         puts "  using report from RPT_FILE : $RPT"
     }
 
-    # (1) 같은 세션에서 fixed_paths.tcl 을 방금 돌렸으면 그 파일을 그대로 쓴다.
-    #     OUT 은 fixed_paths.tcl 이 "$CORNER.rpt" 로 잡아 둔 것이다. 이게 제일
-    #     확실하다 -- 폴더를 뒤질 필요가 없다.
-    #     코너를 바꿔 cd 했는데 fixed_paths 를 안 돌렸다면 그 이름의 파일이
-    #     없으므로 아래 에러로 간다(앞 코너 값을 잘못 쓰지 않는다).
-    if {$RPT eq "" && [info exists OUT] && [file exists $OUT]} {
-        set RPT $OUT
-        puts "  using report just made by fixed_paths.tcl : $RPT"
-    }
+    # (1) 예전에는 여기서 fixed_paths.tcl 이 남긴 $OUT 을 그대로 썼다. 없앴다.
+    #     이유 두 가지.
+    #       - 세션 변수라 아무도 안 지운다. 앞 디자인/앞 코너 값이 그대로 남아
+    #         다음 번에 딸려 온다(PERI 를 돌린 세션에서 MFC 를 돌린 사고).
+    #       - 없어도 잃는 것이 없다. $OUT 은 "$CORNER.rpt" 라는 **상대 이름**이라
+    #         리포트가 현재 폴더에 떨어지는데, 아래 (2) 폴더 스캔도 현재 폴더를
+    #         본다. (1) 이 찾던 파일은 (2) 도 반드시 찾는다.
 
     # (2) 이 폴더에서 fixed_paths.tcl 산출물을 **내용으로** 찾는다.
     #     이름으로 찾지 않는다 -- 폴더 이름과 리포트 이름이 다를 수 있고,
@@ -352,6 +383,43 @@ if {![file exists $CTX]} {
         puts "=================================================================="
         return
     }
+    # --- 이 리포트가 **이 디자인** 것인가 -----------------------------
+    # 리포트에는 "Design : <이름>" 이 박혀 있고 PT 에는 current_design 이 있다.
+    # 둘이 다르면 넷 이름이 하나도 안 맞아 전부 PIN_NOT_FOUND 로 끝나는데,
+    # 그 사이 몇 시간이 그냥 간다. 그러니 한 줄도 계산하기 전에 멈춘다.
+    set XT_RDES [xt_report_design $RPT]
+    set XT_CDES [xt_current_design]
+    if {!$XT_SKIPDES && $XT_RDES ne "" && $XT_CDES ne "" && $XT_RDES ne $XT_CDES} {
+        puts "=================================================================="
+        puts "  PROBLEM"
+        puts "    what   : that report was made from a different design."
+        puts "             report says   : $XT_RDES"
+        puts "             loaded design : $XT_CDES"
+        puts "             report file   : $RPT"
+        puts "             directory     : [pwd]"
+        puts "    action : cd to THIS design's corner directory and source again,"
+        puts "             or name the right report at the top of this file:"
+        puts "               set RPT_FILE \"<path to $XT_CDES report>\""
+        puts "             if the two names really are the same design, run"
+        puts "               set XT_SKIP_DESIGN_CHECK 1"
+        puts "             and source again (that switch clears itself)."
+        puts ""
+        puts "    code   : E-DESIGNMISMATCH"
+        puts "=================================================================="
+        return
+    }
+    if {$XT_SKIPDES} {
+        puts "  NOTE: design check skipped on request (XT_SKIP_DESIGN_CHECK)."
+    } elseif {$XT_RDES eq ""} {
+        puts "  NOTE: the report has no 'Design :' line, so it could not be"
+        puts "        checked against the loaded design."
+    } elseif {$XT_CDES eq ""} {
+        puts "  NOTE: current_design could not be read, so the report was not"
+        puts "        checked against it."
+    } else {
+        puts "  design      : $XT_CDES   <- report agrees"
+    }
+
     # 로드된 db 를 같이 찍어 둔다. 리포트 이름과 달라도 문제가 아니다
     # (넷 목록은 코너와 무관하다). 나중에 로그만 보고도 어느 db 로 계산했는지
     # 알 수 있게 남기는 것이다.
