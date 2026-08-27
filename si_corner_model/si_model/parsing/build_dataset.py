@@ -489,6 +489,12 @@ def _cache_is_fresh(out_fp: str, cfg: dict) -> bool:
     it rebuilds -- as does SI_REBUILD=1, for the case where an input changed
     without its timestamp moving.
     """
+    # Asking for `build` by name always rebuilds. The skip exists so that a
+    # re-run of `all` after an interrupted training does not repeat hours of
+    # parsing -- not to decide on the user's behalf that the data has not
+    # changed. When someone types build, they mean it.
+    if os.environ.get("SI_STAGE", "build") == "build":
+        return False
     if os.environ.get("SI_REBUILD", "0") != "0" or not os.path.exists(out_fp):
         return False
     try:
