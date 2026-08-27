@@ -501,7 +501,10 @@ def expand(p: dict) -> "list[dict]":
                 "name": f"{design}/{tag}", "design": design, "temp": tag,
                 "task": p.get("task", "slack"),
                 "cfg": {"data": data, "split": split, "base": base,
-                        "model": dict(p.get("model", {})), "train": train},
+                        "model": dict(p.get("model", {})), "train": train,
+                        # so build can tell whether the config changed since
+                        # the cache was written
+                        "_config_path": p.get("_config_path")},
             })
     return models
 
@@ -1049,6 +1052,7 @@ def main(argv=None):
     memlog.report_limits()
     memlog.start()
     p = load_project(args.config)
+    p["_config_path"] = os.path.abspath(args.config)
     if args.mode:
         # Overriding here rather than editing the file keeps a hold run from
         # being left switched on by accident -- `mode` drives the cache and runs

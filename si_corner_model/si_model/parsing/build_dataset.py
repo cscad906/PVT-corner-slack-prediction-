@@ -479,9 +479,42 @@ def _reconcile_keys(corner, keys_ann, keys_xt):
     return {i: keys_ann[i] for i in shared}
 
 
+def _cache_is_fresh(out_fp: str, cfg: dict) -> bool:
+    """Is an existing dataset.npz newer than everything that feeds it?
+
+    build re-parsed every report each time it was called, so a `run.sh all`
+    after an interrupted run repeated hours of parsing that had already
+    finished. It is skipped when the cache is newer than every input report and
+    newer than the config that decides how they are read. Anything older, and
+    it rebuilds -- as does SI_REBUILD=1, for the case where an input changed
+    without its timestamp moving.
+    """
+    if os.environ.get("SI_REBUILD", "0") != "0" or not os.path.exists(out_fp):
+        return False
+    try:
+        newest = os.path.getmtime(out_fp)
+        for d in (cfg["data"].get("annotated_dir"), cfg["data"].get("crosstalk_dir")):
+            if not d or not os.path.isdir(d):
+                continue
+            for root, _, files in os.walk(d):
+                for f in files:
+                    if os.path.getmtime(os.path.join(root, f)) > newest:
+                        return False
+        cf = cfg.get("_config_path")
+        if cf and os.path.exists(cf) and os.path.getmtime(cf) > newest:
+            return False
+    except OSError:
+        return False
+    return True
+
+
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
+    if _cache_is_fresh(out_fp, cfg):
+        print("[SKIP] %s is newer than every report -- not rebuilding "
+              "(SI_REBUILD=1 to force)" % out_fp, flush=True)
+        return out_fp
     configure_cell_taxonomy(cfg)   # explicit cell-name rules (data.cell_taxonomy)
     configure_pins(cfg)            # FF clock/output pin names (data.clock_pins, ...)
 
