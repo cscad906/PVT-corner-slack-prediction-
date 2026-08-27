@@ -226,6 +226,11 @@ def _stage() -> str:
     return os.environ.get("SI_STAGE", "")
 
 
+def _base_loud() -> bool:
+    """Base diagnostics: only when `base` was named, or SI_VERBOSE=1."""
+    return _stage() == "base" or os.environ.get("SI_VERBOSE", "0") != "0"
+
+
 def select_basis(y, sp, coords, cfg, verbose=True):
     """Pick the polynomial basis by SEEN-corner leave-one-out error.
 
@@ -291,7 +296,7 @@ def select_basis(y, sp, coords, cfg, verbose=True):
         "no usable basis -- too few seen corners. Reduce the holdout or add "
         "more corners")
     err, vo, cross, cmd, names = best
-    if verbose and _stage() == "base":
+    if verbose and _base_loud():
         print(f"[BASIS] picked by seen-LOO: v^{vo} cross={cross}"
               + (f"(deg{cmd})" if cross else "")
               + f" -> {len(names) + 1} params, seen-LOO {err * 1000:.2f} ps", flush=True)
@@ -749,7 +754,7 @@ def stage_base(m: dict) -> None:
     split = make_split(ds["corners"].tolist(), ds["vt"], cfg, measured=measured)
     phi, coords, _, _ = build_design(cfg, split, y=y)
     loo, picks = fit_field(y, phi, split, coords, cfg)
-    if _stage() != "base":
+    if not _base_loud():
         # This stage is diagnostic only: it writes nothing, and train fits its
         # own base. Under `all` it still runs (asked for: compute unchanged)
         # but stays silent, so build is followed straight by epochs.

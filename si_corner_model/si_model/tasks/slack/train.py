@@ -65,6 +65,17 @@ def standardize(x: np.ndarray, axis=None, eps=1e-8):
     return ((x - mu) / sd).astype(np.float32)
 
 
+def _verbose() -> bool:
+    """SI_VERBOSE=1 restores the full per-epoch and per-corner reporting.
+
+    The default is quiet: an epoch line without the metrics, and one combined
+    figure at the end. Nothing is lost by that -- every number that stops being
+    printed is written to summary.json and predictions_hidden.csv -- and the
+    screen stays readable across the six models a full run trains.
+    """
+    return os.environ.get("SI_VERBOSE", "0") != "0"
+
+
 class Trainer:
     def __init__(self, cfg: dict, lambda_si: "float | None" = None):
         self.cfg = cfg
@@ -505,11 +516,16 @@ class Trainer:
                 tag = " *"
             ema_m.restore(self.model); ema_e.restore(self.enc)
             lr_ = sched.get_last_lr()[0]
-            print(f"E{ep+1:3d} loss={np.mean([l['resid'] for l in losses]):8.2f} "
-                  f"si={np.mean([l['si'] for l in losses]):8.2f} "
-                  f"| val-seen {val['mae'].mean():6.2f}ps "
-                  f"| val-hidden {hid['mae'].mean():6.2f}ps"
-                  f" lr={lr_:.1e}{tag}", flush=True)
+            if _verbose():
+                print(f"E{ep+1:3d} loss={np.mean([l['resid'] for l in losses]):8.2f} "
+                      f"si={np.mean([l['si'] for l in losses]):8.2f} "
+                      f"| val-seen {val['mae'].mean():6.2f}ps "
+                      f"| val-hidden {hid['mae'].mean():6.2f}ps"
+                      f" lr={lr_:.1e}{tag}", flush=True)
+            else:
+                print(f"E{ep+1:3d}/{epochs} loss="
+                      f"{np.mean([l['resid'] for l in losses]):8.2f}"
+                      f"  lr={lr_:.1e}{tag}", flush=True)
             if ep == 0 or (ep + 1) % 5 == 0:
                 memlog.log("epoch %d" % (ep + 1))
 
@@ -592,11 +608,14 @@ class Trainer:
         for name, paths in (("train", self.tr_paths), ("val", self.va_paths),
                             ("test", self.te_paths), ("all", np.arange(self.N))):
             rows[name] = self.evaluate(paths, self.eval_hidden_idx)
-        print(f"\n=== hidden-corner results (best epoch {best_ep + 1}) ===")
         hnames = [self.split.corners[i] for i in self.eval_hidden_idx]
         r = rows["all"]
-        for i, cn in enumerate(hnames):
-            print(f"  {cn:16s} model={r['mae'][i]:7.2f}ps  si={r['si_mae'][i]:6.2f}ps")
+        if _verbose():
+            print(f"\n=== hidden-corner results (best epoch {best_ep + 1}) ===")
+            for i, cn in enumerate(hnames):
+                print(f"  {cn:16s} model={r['mae'][i]:7.2f}ps  si={r['si_mae'][i]:6.2f}ps")
+        else:
+            print(f"\n=== hidden-corner results (best epoch {best_ep + 1}) ===")
         summary = {
             name: {"hidden_mae_ps": float(r["mae"].mean()),
                    "hidden_worst_ps": float(r["mae"].max())}
@@ -607,6 +626,11 @@ class Trainer:
         summary["best_epoch"] = best_ep + 1
         summary["selected_on"] = ("hidden_corners" if len(self.eval_hidden_idx)
                                   else "seen_loo")
+        # Written whether or not it was printed: the per-corner breakdown is the
+        # thing the screen stops showing by default, so it has to survive here.
+        summary["by_corner"] = {
+            cn: {"mae_ps": float(r["mae"][i]), "si_mae_ps": float(r["si_mae"][i])}
+            for i, cn in enumerate(hnames)}
         # One hidden-corner line, over all paths. train/val/test only split
         # the PATHS -- the hidden corners are the same in every one of them --
         # so printing four rows invites reading "test" as the real score. All

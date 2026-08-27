@@ -207,6 +207,8 @@ def _base_quiet() -> bool:
     computation changes -- `run.sh base` prints all of it.
     """
     import os
+    if os.environ.get("SI_VERBOSE", "0") != "0":
+        return False                      # one switch turns everything back on
     return os.environ.get("SI_STAGE", "base") != "base"
 
 

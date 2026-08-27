@@ -198,6 +198,54 @@ bash scripts/run.sh list
 
 ---
 
+## 4.5 화면에 뭐가 나오나 (그리고 다 보고 싶을 때)
+
+기본은 **조용**하다. 모델 6개를 도는 동안 화면이 수치로 덮이지 않게, 진행과
+최종 결과만 남긴다.
+
+```
+[ 1/8] SSPG_0p5V_cmax: paths=3000 si_stages=0        <- build 진행
+[MEM] corner 1/8   anon 0.20 GB ...                  <- 메모리 궤적
+E  1/40 loss=  207.27  lr=1.3e-03 *                  <- 학습 진행 (* = 저장됨)
+E  2/40 loss=  218.36  lr=2.0e-03
+
+=== hidden-corner results (best epoch 25) ===
+  [all paths] model 0.97 ps (worst 1.20)             <- 통합 결과
+  NOTE: the epoch was selected on these corners ...   <- 편향 경고
+```
+
+`base` 단계의 OLS 수치와 학습 중 `val-seen` / `val-hidden` / 코너별 성적은
+**화면에서만** 빠진다. 전부 파일에 남는다:
+
+| 무엇 | 어디에 |
+|---|---|
+| 코너별 모델 오차 · SI 오차 | `runs/<mode>/<회로>/<온도>/summary.json` 의 `by_corner` |
+| train/val/test 별 요약, best epoch | 같은 파일 |
+| 경로별 예측 (truth · base · model) | `predictions_hidden.csv` |
+| 전 회로·온도 코너별 표 | `runs/<mode>/_all/summary.json` |
+
+### 다 보고 싶으면
+
+```csh
+env SI_VERBOSE=1 bash scripts/run.sh all
+```
+
+한 번에 되살아나는 것:
+
+- `[BASIS]` 후보 표 (차수 후보 전부와 각각의 seen-LOO)
+- `[BASE]` / `[BASE-ADAPTIVE]` 진단
+- `base` 단계의 코너별 오차와 weighting 비교표
+- 학습 중 `val-seen` · `val-hidden` · `si` 수치
+- 마지막 코너별 성적
+
+`base` 만 따로 부르면 `SI_VERBOSE` 없이도 전부 나온다 — 그게 그 단계의 목적이다:
+
+```csh
+bash scripts/run.sh base --design MFC_Timing_Report --temp 125
+```
+
+---
+
 ## 5. 시간과 메모리 (16코어 실측)
 
 경로 3만 개, 코너 8개(seen 6), 스레드 16개로 잰 값이다:
@@ -222,11 +270,30 @@ bash scripts/run.sh list
 
 `run.sh list` 의 `seen S` 를 보고 위 표로 어림잡으면 된다.
 
+### 스레드 수를 명시할 것
+
+torch 는 CPU 에서 OpenMP/MKL 로 병렬화한다 — 행렬 연산 하나를 여러 스레드로
+쪼개는 방식이고, 학습 루프 자체(코너 하나씩, 배치 하나씩)는 순차다.
+
+문제는 **스레드 수를 장비 전체 코어 수에서 잡는다**는 점이다. 16코어를 할당받아도
+장비가 112코어면 56개를 띄워 서로 방해한다. 할당받은 만큼만 쓰게 못 박는다:
+
+```csh
+setenv OMP_NUM_THREADS 16
+setenv MKL_NUM_THREADS 16
+```
+
+병렬이 실제로 먹는지는 `[MEM]` 의 `cpu / wall` 비율로 본다. 16코어면 그 비율이
+10 언저리면 정상이고, 1 에 가까우면 병렬이 안 되고 있는 것이다.
+
 ### 줄이는 방법 (효과 순)
 
 1. **`epochs: 40` → `30`** — 최고점이 대체로 E22~E26 이라 손해가 거의 없고 25% 단축
-2. **모델별로 나눠 동시 실행** — 아래 §6. 16코어에서 2~3개가 현실적
-3. `model.enc_dim: 128 → 48`, `model.enc_blocks: 3 → 2` — 추가 30~40% 단축
+2. `model.enc_dim: 128 → 48`, `model.enc_blocks: 3 → 2` — 추가 30~40% 단축
+
+> **모델을 동시에 여러 개 띄우지 말 것.** 16코어에서 3개를 띄우면 각각 16스레드를
+> 잡아 48스레드가 16코어를 두고 다투고, 메모리도 3배가 된다. 하나씩 순차가 빠르다.
+> 굳이 동시에 하려면 `OMP_NUM_THREADS` 를 나눠 준다 (2개면 8씩).
 
 **메모리는 모델당 6.3 GB 다.** 동시에 3개면 약 19 GB 가 필요하니 `free -g` 로
 먼저 확인한다.
@@ -241,9 +308,9 @@ xterm 을 닫아도 죽지 않게 `nohup` 으로 띄우고 로그를 남긴다.
 bash 문법을 그대로 치면 `ambiguous output redirect` 가 난다.
 
 ```csh
-# csh / tcsh   -- 모델 하나씩, 로그를 따로
+# csh / tcsh   -- 한 번에 하나씩. 끝나면 다음 것을 띄운다 (§5 참고)
+setenv OMP_NUM_THREADS 16
 nohup env PY=/usr/bin/python3 bash scripts/run.sh train --design MFC_Timing_Report --temp 125 >& log.mfc.125 &
-nohup env PY=/usr/bin/python3 bash scripts/run.sh train --design MFC_Timing_Report --temp m25 >& log.mfc.m25 &
 ```
 ```bash
 # bash / zsh
@@ -342,6 +409,17 @@ si_corner_model/
 ... | 42m wall 38m cpu  disk-free 120 GB  threads 65
 ```
 
+`wall` 은 시작한 뒤 흐른 실제 시간, `cpu` 는 그동안 쓴 CPU 시간(전 스레드 합)이다.
+**둘을 비교하면 상태를 읽을 수 있다:**
+
+| 관계 | 뜻 |
+|---|---|
+| `cpu` ≈ `wall` | 단일 스레드로 꽉 차게 일하는 중 |
+| `cpu` >> `wall` | 여러 스레드 병렬 (`2m wall 85m cpu` = 40여 개) |
+| `cpu` 는 안 늘고 `wall` 만 늘어남 | **일을 안 하고 있음** — 디스크 대기이거나 멈춤 |
+
+"멈춘 건가" 싶을 때 `cpu` 가 늘고 있으면 도는 중이다.
+
 | 보이는 값 | 의심할 것 |
 |---|---|
 | `wall` 이 스케줄러 한도에 근접 | 실행시간 초과로 스케줄러가 죽임 |
@@ -428,4 +506,6 @@ quota, 그리고 LSF 의 종료 사유. LSF 는 `TERM_*` 로 이유를 남긴다
 | `unrecognized argument $...` | 셸 변수가 안 풀렸다. `$P` 같은 축약 쓰지 말고 전부 적는다 |
 | `Undefined variable` | 같은 원인 (csh). §4 의 형태로 |
 | `Killed` 만 뜨고 이유 없음 | §8.5 — `bash scripts/why_killed.sh <로그>` |
+| 수치가 안 보임 | 의도된 기본값. §4.5 의 `SI_VERBOSE=1` 또는 `summary.json` |
+| 오래 조용함 | `[MEM]` 의 `cpu` 가 늘고 있으면 정상. §8.5 |
 | 아무것도 안 찍힘 | 첫 코너를 읽는 중이다. 경로가 많으면 몇 분 걸린다. `ps` 로 살아있는지 확인 |
