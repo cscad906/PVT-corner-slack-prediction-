@@ -1,0 +1,23 @@
+# byte-compiled / caches
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# datasets & derived artifacts (never ship data to GitHub)
+cache/
+runs/
+*.npz
+*.pt
+*.log
+*.summary.json
+recon_out.txt
+
+# local envs / editors
+.venv/
+venv/
+.env
+.vscode/
+.idea/
+.DS_Store

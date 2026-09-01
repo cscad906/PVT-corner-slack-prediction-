@@ -1,0 +1,269 @@
+# =============================================================================
+#  si_corner_model — 설정 파일은 이거 하나뿐이다.
+#
+#  회로(design) x 온도(temp) 조합마다 모델이 하나씩 자동으로 생성된다.
+#  회로 3개 x 온도 2개 = 모델 6개인데 고치는 파일은 여전히 이 파일 하나.
+#
+#    bash scripts/run.sh list      # 뭐가 만들어질지 먼저 확인 (아무것도 안 건드림)
+#    bash scripts/run.sh all       # 전부 실행
+#
+#  키 하나하나 설명은 docs/CONFIG.md, base(OLS) 튜닝은 docs/OLS.md,
+#  리포트 파싱은 docs/PARSING.md.
+#  아래에서 [필수] 는 도착해서 꼭 확인할 것, 나머지는 기본값으로 둬도 된다.
+# =============================================================================
+
+# ─── 1. 경로 ─────────────────────────────────────────────────────────────────
+#  배치가 아래와 같으면 이 두 줄은 그대로 두면 된다 (고칠 것 없음):
+#
+#      academy_experiment/          <- root (auto 가 여기를 잡는다)
+#      ├── si_corner_model/         <- 이 repo. designs 에서 자동 제외됨
+#      ├── 회로1/  report.sspg_0p5000_125c_rcmax.rpt ...
+#      ├── 회로2/  ...
+#      └── 회로3/  ...
+#
+root: auto                          # auto = 이 repo 의 부모 디렉토리
+                                    #        = /user/s5e9965p5/academy_experiment
+                                    #   repo 가 회로들과 다른 곳에 있으면 절대경로로 적는다
+                                    #   환경변수 SI_ROOT 가 우선한다
+
+designs:                            # ★ 회로만 적는다. auto 로 두면 pr_si / spice 까지
+  - MFC_Timing_Report               #   회로로 잘못 잡힌다.
+  - MIF_Timing_Report
+  - PERIC0_Timing_Report
+
+_designs_note: |                    # (참고) designs 는 세 가지 형태 중 하나:
+                                    #
+                                    #  ① auto  = root 밑 모든 하위폴더를 회로로 간주
+                                    #     (si_corner_model / cache / runs / 숨김폴더는 자동 제외)
+                                    #     root 에 회로가 아닌 폴더(lib, tmp ...)가 섞여 있으면 ② 로.
+                                    #
+                                    #  ② 리스트 = 이 회로들만.  designs: [회로1, 회로2, 회로3]
+                                    #
+                                    #  ③ 매핑  = 회로마다 설정을 다르게. 적은 키만 덮어쓰고
+                                    #     나머지는 아래 전역 설정을 그대로 물려받는다.
+                                    #       designs:
+                                    #         회로1: {}                                  # 전역 그대로
+                                    #         회로2: {files: {subdir: reports}}          # 리포트 위치만 다름
+                                    #         회로3:                                     # 코너 구성이 다름
+                                    #           corners: {voltages: [0.5, 0.6, 0.685]}
+                                    #           temps:
+                                    #             - {tag: "125", token: 125, levels: [rcmax, cmax],
+                                    #                hidden_corners: [[0.5, rcmax]]}
+                                    #
+                                    #   환경변수 SI_DESIGNS=회로1,회로2 가 우선한다
+
+temps:                              # 온도 = 분리 차원(모델이 갈린다).
+  - tag: "125"                      #   tag    = 모델/폴더 이름
+    token: 125                      #   token  = 파일명 안의 온도 토큰
+    levels: [rcmax, cmax]           #   levels = 그 온도에 존재하는 BEOL 레벨
+    # 숨길 코너는 온도마다 따로 적는다. 온도별로 levels 가 다르므로 전역 목록
+    # 하나로는 표현 자체가 안 된다 (125C 엔 rcmin 이 없다).
+    # 아래 corners.* 의 홀드아웃 키를 여기에 쓰면 이 온도에만 적용된다.
+    hidden_corners: [[0.54, rcmax], [0.6, cmax]]
+  - tag: m25
+    token: m25
+    levels: [rcmax, cmax, rcmin]
+    hidden_corners: [[0.5, cmax], [0.685, rcmin]]
+
+# ★ setup 이냐 hold 냐. 이 한 줄이 읽을 폴더와 쓸 폴더를 전부 정한다.
+#   mode: setup  ->  읽기 <root>/<회로>/setup/ , <root>/<회로>/setup/xtalk/
+#                    쓰기 cache/setup/ , runs/setup/
+#   mode: hold   ->  읽기 <root>/<회로>/hold/  , <root>/<회로>/hold/xtalk/
+#                    쓰기 cache/hold/  , runs/hold/
+#   setup 과 hold 는 분리 차원이라 한 번에 못 섞는다. 이 줄만 바꿔 다시 돌리면
+#   되고, 출력 경로가 같이 따라가므로 setup 결과를 덮어쓸 일이 없다.
+mode: setup
+
+out:                                # 보통 손댈 일 없다. auto = mode 를 따라감.
+  cache: auto                       # cache/<mode>/<회로>/<온도>/dataset.npz
+  runs: auto                        # runs/<mode>/<회로>/<온도>/ + runs/<mode>/_all/
+
+
+# ─── 2. 코너 정의 & 어떤 코너를 숨길지 ────────────────────────── [필수] ──────
+corners:
+  process: SSPG                     # 공정 토큰. 공정도 분리 차원 -> 공정이 여러 개면
+                                    #   이 값을 바꿔가며 따로 돌린다
+  voltages: [0.5, 0.54, 0.6, 0.685] # 측정된 전압 전부
+
+  ref_voltage: 0.685                # 앵커 코너 = 다항식 원점 + 경로 선택 기준.
+  ref_level: cmax                   #   반드시 SEEN 이어야 한다 (최고전압 x 중앙레벨 권장)
+
+  level_values:                     # BEOL 레벨 -> 축 좌표.
+    rcmin: -1                        #   절대값은 무의미(ref 를 빼므로), **간격만** 의미 있음.
+    cmax: 0                         #   회사 코너 정의상 심각도 순서/간격이 다르면 여기만 고친다
+    rcmax: 1
+
+  # ── 숨길 코너 고르기 ─────────────────────────────────────────────────────
+  #  아래 키들은 전부 temps[] 안에 써서 "온도별로" 지정할 수 있다 (그쪽이 우선).
+  #  여기 corners: 아래 적으면 모든 온도 공통. 섞어 쓰면 합집합.
+  #
+  #  ★ 코너가 적을 땐 행/열을 통째로 빼지 말 것. 그 전압의 앵커가 전부 사라진다.
+  #    전압마다 한 칸씩 흩어 빼는 게 낫다 -> hidden_corners 또는 hidden_per_voltage
+  hidden_corners: []                # 콕 집어서 한 칸씩: [[0.6, rcmax], [0.54, rcmin]]
+                                    #   (이번 데이터는 temps[] 안에서 온도별로 지정)
+  hidden_per_voltage: 0             # 0 = 안 씀. 1 이면 "모든 전압에서 한 칸씩" 을
+                                    #   레벨을 돌아가며 자동 선택 (대각선으로 흩어짐).
+                                    #   앵커 코너는 절대 안 고른다.
+  hidden_voltages: []               # 이 전압의 "모든 레벨" 을 숨김 (행 통째로)
+  seen_voltages: []                 # 반대 방향: 이것만 seen, 나머지 전압은 전부 hidden
+                                    #   (촘촘한 전압 그리드를 성긴 것으로 학습할 때)
+  hidden_levels: []                 # 이 레벨의 "모든 전압" 을 숨김 (열 통째로), 예: [rcmin]
+                                    #   숨기면 ref_level 을 다른 레벨로 옮겨야 한다
+
+  # 측정 자체가 없는 코너를 순수 예측만 하고 싶을 때 (정답 없음 -> truth 빈칸, 예측값만)
+  query_corners: []                 # 예: [[0.57, cmax], [0.62, rcmax]]
+
+split:
+  min_seen: auto                    # seen 코너 최소 개수 가드.
+                                    #   auto = seen전압수 x 레벨수 (= 그리드가 꽉 찼는지 검사)
+                                    #   -> 리포트가 하나라도 빠지면 조용히 넘어가지 않고 에러
+  path_split_seed: 42               # 경로 train/val/test(80/10/10) 분할 시드.
+                                    #   앙상블 멤버끼리는 반드시 같아야 한다
+
+
+# ─── 3. 파일 찾기 / 파싱 ──────────────────────────────────────── [필수] ──────
+files:
+  layout: flat                      # flat   = 코너가 전부 파일명에 있음 (이번 데이터)
+                                    # levels = <dir>/<레벨폴더>/<전압당 1파일> 배치
+  # 배치:  <root>/<회로>/setup/report.*.rpt
+  #        <root>/<회로>/setup/xtalk/xt.*.rpt
+  #        <root>/<회로>/hold/...                 <- hold 는 따로 돌린다(아래)
+  #
+  # auto = 맨 위 `mode` 를 그대로 씀 (setup -> setup/, hold -> hold/).
+  # 폴더 이름이 setup/hold 가 아니면(예: reports/) 여기에 직접 적는다.
+  subdir: auto                      # annotated 리포트가 있는 곳
+
+  # ── layout: flat 일 때 ──────────────────────────────────────────────────
+  #   auto = 파일명을 토큰으로 쪼개 전압/레벨/온도/공정을 각각 알아서 찾는다.
+  #          순서·대소문자·구분자(. _ -)·온도의 c 유무에 전혀 영향받지 않는다.
+  #          report.sspg_0p5000_125c_rcmax.rpt / SSPG_RCMAX_125_0.5400.rpt 둘 다 OK
+  #   자동으로 안 되면(예: 파일명에 숫자가 잔뜩 섞여 애매할 때) 정규식을 직접 준다.
+  #     (?P<v>) (?P<level>) 필수 / (?P<temp>) (?P<proc>) 는 있으면 필터. 대소문자 무시됨.
+  #     annotated_regex: 'report\.(?P<proc>\w+)_(?P<v>0p\d+)_(?P<temp>m?\d+)c_(?P<level>\w+)\.'
+  annotated_regex: auto
+
+  # ── layout: levels 일 때만 쓰임 ─────────────────────────────────────────
+  annotated_suffix: _fixed_annotated.txt   # 고를 파일 확장자
+  voltage_regex: '_tt(0p\d+)v'             # 그룹1 = 전압 토큰
+  crosstalk_suffix: .by_path.rpt
+
+  # ── 크로스토크(SI) ───────────────────────────────────────────────────────
+  #  <root>/<회로>/<crosstalk_subdir>/ 밑 어디든(재귀). annotated 와 코너 집합이
+  #  정확히 일치해야 한다. 이 폴더는 annotated 탐색에서 자동 제외되므로
+  #  회로폴더 안에 두어도 "같은 코너가 두 파일에 매칭" 에러가 안 난다.
+  #  위치를 모르면 null -> SI 없이 학습 (나중에 두 줄만 채우면 켜짐)
+  #  auto = <mode>/xtalk (setup -> setup/xtalk, hold -> hold/xtalk)
+  crosstalk_subdir: auto            # 크로스토크 리포트가 있는 곳
+  crosstalk_regex: auto             # annotated_regex 와 동일한 규칙 (파일명 접두사 무관)
+
+  # ── annotated 와 crosstalk 이 "같은 폴더" 에 있을 때 (pt_si_re 배치) ──────
+  #  <회로>/round2/<코너>/<코너>_fixed_annotated.txt
+  #                      <코너>.path_context_si_compact.by_path.rpt
+  #  둘 다 코너 토큰을 갖고 있어 파일명으로 구분해줘야 한다.
+  #  이때는 crosstalk_subdir: "" 로 두고 아래 두 줄을 채운다.
+  annotated_contains: null          # 예: _fixed_annotated
+  crosstalk_contains: null          # 예: by_path
+
+
+parsing:
+  # ── FF 핀 이름 (라이브러리마다 다르다) ───────────────────────────────────
+  #  안 적으면 아래 후보를 순서대로 시도한다. 못 찾아도 에러가 아니라
+  #  launch_clk/capture_clk 가 조용히 NaN 이 되므로 run.sh check 로 확인할 것.
+  #  (실제로 gt3 데이터가 /CLK 이라 294경로 전부 NaN 이었던 적이 있다)
+  clock_pins: [CK, CLK, CP, C]      # FF 클럭핀.   SAED14=CK, gt3=CLK
+  ff_output_pins: [Q, QN, QB, Z]    # FF 출력핀.   launch_clock -> data 전환 지점
+
+  # ── 경로 키 ──────────────────────────────────────────────────────────────
+  strip_path_idx: auto              # 경로 키 끝의 '#<번호>' 를 뗄지.
+                                    #   auto = 떼봐서 중복이 생기면 '식별자' 로 보고 유지.
+                                    #   1_union.py 산출물은 같은 FF 쌍에 여러 경로가 있어
+                                    #   #번호가 식별자다 (실제로 294 -> 210 으로 병합될 뻔).
+                                    #   코너마다 번호가 제각각인 리포트면 true 로 강제.
+
+  # ── 셀 이름 규칙 ─────────────────────────────────────────────────────────
+  # 표준셀 라이브러리가 SAED 가 아니면(삼성 등) 셀 이름 분류 규칙을 여기서 준다.
+  # 안 줘도 에러는 안 난다 — 전부 '<unk>' 패밀리 + drive 1.0 으로 학습된다(품질만 손해).
+  # 셀명 분포 확인:  docs/PARSING.md §3 의 스니펫
+  cell_taxonomy: {}
+  #  실제로 쓰는 형태 (gt3_6t_buf_x12_rvt 같은 이름을 잡는 예):
+  # cell_taxonomy:
+  #   strip_prefixes: [gt3_6t_, gt3_, SEC9T_]   # 이름 앞에서 떼어낼 접두사
+  #   family_rules:                             # 첫 매치 승. 정규식은 대소문자 무시.
+  #     - ['^dff|^sdff|ff', DFF]                #   순서 중요: 긴 것/구체적인 것 먼저
+  #     - ['^inv|^iv',      INV]
+  #     - ['^buf|^bf|^dly', BUF]
+  #     - ['^nand|^nd',     NAND]
+  #     - ['^nor|^nr',      NOR]
+  #     - ['^aoi',          AOI]                #   aoi 를 ao 보다 먼저
+  #     - ['^oai',          OAI]
+  #     - ['^ao',           AO]
+  #     - ['^oa',           OA]
+  #     - ['^xnor',         XNOR]               #   xnor 를 xor 보다 먼저
+  #     - ['^xor',          XOR]
+  #     - ['^mux',          MUX]
+  #   drive_regex: '_x(\d+)_'                   # 그룹1 = 드라이브. 대소문자 무시.
+  #                                             #   SAED 식이면 '_X(\d+P?\d*)$' (P=소수점)
+
+
+# =============================================================================
+#  아래는 기본값으로 둬도 된다. 튜닝하려면 docs/OLS.md.
+# =============================================================================
+
+task: slack                         # slack | slew
+
+# ─── 4. OLS base (예측의 뼈대) ───────────────────────────────────────────────
+base:
+  v_order: auto                     # 전압 다항식 차수. auto = min(3, seen 전압 수 - 1)
+  level_order: auto                 # BEOL  다항식 차수. auto = min(2, 레벨 수 - 1)
+  cross_terms: true                 # 교차항(dv*dlevel ...) 사용
+  cross_max_degree: 2               # 교차항 총차수 상한 (코너가 적으면 2, 넉넉하면 3)
+
+  weighting: adaptive               # plain    = 전역 OLS 1회
+                                    # local    = 고정 대역폭 가중 OLS (bandwidth 필요)
+                                    # adaptive = 코너별 대역폭 자동 선택 (권장/최고)
+  bandwidth: [0.05, 1.0]            # weighting: local 일 때의 (dv, dlevel) 대역폭
+  adaptive_grid: null               # adaptive 후보 대역폭. null = seen 간격에서 자동 유도
+                                    #   직접 줄 때: [[0.02, 1.0], [0.05, 1.0], null]
+                                    #   (null 항목 = 전역 피팅도 후보에 포함)
+  adaptive_k: 6                     # 대역폭 고를 때 볼 이웃 seen 코너 수
+  adaptive_amp_ratio: 1.5           # 외삽 가드: 분산이 전역의 1.5배 넘는 대역폭 거부
+  adaptive_clip_frac: 0.3           # 후보 예측을 측정범위 ±0.3×range 로 clip
+
+  # 축 좌표 스케일 (거의 안 건드림)
+  v_fit_scale: 1.0                  # 피팅 전에 좌표를 이 값으로 나눔 (온도축이면 100)
+  level_fit_scale: 1.0
+  v_token_scale: 0.1                # 신경망 feature 의 좌표 단위
+  level_token_scale: 1.0
+  v_gap_cap: 2.5                    # 외삽 gap feature 상한
+  level_gap_cap: 2.0
+
+# ─── 5. 신경망 ───────────────────────────────────────────────────────────────
+model:
+  enc_blocks: 3                     # 경로 인코더 ChainMP+BiGRU 블록 수 (GNN 홉)
+  enc_dim: 128                      # 인코더 폭
+  d_model: 64                       # attention head 폭
+  n_heads: 4
+  dropout: 0.10
+  aggr_slots: 12                    # aggressor 슬롯 최대치
+  si_n_time: 16                     # SI worst-instant 시간 샘플 수
+  si_elec_thresh: 0.01              # PT F6 전기적 필터 임계 (bump/VDD)
+
+# ─── 6. 학습 ─────────────────────────────────────────────────────────────────
+train:
+  seed: 42
+  lr: 2.0e-3
+  weight_decay: 1.0e-4
+  batch_paths: 256
+  epochs: 40                        # 여기 숫자만 바꾸면 된다.
+                                    #   best.pt 는 val 모니터 최고점에서 저장되므로
+                                    #   더 돌린다고 나빠지진 않는다(시간만 더 든다).
+                                    #   처음엔 5~10 으로 짧게 돌려 파이프라인부터 확인.
+  lambda_si: 1.0                    # SI 보조손실 가중치 (SI 자료 없으면 자동 0)
+                                    #   bash scripts/run.sh sweep 으로 0/0.1/1/10 비교 가능
+  si_w_ns0: 0.05                    # SI 담금질 스케줄 (soft -> hard)
+  si_w_ns1: 0.005
+  si_tau_ps0: 8.0
+  si_tau_ps1: 0.5
+  si_w_elec0: 0.004
+  si_w_elec1: 0.001
+  device: cuda                      # GPU 없으면 자동 CPU

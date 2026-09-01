@@ -1,0 +1,9 @@
+# Core (parsers + OLS base need only these two)
+numpy
+pyyaml
+
+# Training / inference
+torch
+
+# Tests (optional)
+# pytest
