@@ -27,6 +27,48 @@
 # =====================================================================
 
 
+# =====================================================================
+# 화면에 나오는 것을 **스스로 파일로 남긴다**
+# =====================================================================
+# 돌리는 사람과 데이터를 받는 사람이 다르고, 받는 쪽은 화면을 못 본다.
+# 그렇다고 "-output_log_file 로 돌려 주세요" 같은 부탁을 매번 드릴 수도 없다.
+# 그래서 이 파일이 자기 출력을 알아서 남긴다. 돌리는 방법은 그대로다.
+#
+#     pt_shell> source .../pt/xtalk_all.tcl
+#     ->  <현재폴더>/xtalk_all_run.log  에 화면 내용이 그대로 남는다
+#
+# 방법: 자기 자신을 redirect -tee 안에서 한 번 더 source 한다. 두 번째
+# 진입에서는 XT_LOGGING 이 이미 있으므로 이 블록을 건너뛰고 본문을 실행한다.
+# -tee 라 화면에도 그대로 나온다. Tcl 에러가 나도 잡아서 로그에 적는다.
+if {![info exists XT_LOGGING]} {
+    set XT_LOGGING 1
+    set XT_LOGFILE "[pwd]/xtalk_all_run.log"
+    set XT_SELF [info script]
+    set XT_RC [catch {
+        redirect -tee -file $XT_LOGFILE { source $XT_SELF }
+    } XT_ERR]
+    if {$XT_RC} {
+        # 에러 본문(while executing 포함)을 로그 끝에 붙인다.
+        if {![catch {set _lf [open $XT_LOGFILE a]}]} {
+            puts $_lf ""
+            puts $_lf "=================================================================="
+            puts $_lf "  TCL ERROR"
+            puts $_lf $XT_ERR
+            if {[info exists ::errorInfo]} {
+                puts $_lf ""
+                puts $_lf $::errorInfo
+            }
+            puts $_lf "=================================================================="
+            close $_lf
+        }
+        puts "  (the error above is also in $XT_LOGFILE)"
+    }
+    puts ""
+    puts "  screen log saved : $XT_LOGFILE"
+    unset XT_LOGGING
+    return
+}
+
 ### 여기 세 줄만 고치면 된다 ###########################################
 set RPT_FILE   ""         ;# 읽을 리포트. **절대경로로 박아도 된다.**
                            # 비워 두면 자동으로 찾는다(아래 순서).
