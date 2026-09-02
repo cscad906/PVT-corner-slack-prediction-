@@ -280,186 +280,194 @@ proc xt_build_contexts {rpt} {
 # --- 넷 목록이 없으면 리포트에서 직접 만든다 --------------------------
 # 이미 있으면 리포트를 안 읽으므로 RPT 는 빈 채로 남는다(맨 아래 안내에서 씀).
 set RPT ""
-if {![file exists $CTX]} {
+# --- 넷 목록을 리포트에서 만든다 (매번 새로) --------------------------
+# 예전에는 "unique_contexts.tsv 가 이미 있으면 안 만들고 그대로 쓴다" 였다.
+# 그게 사고의 원인이었다. 앞 디자인 목록이 폴더에 남아 있으면 리포트를 아예
+# 안 읽고 그것을 써서, 넷이 하나도 안 맞아 E-XCALC0 로 끝난다. 게다가 디자인
+# 대조가 이 블록 안에 있어서 검사까지 같이 건너뛰었다.
+#
+# 그래서 **항상 다시 만든다.** 옆의 context_raw / victim_windows /
+# aggressor_windows 는 원래도 매번 덮어썼다. 목록만 재활용되던 것이 오히려
+# 어긋난 규칙이었고, 이제 네 파일이 늘 같은 기준이 된다.
+# 비용은 리포트를 한 번 흘려 읽는 것뿐이다.
 
-    # (0) 맨 위에서 직접 박았으면 그것. 제일 우선한다.
-    if {$RPT_FILE ne ""} {
-        if {![file exists $RPT_FILE]} {
-            puts "=================================================================="
-            puts "  PROBLEM"
-            puts "    what   : the report set in RPT_FILE does not exist."
-            puts "             $RPT_FILE"
-            puts "    action : fix the path on the RPT_FILE line at the top."
-            puts ""
-            puts "    code   : E-NORPTFILE"
-            puts "=================================================================="
-            return
-        }
-        set RPT $RPT_FILE
-        puts "  using report from RPT_FILE : $RPT"
-    }
-
-    # (1) 예전에는 여기서 fixed_paths.tcl 이 남긴 $OUT 을 그대로 썼다. 없앴다.
-    #     이유 두 가지.
-    #       - 세션 변수라 아무도 안 지운다. 앞 디자인/앞 코너 값이 그대로 남아
-    #         다음 번에 딸려 온다(PERI 를 돌린 세션에서 MFC 를 돌린 사고).
-    #       - 없어도 잃는 것이 없다. $OUT 은 "$CORNER.rpt" 라는 **상대 이름**이라
-    #         리포트가 현재 폴더에 떨어지는데, 아래 (2) 폴더 스캔도 현재 폴더를
-    #         본다. (1) 이 찾던 파일은 (2) 도 반드시 찾는다.
-
-    # (2) 이 폴더에서 fixed_paths.tcl 산출물을 **내용으로** 찾는다.
-    #     이름으로 찾지 않는다 -- 폴더 이름과 리포트 이름이 다를 수 있고,
-    #     pt_shell 을 새로 띄웠으면 위 OUT 도 없기 때문이다.
-    #
-    #     구분 기준 : fixed_paths.tcl 이 만든 리포트는 **첫 줄이
-    #     "### FIXED_PATH" 로 시작**한다. 1회차 report_timing 리포트에는
-    #     이 표시가 없으므로 절대 잘못 집히지 않는다.
-    #     우리 최종 산출물(*by_path.rpt)도 같은 표시로 시작하므로 이름으로 뺀다.
-    #
-    #     후보가 둘 이상이면 고르지 않고 멈춘다(엉뚱한 코너를 집으면
-    #     넷이 전부 PIN_NOT_FOUND 로 나면서 원인을 찾기 어려워진다).
-    set XT_CAND {}
-    if {$RPT eq ""} {
-        foreach f [lsort [glob -nocomplain -directory [pwd] -tails *.rpt]] {
-            if {[string match "*by_path.rpt" $f]} continue      ;# 우리 출력
-            if {[catch {set fh [open $f r]}]} continue
-            gets $fh first
-            close $fh
-            if {[string match "### FIXED_PATH*" $first]} { lappend XT_CAND $f }
-        }
-        # 후보가 여럿이어도 멈추지 않는다. **어느 코너의 리포트를 읽든 결과가
-        # 같기 때문이다.** 여기서 리포트에서 뽑는 것은 경로와 넷 구조뿐이고,
-        # 그건 고정 경로라 코너가 달라도 동일하다(4개 코너로 확인 -- 리포트
-        # 파일은 slack 이 달라 서로 다르지만, 뽑힌 넷 목록은 byte 단위로 같았다).
-        # crosstalk 숫자는 리포트가 아니라 지금 로드된 디자인에서 나온다.
-        #
-        # 그래도 지금 코너의 것을 우선 고른다 -- 화면에 찍히는 이름이
-        # 로드된 db 와 맞아야 사람이 덜 헷갈린다.
-        if {[llength $XT_CAND] > 1 && $XT_DBSTEM ne ""} {
-            foreach f $XT_CAND {
-                if {[string first [file rootname $f] $XT_DBSTEM] >= 0} {
-                    set XT_CAND [list $f]
-                    puts "  matched the loaded db : $XT_DBSTEM"
-                    break
-                }
-            }
-        }
-        if {[llength $XT_CAND] > 1} {
-            puts "  [llength $XT_CAND] fixed-path reports are here; using the first."
-            puts "  (any of them gives the same net list -- only the numbers"
-            puts "   differ between corners, and those are not used here.)"
-            foreach f $XT_CAND { puts "     $f" }
-        }
-        if {[llength $XT_CAND] >= 1} {
-            set RPT [lindex $XT_CAND 0]
-            puts "  found the fixed-path report : $RPT"
-        }
-    }
-
-    # 그래도 없으면 멈춘다. 추측하지 않는다.
-    if {$RPT eq ""} {
+# (0) 맨 위에서 직접 박았으면 그것. 제일 우선한다.
+if {$RPT_FILE ne ""} {
+    if {![file exists $RPT_FILE]} {
         puts "=================================================================="
         puts "  PROBLEM"
-        puts "    what   : no fixed-path report was found."
-        puts "             looked in : [pwd]"
-        puts "             a fixed-path report is a .rpt file whose first line"
-        puts "             starts with '### FIXED_PATH' (made by fixed_paths.tcl)."
-        set XT_ANY [glob -nocomplain -directory [pwd] -tails *.rpt]
-        if {[llength $XT_ANY] == 0} {
-            puts "             there is no .rpt file here at all."
-            puts "    action : cd to the corner directory that holds the report,"
-            puts "             then source this file again."
-        } else {
-            puts "             .rpt files that are here (none of them qualify):"
-            foreach f $XT_ANY { puts "               $f" }
-            puts "    action : if one of the above IS the fixed-path report,"
-            puts "             name it at the top of this file:"
-            puts "               set RPT_FILE \"<name>\""
-            puts "             a round-1 report will not work -- it has no"
-            puts "             '### FIXED_PATH' lines, so paths cannot be matched."
-        }
+        puts "    what   : the report set in RPT_FILE does not exist."
+        puts "             $RPT_FILE"
+        puts "    action : fix the path on the RPT_FILE line at the top."
         puts ""
         puts "    code   : E-NORPTFILE"
         puts "=================================================================="
         return
     }
-    # --- 이 리포트가 **이 디자인** 것인가 -----------------------------
-    # 리포트에는 "Design : <이름>" 이 박혀 있고 PT 에는 current_design 이 있다.
-    # 둘이 다르면 넷 이름이 하나도 안 맞아 전부 PIN_NOT_FOUND 로 끝나는데,
-    # 그 사이 몇 시간이 그냥 간다. 그러니 한 줄도 계산하기 전에 멈춘다.
-    set XT_RDES [xt_report_design $RPT]
-    set XT_CDES [xt_current_design]
-    if {!$XT_SKIPDES && $XT_RDES ne "" && $XT_CDES ne "" && $XT_RDES ne $XT_CDES} {
-        puts "=================================================================="
-        puts "  PROBLEM"
-        puts "    what   : that report was made from a different design."
-        puts "             report says   : $XT_RDES"
-        puts "             loaded design : $XT_CDES"
-        puts "             report file   : $RPT"
-        puts "             directory     : [pwd]"
-        puts "    action : cd to THIS design's corner directory and source again,"
-        puts "             or name the right report at the top of this file:"
-        puts "               set RPT_FILE \"<path to $XT_CDES report>\""
-        puts "             if the two names really are the same design, run"
-        puts "               set XT_SKIP_DESIGN_CHECK 1"
-        puts "             and source again (that switch clears itself)."
-        puts ""
-        puts "    code   : E-DESIGNMISMATCH"
-        puts "=================================================================="
-        return
+    set RPT $RPT_FILE
+    puts "  using report from RPT_FILE : $RPT"
+}
+
+# (1) 예전에는 여기서 fixed_paths.tcl 이 남긴 $OUT 을 그대로 썼다. 없앴다.
+#     이유 두 가지.
+#       - 세션 변수라 아무도 안 지운다. 앞 디자인/앞 코너 값이 그대로 남아
+#         다음 번에 딸려 온다(PERI 를 돌린 세션에서 MFC 를 돌린 사고).
+#       - 없어도 잃는 것이 없다. $OUT 은 "$CORNER.rpt" 라는 **상대 이름**이라
+#         리포트가 현재 폴더에 떨어지는데, 아래 (2) 폴더 스캔도 현재 폴더를
+#         본다. (1) 이 찾던 파일은 (2) 도 반드시 찾는다.
+
+# (2) 이 폴더에서 fixed_paths.tcl 산출물을 **내용으로** 찾는다.
+#     이름으로 찾지 않는다 -- 폴더 이름과 리포트 이름이 다를 수 있고,
+#     pt_shell 을 새로 띄웠으면 위 OUT 도 없기 때문이다.
+#
+#     구분 기준 : fixed_paths.tcl 이 만든 리포트는 **첫 줄이
+#     "### FIXED_PATH" 로 시작**한다. 1회차 report_timing 리포트에는
+#     이 표시가 없으므로 절대 잘못 집히지 않는다.
+#     우리 최종 산출물(*by_path.rpt)도 같은 표시로 시작하므로 이름으로 뺀다.
+#
+#     후보가 둘 이상이면 고르지 않고 멈춘다(엉뚱한 코너를 집으면
+#     넷이 전부 PIN_NOT_FOUND 로 나면서 원인을 찾기 어려워진다).
+set XT_CAND {}
+if {$RPT eq ""} {
+    foreach f [lsort [glob -nocomplain -directory [pwd] -tails *.rpt]] {
+        if {[string match "*by_path.rpt" $f]} continue      ;# 우리 출력
+        if {[catch {set fh [open $f r]}]} continue
+        gets $fh first
+        close $fh
+        if {[string match "### FIXED_PATH*" $first]} { lappend XT_CAND $f }
     }
-    if {$XT_SKIPDES} {
-        puts "  NOTE: design check skipped on request (XT_SKIP_DESIGN_CHECK)."
-    } elseif {$XT_RDES eq ""} {
-        puts "  NOTE: the report has no 'Design :' line, so it could not be"
-        puts "        checked against the loaded design."
-    } elseif {$XT_CDES eq ""} {
-        puts "  NOTE: current_design could not be read, so the report was not"
-        puts "        checked against it."
+    # 후보가 여럿이어도 멈추지 않는다. **어느 코너의 리포트를 읽든 결과가
+    # 같기 때문이다.** 여기서 리포트에서 뽑는 것은 경로와 넷 구조뿐이고,
+    # 그건 고정 경로라 코너가 달라도 동일하다(4개 코너로 확인 -- 리포트
+    # 파일은 slack 이 달라 서로 다르지만, 뽑힌 넷 목록은 byte 단위로 같았다).
+    # crosstalk 숫자는 리포트가 아니라 지금 로드된 디자인에서 나온다.
+    #
+    # 그래도 지금 코너의 것을 우선 고른다 -- 화면에 찍히는 이름이
+    # 로드된 db 와 맞아야 사람이 덜 헷갈린다.
+    if {[llength $XT_CAND] > 1 && $XT_DBSTEM ne ""} {
+        foreach f $XT_CAND {
+            if {[string first [file rootname $f] $XT_DBSTEM] >= 0} {
+                set XT_CAND [list $f]
+                puts "  matched the loaded db : $XT_DBSTEM"
+                break
+            }
+        }
+    }
+    if {[llength $XT_CAND] > 1} {
+        puts "  [llength $XT_CAND] fixed-path reports are here; using the first."
+        puts "  (any of them gives the same net list -- only the numbers"
+        puts "   differ between corners, and those are not used here.)"
+        foreach f $XT_CAND { puts "     $f" }
+    }
+    if {[llength $XT_CAND] >= 1} {
+        set RPT [lindex $XT_CAND 0]
+        puts "  found the fixed-path report : $RPT"
+    }
+}
+
+# 그래도 없으면 멈춘다. 추측하지 않는다.
+if {$RPT eq ""} {
+    puts "=================================================================="
+    puts "  PROBLEM"
+    puts "    what   : no fixed-path report was found."
+    puts "             looked in : [pwd]"
+    puts "             a fixed-path report is a .rpt file whose first line"
+    puts "             starts with '### FIXED_PATH' (made by fixed_paths.tcl)."
+    set XT_ANY [glob -nocomplain -directory [pwd] -tails *.rpt]
+    if {[llength $XT_ANY] == 0} {
+        puts "             there is no .rpt file here at all."
+        puts "    action : cd to the corner directory that holds the report,"
+        puts "             then source this file again."
     } else {
-        puts "  design      : $XT_CDES   <- report agrees"
+        puts "             .rpt files that are here (none of them qualify):"
+        foreach f $XT_ANY { puts "               $f" }
+        puts "    action : if one of the above IS the fixed-path report,"
+        puts "             name it at the top of this file:"
+        puts "               set RPT_FILE \"<name>\""
+        puts "             a round-1 report will not work -- it has no"
+        puts "             '### FIXED_PATH' lines, so paths cannot be matched."
     }
+    puts ""
+    puts "    code   : E-NORPTFILE"
+    puts "=================================================================="
+    return
+}
+# --- 이 리포트가 **이 디자인** 것인가 -----------------------------
+# 리포트에는 "Design : <이름>" 이 박혀 있고 PT 에는 current_design 이 있다.
+# 둘이 다르면 넷 이름이 하나도 안 맞아 전부 PIN_NOT_FOUND 로 끝나는데,
+# 그 사이 몇 시간이 그냥 간다. 그러니 한 줄도 계산하기 전에 멈춘다.
+set XT_RDES [xt_report_design $RPT]
+set XT_CDES [xt_current_design]
+if {!$XT_SKIPDES && $XT_RDES ne "" && $XT_CDES ne "" && $XT_RDES ne $XT_CDES} {
+    puts "=================================================================="
+    puts "  PROBLEM"
+    puts "    what   : that report was made from a different design."
+    puts "             report says   : $XT_RDES"
+    puts "             loaded design : $XT_CDES"
+    puts "             report file   : $RPT"
+    puts "             directory     : [pwd]"
+    puts "    action : cd to THIS design's corner directory and source again,"
+    puts "             or name the right report at the top of this file:"
+    puts "               set RPT_FILE \"<path to $XT_CDES report>\""
+    puts "             if the two names really are the same design, run"
+    puts "               set XT_SKIP_DESIGN_CHECK 1"
+    puts "             and source again (that switch clears itself)."
+    puts ""
+    puts "    code   : E-DESIGNMISMATCH"
+    puts "=================================================================="
+    return
+}
+if {$XT_SKIPDES} {
+    puts "  NOTE: design check skipped on request (XT_SKIP_DESIGN_CHECK)."
+} elseif {$XT_RDES eq ""} {
+    puts "  NOTE: the report has no 'Design :' line, so it could not be"
+    puts "        checked against the loaded design."
+} elseif {$XT_CDES eq ""} {
+    puts "  NOTE: current_design could not be read, so the report was not"
+    puts "        checked against it."
+} else {
+    puts "  design      : $XT_CDES   <- report agrees"
+}
 
-    # 로드된 db 를 같이 찍어 둔다. 리포트 이름과 달라도 문제가 아니다
-    # (넷 목록은 코너와 무관하다). 나중에 로그만 보고도 어느 db 로 계산했는지
-    # 알 수 있게 남기는 것이다.
-    if {$XT_DBSTEM ne ""} {
-        puts "  loaded db   : $XT_DBSTEM   <- crosstalk is computed with this db"
-    }
-    puts "  no net list found -- building it from the report : $RPT"
-    file mkdir $XTALK_DIR
-    set rows [xt_build_contexts $RPT]
-    set f [open $CTX w]
-    puts $f "context_id\tvictim_net\tvictim_driver_pin\tvictim_load_pin\tfirst_path_id\tfirst_arc_idx\toccurrence_count"
-    set i 0
-    foreach r $rows { incr i ; puts $f "$i\t$r\t\t\t" }
-    close $f
-    puts "  paths in report : $XT_NPATH"
-    puts "  net list built  : [llength $rows] rows  ->  $CTX"
+# 로드된 db 를 같이 찍어 둔다. 리포트 이름과 달라도 문제가 아니다
+# (넷 목록은 코너와 무관하다). 나중에 로그만 보고도 어느 db 로 계산했는지
+# 알 수 있게 남기는 것이다.
+if {$XT_DBSTEM ne ""} {
+    puts "  loaded db   : $XT_DBSTEM   <- crosstalk is computed with this db"
+}
+puts "  building the net list from the report : $RPT   (always rebuilt)"
+file mkdir $XTALK_DIR
+set rows [xt_build_contexts $RPT]
+set f [open $CTX w]
+puts $f "context_id\tvictim_net\tvictim_driver_pin\tvictim_load_pin\tfirst_path_id\tfirst_arc_idx\toccurrence_count"
+set i 0
+foreach r $rows { incr i ; puts $f "$i\t$r\t\t\t" }
+close $f
+puts "  paths in report : $XT_NPATH"
+puts "  net list built  : [llength $rows] rows  ->  $CTX"
 
-    # 리포트가 도중에 잘렸는지 본다. 잘린 채로 넘어가면 그 뒤 경로의 넷이
-    # 통째로 빠지는데, 남은 것만으로도 계산은 멀쩡히 돌아 OK 로 끝난다.
-    # 그래서 여기서 잡지 않으면 학습 데이터가 조용히 반쪽이 된다.
-    if {$XT_NPATH == 0} {
-        puts ""
-        puts "  WARNING: this report has no '### FIXED_PATH' line at all."
-        puts "           it may not be a fixed_paths.tcl output."
-        puts "           code: W-NOPATHS"
-        puts ""
-    } elseif {$XT_NSLACK < $XT_NPATH} {
-        puts ""
-        puts "  WARNING: the report looks cut short."
-        puts "             paths started  : $XT_NPATH"
-        puts "             paths finished : $XT_NSLACK   <- fewer"
-        puts "           the last [expr {$XT_NPATH - $XT_NSLACK}] path(s) have no 'slack' line,"
-        puts "           so their nets are missing from the list above."
-        puts "           this run will still finish and print OK, but the data"
-        puts "           will be incomplete."
-        puts "           re-run fixed_paths.tcl and check it reached the end"
-        puts "           (it prints 'requested / measured' when it finishes)."
-        puts "           code: W-RPTCUT"
-        puts ""
-    }
+# 리포트가 도중에 잘렸는지 본다. 잘린 채로 넘어가면 그 뒤 경로의 넷이
+# 통째로 빠지는데, 남은 것만으로도 계산은 멀쩡히 돌아 OK 로 끝난다.
+# 그래서 여기서 잡지 않으면 학습 데이터가 조용히 반쪽이 된다.
+if {$XT_NPATH == 0} {
+    puts ""
+    puts "  WARNING: this report has no '### FIXED_PATH' line at all."
+    puts "           it may not be a fixed_paths.tcl output."
+    puts "           code: W-NOPATHS"
+    puts ""
+} elseif {$XT_NSLACK < $XT_NPATH} {
+    puts ""
+    puts "  WARNING: the report looks cut short."
+    puts "             paths started  : $XT_NPATH"
+    puts "             paths finished : $XT_NSLACK   <- fewer"
+    puts "           the last [expr {$XT_NPATH - $XT_NSLACK}] path(s) have no 'slack' line,"
+    puts "           so their nets are missing from the list above."
+    puts "           this run will still finish and print OK, but the data"
+    puts "           will be incomplete."
+    puts "           re-run fixed_paths.tcl and check it reached the end"
+    puts "           (it prints 'requested / measured' when it finishes)."
+    puts "           code: W-RPTCUT"
+    puts ""
 }
 
 puts "--------------------------------------------------------------------"
