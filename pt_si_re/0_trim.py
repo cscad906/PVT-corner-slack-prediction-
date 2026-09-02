@@ -85,7 +85,10 @@ SLACK_B_RE = re.compile(rb"^[ \t]*slack\s*\([^)]*\)\s+(-?[\d.]+)")
 # 담당자분이 붙여 주시는 열 이름이 정해지면 **여기만** 고치면 된다.
 # 대소문자는 안 가린다. 머리말에서 이 이름을 찾아 글자 위치를 얻고,
 # 핀 줄의 그 위치에서 값을 읽는다(2c_merge.py 가 열을 맞추는 방식과 같다).
-VOLT_NAMES = ("volt", "voltage", "vdd")
+VOLT_NAMES = ("Voltage", "Volt", "VDD")
+# 위에 어떻게 적으시든 대소문자를 안 가리게 여기서 소문자로 맞춰 둔다.
+# (예전에는 적힌 그대로 비교해서, "Voltage" 라고 넣으면 영영 안 맞았다)
+_VOLT_LC = tuple(n.strip().lower() for n in VOLT_NAMES if n.strip())
 
 # 머리말 줄. report_timing 은 경로마다 이 줄을 다시 찍는다(실측: 경로 수와 같음).
 HDR_B_RE = re.compile(rb"^\s*Point\b")
@@ -136,7 +139,7 @@ def volt_span(header):
             w = m.group(0).decode("ascii")
         except UnicodeDecodeError:
             continue
-        if w in VOLT_NAMES:
+        if w in _VOLT_LC:
             idx = i
     if idx is None:
         return None
@@ -834,7 +837,7 @@ def main():
             print("")
             print("  리포트에 있는 열 이름 : %s" % ", ".join(words))
             print("  찾고 있는 이름        : %s" % ", ".join(VOLT_NAMES))
-            hit = [w for w in words if w in VOLT_NAMES]
+            hit = [w for w in words if w in _VOLT_LC]
             if hit:
                 print("  -> 이름은 '%s' 로 맞았는데 그 자리에 숫자가 없습니다."
                       % ", ".join(hit))
