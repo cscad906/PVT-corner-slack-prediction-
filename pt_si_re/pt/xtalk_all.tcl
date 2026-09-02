@@ -311,7 +311,11 @@ proc xt_build_contexts {rpt} {
     set pend {}
     while {[gets $fh line] >= 0} {
         # 세는 것부터. 아래 regexp 에 안 걸리는 줄들이라 여기서 처리한다.
-        if {[string match "### FIXED_PATH*" $line]} { incr XT_NPATH ; continue }
+        # 후보 검사와 같은 규칙으로 본다. 한쪽만 BOM 을 걷어내면, 통과는
+        # 했는데 경로를 0개로 읽는 어긋난 상태가 된다.
+        if {[string match "### FIXED_PATH*" [string trimleft $line "\uFEFF \t\r"]]} {
+            incr XT_NPATH ; continue
+        }
         if {[string match "  slack (*" $line]}      { incr XT_NSLACK }
         if {![regexp {^  (\S+) \(([^)]+)\)} $line -> nm tag]} continue
         if {$tag eq "net"} {
@@ -389,13 +393,33 @@ if {$RPT_FILE ne ""} {
 #     후보가 둘 이상이면 고르지 않고 멈춘다(엉뚱한 코너를 집으면
 #     넷이 전부 PIN_NOT_FOUND 로 나면서 원인을 찾기 어려워진다).
 set XT_CAND {}
+set XT_WHY {}
 if {$RPT eq ""} {
     foreach f [lsort [glob -nocomplain -directory [pwd] -tails *.rpt]] {
-        if {[string match "*by_path.rpt" $f]} continue      ;# 우리 출력
-        if {[catch {set fh [open $f r]}]} continue
-        gets $fh first
+        if {[string match "*by_path.rpt" $f]} {
+            lappend XT_WHY [list $f "skipped -- this is our own output"]
+            continue
+        }
+        # **왜 탈락했는지 남긴다.** 예전에는 조용히 건너뛰어서, 파일은 목록에
+        # 보이는데 후보에서 빠지고 이유를 알 길이 없었다. 특히 권한 등으로
+        # open 이 실패하는 경우가 그랬다(로그만 보는 쪽에서는 손쓸 수가 없다).
+        if {[catch {set fh [open $f r]} XT_OE]} {
+            lappend XT_WHY [list $f "could not open -- $XT_OE"]
+            continue
+        }
+        if {[catch {gets $fh first} XT_GE]} {
+            catch {close $fh}
+            lappend XT_WHY [list $f "could not read -- $XT_GE"]
+            continue
+        }
         close $fh
-        if {[string match "### FIXED_PATH*" $first]} { lappend XT_CAND $f }
+        # BOM 과 앞 공백을 걷어낸다. 눈에는 안 보이는데 string match 는 실패한다.
+        set XT_HEAD [string trimleft $first "\uFEFF \t\r"]
+        if {[string match "### FIXED_PATH*" $XT_HEAD]} {
+            lappend XT_CAND $f
+        } else {
+            lappend XT_WHY [list $f "first line is not '### FIXED_PATH' -- \"[string range $XT_HEAD 0 50]\""]
+        }
     }
     # 후보가 여럿이어도 멈추지 않는다. **어느 코너의 리포트를 읽든 결과가
     # 같기 때문이다.** 여기서 리포트에서 뽑는 것은 경로와 넷 구조뿐이고,
@@ -440,8 +464,15 @@ if {$RPT eq ""} {
         puts "    action : cd to the corner directory that holds the report,"
         puts "             then source this file again."
     } else {
-        puts "             .rpt files that are here (none of them qualify):"
-        foreach f $XT_ANY { puts "               $f" }
+        puts "             .rpt files that are here, and why each was rejected:"
+        if {[info exists XT_WHY] && [llength $XT_WHY]} {
+            foreach e $XT_WHY {
+                puts "               [lindex $e 0]"
+                puts "                   [lindex $e 1]"
+            }
+        } else {
+            foreach f $XT_ANY { puts "               $f" }
+        }
         puts "    action : if one of the above IS the fixed-path report,"
         puts "             name it at the top of this file:"
         puts "               set RPT_FILE \"<name>\""
