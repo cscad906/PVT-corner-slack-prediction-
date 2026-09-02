@@ -237,6 +237,25 @@ proc xt_report_design {rpt} {
     return $d
 }
 
+# 이번 실행이 어떤 조건에서 돌았는지 파일로 남긴다.
+#
+# 왜 파일인가
+#     현장에서 돌리시는 분과 데이터를 받는 분이 다르다. 받는 쪽은 **화면을
+#     못 본다.** 그래서 "어느 디자인·어느 db·어느 리포트로 돌았나" 가 화면에만
+#     있으면 전달되지 않는다. 결과와 같은 폴더에 파일로 남겨야 같이 돌아온다.
+#
+#     폴더 이름은 link_path 의 db 에서 따오는데 db 가 여러 개면 헷갈릴 수 있다
+#     (macro 를 다른 전압 db 로 물리는 경우). 이 파일이 있으면 폴더 이름이
+#     무엇이든 조건이 확정된다.
+proc xt_write_run_info {path rows} {
+    if {[catch {set f [open $path w]}]} { return }
+    foreach {k v} $rows {
+        puts $f [format "%-14s %s" $k $v]
+    }
+    close $f
+}
+
+
 # 지금 PT 에 물려 있는 디자인 이름. 못 읽으면 "".
 proc xt_current_design {} {
     if {[catch {set d [get_object_name [current_design]]}]} { return "" }
@@ -402,6 +421,53 @@ if {$RPT eq ""} {
 # 그 사이 몇 시간이 그냥 간다. 그러니 한 줄도 계산하기 전에 멈춘다.
 set XT_RDES [xt_report_design $RPT]
 set XT_CDES [xt_current_design]
+
+# --- 이번 실행 조건을 파일로 남긴다 -----------------------------------
+# **판정보다 먼저 쓴다.** 어긋나서 멈추는 경우야말로 증거가 필요한데, 화면은
+# 받는 쪽에 전달되지 않기 때문이다(돌리는 사람과 데이터를 받는 사람이 다르다).
+set XT_NDB 0
+set XT_DBLIST {}
+if {[info exists XT_LP]} {
+    foreach e $XT_LP {
+        if {[string match "*.db" $e] || [string match "*.lib" $e]} {
+            incr XT_NDB
+            lappend XT_DBLIST $e
+        }
+    }
+}
+if {$XT_SKIPDES} {
+    set XT_DVERD "skipped (XT_SKIP_DESIGN_CHECK)"
+} elseif {$XT_RDES eq "" || $XT_CDES eq ""} {
+    set XT_DVERD "unknown (no name to compare)"
+} elseif {$XT_RDES eq $XT_CDES} {
+    set XT_DVERD "ok"
+} else {
+    set XT_DVERD "MISMATCH"
+}
+file mkdir $XTALK_DIR
+set XT_INFO "$XTALK_DIR/run_info.txt"
+set XT_ROWS [list \
+    date             [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"] \
+    current_design   [expr {$XT_CDES eq "" ? "?" : $XT_CDES}] \
+    report_file      [file normalize $RPT] \
+    report_design    [expr {$XT_RDES eq "" ? "?" : $XT_RDES}] \
+    design_check     $XT_DVERD \
+    delay_type       $DELAY_TYPE \
+    analysis         [expr {$DELAY_TYPE eq "min" ? "hold" : "setup"}] \
+    directory        [pwd] \
+    xtalk_dir        [file normalize $XTALK_DIR] \
+    db_used_for_name [expr {$XT_DBSTEM eq "" ? "?" : $XT_DBSTEM}] \
+    n_db             $XT_NDB \
+    si_enabled       [expr {[get_app_var si_enable_analysis] ? "yes" : "no"}]]
+foreach e $XT_DBLIST { lappend XT_ROWS db $e }
+xt_write_run_info $XT_INFO $XT_ROWS
+puts "  run info    : $XT_INFO"
+if {$XT_NDB > 1} {
+    puts "  NOTE: $XT_NDB libraries are linked.  the folder name comes from one of"
+    puts "        them, so read run_info.txt (not the folder name) to know what"
+    puts "        this run actually used."
+}
+
 if {!$XT_SKIPDES && $XT_RDES ne "" && $XT_CDES ne "" && $XT_RDES ne $XT_CDES} {
     puts "=================================================================="
     puts "  PROBLEM"
@@ -623,6 +689,19 @@ puts [format "  %-16s %s" "aggressor nets" "[dict size $aggr_nets]  (no driver $
 puts [format "  %-16s %s" "victim pins"    "$nv  (not found $nv_bad)"]
 puts [format "  %-16s %s" "raw PT output"  "$RAW  ([file size $RAW] bytes)"]
 puts "--------------------------------------------------------------------"
+
+# 실행 결과를 run_info.txt 에 덧붙인다.
+# **이 줄들이 없으면 도중에 멈춘 것이다.** 받는 쪽은 화면을 못 보므로,
+# 파일에 result 가 있는지로 완주 여부를 판단한다.
+if {[info exists XT_INFO] && ![catch {set f [open $XT_INFO a]}]} {
+    puts $f [format "%-16s %s" nets_queried $total]
+    puts $f [format "%-16s %s" nets_ok      $ok]
+    puts $f [format "%-16s %s" nets_failed  $err]
+    puts $f [format "%-16s %s" aggressors   [dict size $aggr_nets]]
+    puts $f [format "%-16s %s" victim_pins  [dict size $victim_pins]]
+    puts $f [format "%-16s %s" result       [expr {$ok > 0 ? "finished" : "E-XCALC0"}]]
+    close $f
+}
 
 set bad 0
 if {$err > 0} {
