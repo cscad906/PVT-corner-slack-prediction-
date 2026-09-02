@@ -74,8 +74,10 @@ if {![info exists XT_LOGGING]} {
 }
 
 ### 여기 세 줄만 고치면 된다 ###########################################
-set RPT_FILE   ""         ;# 읽을 리포트. **절대경로로 박아도 된다.**
-                           # 비워 두면 자동으로 찾는다(아래 순서).
+set RPT_FILE   "fixed_setup.rpt"   ;# 읽을 리포트. 현장 이름으로 박아 둔다.
+                           # 상대 이름이라 **현재 폴더** 기준이다.
+                           # 이 이름이 없으면 멈추지 않고 자동 탐색으로 넘어간다.
+                           # 비워 두면("") 처음부터 자동 탐색만 한다.
 set XTALK_DIR  ""         ;# 결과를 쓸 폴더. 비워 두면 **로드된 db 이름**으로
                            # 코너별 폴더를 만든다:  <db이름>/xtalk/
                            # db 를 못 알아내면 그냥 xtalk/ 에 쓴다.
@@ -362,19 +364,16 @@ set RPT ""
 
 # (0) 맨 위에서 직접 박았으면 그것. 제일 우선한다.
 if {$RPT_FILE ne ""} {
-    if {![file exists $RPT_FILE]} {
-        puts "=================================================================="
-        puts "  PROBLEM"
-        puts "    what   : the report set in RPT_FILE does not exist."
-        puts "             $RPT_FILE"
-        puts "    action : fix the path on the RPT_FILE line at the top."
-        puts ""
-        puts "    code   : E-NORPTFILE"
-        puts "=================================================================="
-        return
+    if {[file exists $RPT_FILE]} {
+        set RPT $RPT_FILE
+        puts "  using report from RPT_FILE : $RPT"
+    } else {
+        # 멈추지 않는다. RPT_FILE 은 기본 이름을 박아 둔 것뿐이라, 이름이 다른
+        # 코너 폴더에서 돌릴 때 여기서 막히면 곤란하다. 아래 자동 탐색으로 간다.
+        # 다만 조용히 넘어가지는 않는다 -- 로그에 남겨야 나중에 알 수 있다.
+        puts "  NOTE: RPT_FILE says \"$RPT_FILE\" but that file is not in [pwd]."
+        puts "        falling back to searching this directory."
     }
-    set RPT $RPT_FILE
-    puts "  using report from RPT_FILE : $RPT"
 }
 
 # (1) 예전에는 여기서 fixed_paths.tcl 이 남긴 $OUT 을 그대로 썼다. 없앴다.
