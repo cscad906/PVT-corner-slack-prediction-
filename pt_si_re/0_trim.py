@@ -203,6 +203,8 @@ class VoltCheck(object):
         self.seen = set()
         self.hdr = None           # 처음 만난 머리말 원문 (열 이름을 못 찾을 때 보여준다)
         self.n_read = 0           # 전압 값을 실제로 몇 번 읽었나 (진단용)
+        self.first = None         # 처음 읽어낸 (값, 그 줄) -- 화면에 바로 보여준다
+        self.colname = None       # 머리말에서 실제로 맞은 열 이름
 
     def on(self):
         return self.target is not None
@@ -234,6 +236,14 @@ class VoltCheck(object):
             sp = volt_span(line)
             if sp is not None:
                 self.span = sp
+                if self.colname is None:
+                    for m in WORD_B_RE.finditer(line.lower()):
+                        try:
+                            w = m.group(0).decode("ascii")
+                        except UnicodeDecodeError:
+                            continue
+                        if w in _VOLT_LC:
+                            self.colname = w
             return
         if self.span is None:
             return
@@ -256,6 +266,8 @@ class VoltCheck(object):
         v = line_volt(line, self.span)
         if v is not None:
             self.n_read += 1
+            if self.first is None:
+                self.first = (v, line.rstrip()[-46:])
             self.seen.add(round(v, 6))
 
     def verdict(self):
@@ -351,6 +363,8 @@ def scan_slacks(path, target=None):
                 n_start += 1
     stat["hdr"] = vc.hdr
     stat["read"] = vc.n_read
+    stat["first"] = vc.first
+    stat["colname"] = vc.colname
     return vals, n_start, stat
 
 
@@ -453,6 +467,8 @@ def trim_head(src, dst, n_keep, target=None):
                 break                      # 나머지는 읽지 않는다
     stat["hdr"] = vc.hdr
     stat["read"] = vc.n_read
+    stat["first"] = vc.first
+    stat["colname"] = vc.colname
     return None, written, stat
 
 
@@ -526,6 +542,8 @@ def trim_verify(src, dst, n_keep, target=None):
                 return None            # 뒤에 더 나쁜 것이 있다. 정렬 아님
     stat["hdr"] = vc.hdr
     stat["read"] = vc.n_read
+    stat["first"] = vc.first
+    stat["colname"] = vc.colname
     return n_total, written, stat
 
 
@@ -808,6 +826,17 @@ def main():
                   % (corner[:24], tgt if tgt is not None else "?",
                      "?" if n_before is None else n_before,
                      n_after, stat["mixed"], stat["novolt"], stat["other"]))
+            # 전압 열을 실제로 맞췄는지 **바로** 보여 준다. 표 숫자만으로는
+            # "이름이 안 맞았나 값이 이상한가" 를 알 수 없다.
+            fst = stat.get("first")
+            if fst is not None:
+                print("      열 '%s' 맞음 -> 첫 값 %s   |%s|"
+                      % (stat.get("colname") or "?", fst[0],
+                         fst[1].decode("utf-8", "replace")))
+            elif stat.get("hdr") is None:
+                print("      머리말을 못 찾음")
+            else:
+                print("      열을 못 맞춤 (아래 진단 참고)")
         else:
             print("  %-30s %10s %10d %9.0fMB %s"
                   % (corner, "?" if n_before is None else n_before,
