@@ -112,39 +112,66 @@ def voltage_of_corner(name):
 
 
 def volt_span(header):
-    """머리말에서 전압 열의 글자 범위 (lo, hi). 못 찾으면 None.
+    """머리말에서 전압 열이 시작하는 글자 위치. 못 찾으면 None.
 
     전압은 **맨 오른쪽 열**이라, 이름이 여러 번 나오면 마지막 것을 쓴다.
+
+    경계를 어떻게 잡나
+        **바로 앞 열 이름이 끝난 자리**부터가 전압 열이다. 거기서부터 줄 끝까지
+        본다. 이러면 옆 열(Path 등) 값에는 절대 손대지 않는다 -- 앞 열의 값은
+        그 열 이름 끝에 맞춰 정렬되므로 이 위치보다 앞에서 끝난다.
+
+        예전에는 이름 앞뒤로 여유를 두고 못 읽으면 더 넓혀서 찾았는데, 전압이
+        안 찍힌 줄에서 옆 열 숫자를 전압으로 집었다. 그래서 없앴다.
     """
     low = header.lower()
-    hit = None
-    for m in WORD_B_RE.finditer(low):
+    hits = list(WORD_B_RE.finditer(low))
+    idx = None
+    for i, m in enumerate(hits):
         try:
             w = m.group(0).decode("ascii")
         except UnicodeDecodeError:
             continue
         if w in VOLT_NAMES:
-            hit = m
-    if hit is None:
+            idx = i
+    if idx is None:
         return None
-    # 값은 열 이름에 맞춰 정렬되므로 앞뒤로 조금 넉넉히 잡는다.
-    return (hit.start() - 6, hit.end() + 6)
+    # 값은 열 이름의 **오른쪽 끝**에 맞춰 정렬된다. 이름보다 길 수 있으니
+    # 왼쪽으로 조금 여유를 두되, **앞 열 이름이 끝난 자리보다는 왼쪽으로 안 간다.**
+    # 앞 열의 값도 그 이름 끝에 맞춰 정렬되므로, 이 선을 지키면 옆 열 값에
+    # 절대 닿지 않는다.
+    lo = hits[idx].start() - 6
+    if idx > 0 and lo < hits[idx - 1].end():
+        lo = hits[idx - 1].end()
+    if lo < 0:
+        lo = 0
+    return (lo, hits[idx].end() + 4)
 
 
 def line_volt(line, span):
-    """핀 줄에서 전압 값을 읽는다. 그 열 범위와 겹치는 숫자만 인정한다.
+    """줄에서 전압 값을 읽는다. **전압 열 안에서만** 가져온다.
 
-    범위를 안 보고 '줄의 마지막 숫자' 를 쓰면, 전압이 안 붙은 줄에서 Path 열
-    값을 전압으로 잘못 읽는다. 그러면 멀쩡한 경로가 mixed 로 몰린다.
+    span 은 머리말에서 잡은 (시작, 끝) 이다. 그 구간만 잘라 **마지막 낱말**을
+    숫자로 읽는다. 구간 안에 rise/fall 표시(r/f)가 낄 수 있어서 통째로
+    float 하지 않는다.
+
+    옆 열은 절대 안 본다. 구간이 비어 있으면 None 이고 그 줄은 그냥 넘어간다
+    (클럭 제너레이터처럼 전압이 원래 안 찍히는 셀이 있다).
+
+    머리말 열 위치는 **경로마다 다르다** -- report_timing 이 그 경로의 제일 긴
+    이름에 맞춰 Point 열 폭을 바꾼다. 그래서 span 은 머리말을 만날 때마다
+    다시 잡는다.
     """
     lo, hi = span
-    for m in NUM_B_RE.finditer(line):
-        if m.end() > lo and m.start() < hi:
-            try:
-                return float(m.group(0))
-            except ValueError:
-                return None
-    return None
+    if len(line) <= lo:
+        return None                     # 그 열까지 오지도 않는 짧은 줄
+    parts = line[lo:hi].split()
+    if not parts:
+        return None                     # 그 칸이 비어 있다
+    try:
+        return float(parts[-1])
+    except ValueError:
+        return None                     # 숫자가 아니다 (r/f 만 있는 등)
 
 
 class VoltCheck(object):
@@ -163,6 +190,8 @@ class VoltCheck(object):
         self.target = target
         self.span = None          # 머리말에서 얻은 열 위치. 파일 내내 기억한다
         self.seen = set()
+        self.hdr = None           # 처음 만난 머리말 원문 (열 이름을 못 찾을 때 보여준다)
+        self.n_read = 0           # 전압 값을 실제로 몇 번 읽었나 (진단용)
 
     def on(self):
         return self.target is not None
@@ -171,7 +200,13 @@ class VoltCheck(object):
         """블록 안의 줄을 하나 넣는다."""
         if self.target is None:
             return
+        # 전압이 이미 두 종류면 판정은 MIXED 로 끝났다. 그 경로의 남은 줄을
+        # 더 읽어 봐야 결과가 안 바뀌므로 건너뛴다(경로가 길수록 이득이 크다).
+        if len(self.seen) > 1:
+            return
         if HDR_B_RE.match(line):
+            if self.hdr is None:
+                self.hdr = line.rstrip()
             sp = volt_span(line)
             if sp is not None:
                 self.span = sp
@@ -180,6 +215,7 @@ class VoltCheck(object):
             return
         v = line_volt(line, self.span)
         if v is not None:
+            self.n_read += 1
             self.seen.add(round(v, 6))
 
     def verdict(self):
@@ -253,7 +289,7 @@ def scan_slacks(path, target=None):
     vals = []
     n_start = 0
     vc = VoltCheck(target)
-    stat = {"mixed": 0, "novolt": 0, "other": 0}
+    stat = {"mixed": 0, "novolt": 0, "other": 0, "hdr": None, "read": 0}
     with open(path, "rb") as f:
         for line in f:
             if vc.on():
@@ -273,6 +309,8 @@ def scan_slacks(path, target=None):
                     continue
             if b"Startpoint:" in line and START_B_RE.match(line):
                 n_start += 1
+    stat["hdr"] = vc.hdr
+    stat["read"] = vc.n_read
     return vals, n_start, stat
 
 
@@ -337,7 +375,7 @@ def trim_head(src, dst, n_keep, target=None):
     buf = []
     in_block = False
     vc = VoltCheck(target)
-    stat = {"mixed": 0, "novolt": 0, "other": 0}
+    stat = {"mixed": 0, "novolt": 0, "other": 0, "hdr": None, "read": 0}
     with open(src, "rb") as fi, open(dst, "wb") as fo:
         for line in fi:
             if vc.on():
@@ -373,6 +411,8 @@ def trim_head(src, dst, n_keep, target=None):
             buf = []
             if written >= n_keep:
                 break                      # 나머지는 읽지 않는다
+    stat["hdr"] = vc.hdr
+    stat["read"] = vc.n_read
     return None, written, stat
 
 
@@ -402,7 +442,7 @@ def trim_verify(src, dst, n_keep, target=None):
     buf = []
     in_block = False
     vc = VoltCheck(target)
-    stat = {"mixed": 0, "novolt": 0, "other": 0}
+    stat = {"mixed": 0, "novolt": 0, "other": 0, "hdr": None, "read": 0}
     with open(src, "rb") as fi, open(dst, "wb") as fo:
         for line in fi:
             if vc.on():
@@ -444,6 +484,8 @@ def trim_verify(src, dst, n_keep, target=None):
                 buf = []
             elif sl < worst_kept:
                 return None            # 뒤에 더 나쁜 것이 있다. 정렬 아님
+    stat["hdr"] = vc.hdr
+    stat["read"] = vc.n_read
     return n_total, written, stat
 
 
@@ -508,6 +550,63 @@ def run_jobs(jobs_list, jobs):
         pool.join()
 
 
+def probe(path, target):
+    """전압 열을 어떻게 인식하는지 보여 준다. (--probe)
+
+    "열 이름을 맞췄는데도 남김이 0" 같은 상황에서, 무엇이 안 맞는지는 리포트를
+    직접 봐야 안다. 그런데 리포트는 현장에만 있다. 그래서 도구가 대신 보고한다.
+    """
+    print("")
+    print("  파일 : %s" % path)
+    print("  목표 전압 : %s" % target)
+    hdr = None
+    hdr_no = 0
+    n = 0
+    shown = 0
+    span = None
+    with open(path, "rb") as f:
+        for line in f:
+            n += 1
+            if hdr is None and HDR_B_RE.match(line):
+                hdr = line.rstrip()
+                hdr_no = n
+                span = volt_span(hdr)
+                print("")
+                print("  머리말 (%d번째 줄):" % hdr_no)
+                print("    |%s|" % hdr.decode("utf-8", "replace"))
+                # 머리말에서 알아본 낱말들을 전부 보여 준다 -> 이름을 여기서 고른다
+                words = []
+                for m in WORD_B_RE.finditer(hdr.lower()):
+                    try:
+                        words.append(m.group(0).decode("ascii"))
+                    except UnicodeDecodeError:
+                        pass
+                print("  머리말에서 읽은 열 이름 : %s" % ", ".join(words))
+                print("  VOLT_NAMES              : %s" % ", ".join(VOLT_NAMES))
+                if span is None:
+                    print("  -> 겹치는 이름이 없습니다. 위 목록에서 전압 열을 골라")
+                    print("     0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
+                    return
+                print("  -> 전압 열을 찾았습니다. 글자 %d~%d" % span)
+                continue
+            if span is None:
+                continue
+            v = line_volt(line, span)
+            if v is not None and shown < 5:
+                shown += 1
+                txt = line.rstrip().decode("utf-8", "replace")
+                print("    %-70s -> %s" % (txt[-70:], v))
+    if hdr is None:
+        print("")
+        print("  머리말('  Point ...' 로 시작하는 줄)을 못 찾았습니다.")
+        print("  이 리포트는 -nosplit 없이 뽑혔거나 형식이 다를 수 있습니다.")
+        return
+    if shown == 0:
+        print("")
+        print("  열은 찾았는데 그 자리에서 숫자를 하나도 못 읽었습니다.")
+        print("  값이 다른 열에 있거나, 정렬이 머리말과 어긋난 것입니다.")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="코너별 리포트를 나쁜 것 N개만 남긴 리포트로 줄인다.")
@@ -531,6 +630,9 @@ def main():
                          "값을 주면 모든 코너에 그 전압을 쓰고, 'auto' 를 주면 "
                          "**코너 이름에서 코너마다 따로** 읽는다(tt0p78v25c -> 0.78). "
                          "생략하면 전압을 아예 안 본다(예전 동작)")
+    ap.add_argument("--probe", action="store_true",
+                    help="자르지 않고, 전압 열을 어떻게 인식하는지만 보여준다. "
+                         "'열 이름을 맞췄는데 남김이 0' 일 때 이걸로 확인한다")
     ap.add_argument("--force", action="store_true",
                     help="결과 폴더에 이미 .rpt 가 있어도 덮어쓴다")
     args = ap.parse_args()
@@ -548,6 +650,26 @@ def main():
         print("")
         code("E-NORPT",
              "[ 실패 ] %s 안에 .rpt 파일이 없습니다." % d)
+
+    # --probe 는 자르지 않고 확인만 한다. 출력 폴더 검사보다 **먼저** 둔다
+    # -- 결과 폴더가 이미 차 있어도 진단은 되어야 하기 때문이다.
+    if args.probe:
+        print("=" * 68)
+        print("  --probe : 자르지 않고 전압 열 인식만 확인합니다")
+        print("=" * 68)
+        for f in files:
+            nm = os.path.splitext(os.path.basename(f))[0]
+            if args.voltage is None:
+                tv = None
+            elif str(args.voltage).lower() == "auto":
+                tv = voltage_of_corner(nm)
+            else:
+                tv = float(args.voltage)
+            probe(f, tv)
+        print("")
+        print("-" * 68)
+        print("  확인이 끝나면 --probe 를 빼고 다시 돌리세요.")
+        return
 
     if os.path.abspath(out) == os.path.abspath(d):
         print("")
@@ -621,6 +743,8 @@ def main():
     tot_before = tot_after = tot_bytes = 0
     n_uncut = 0
     tot_mixed = tot_novolt = tot_other = 0
+    tot_read = 0
+    diag_hdr = None
     # n_before 가 None 이면 '원래 몇 개인지 안 셌다'는 뜻이다(기본 동작).
     # 앞에서 N개만 읽고 멈추므로 전체 개수를 알 수가 없다. --verify 를 주면 센다.
     unknown_total = False
@@ -636,6 +760,9 @@ def main():
         tot_mixed += stat["mixed"]
         tot_novolt += stat["novolt"]
         tot_other += stat["other"]
+        tot_read += stat.get("read", 0)
+        if diag_hdr is None and stat.get("hdr") is not None:
+            diag_hdr = stat["hdr"]
         if volt_on:
             print("  %-24s %6s %8s %8d %7d %8d %8d"
                   % (corner[:24], tgt if tgt is not None else "?",
@@ -651,6 +778,39 @@ def main():
               % ("합계", "", "?" if unknown_total else tot_before,
                  tot_after, tot_mixed, tot_novolt, tot_other))
         print("")
+        # 전압을 하나도 못 읽었으면 그냥 넘어가지 않는다. 무엇을 봤고 무엇을
+        # 찾고 있었는지 여기서 바로 보여 준다. 리포트는 현장에만 있으므로,
+        # 이 출력이 없으면 원인을 알 방법이 없다.
+        if tot_read == 0 and diag_hdr is not None:
+            print("")
+            print("  " + "!" * 66)
+            print("  전압 값을 한 줄도 못 읽었습니다. 아래를 확인해 주세요.")
+            print("")
+            print("  리포트 머리말:")
+            print("    |%s|" % diag_hdr.decode("utf-8", "replace"))
+            words = []
+            for m in WORD_B_RE.finditer(diag_hdr.lower()):
+                try:
+                    words.append(m.group(0).decode("ascii"))
+                except UnicodeDecodeError:
+                    pass
+            print("")
+            print("  리포트에 있는 열 이름 : %s" % ", ".join(words))
+            print("  찾고 있는 이름        : %s" % ", ".join(VOLT_NAMES))
+            hit = [w for w in words if w in VOLT_NAMES]
+            if hit:
+                print("  -> 이름은 '%s' 로 맞았는데 그 자리에 숫자가 없습니다."
+                      % ", ".join(hit))
+                print("     값이 다른 열에 있거나 정렬이 머리말과 어긋난 것입니다.")
+            else:
+                print("  -> 겹치는 이름이 없습니다. 위 목록에서 전압 열을 골라")
+                print("     0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
+            print("  " + "!" * 66)
+        elif tot_read == 0:
+            print("")
+            print("  전압 값을 한 줄도 못 읽었고, 머리말('  Point ...')도 못 찾았습니다.")
+            print("  이 리포트는 형식이 다를 수 있습니다.")
+
         print("  mixed    = 전압이 두 개 이상 섞인 경로. macro 등 다른 전원을 지나감")
         print("  전압없음 = 그 경로에서 전압 값을 하나도 못 읽음")
         print("             (전부 이 칸이면 VOLT_NAMES 의 열 이름이 실제와 다른 것)")

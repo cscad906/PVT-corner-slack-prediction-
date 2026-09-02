@@ -1,7 +1,7 @@
 # =====================================================================
 # xtalk_all_hold.tcl  --  crosstalk PT 작업을 **한 번에** (hold 판)
 #
-# xtalk_all.tcl 과 딱 한 줄(DELAY_TYPE)만 다른 사본이다.
+# xtalk_all.tcl 과 두 줄(DELAY_TYPE, RPT_FILE)만 다른 사본이다.
 # 고칠 일이 있으면 xtalk_all.tcl 을 고치고 dev/make_hold.py 로 다시 만든다.
 # 결과는 <db이름>_hold/xtalk/ 에 들어가므로 setup 과 안 섞인다.
 #
@@ -74,7 +74,7 @@ if {![info exists XT_LOGGING]} {
 }
 
 ### 여기 세 줄만 고치면 된다 ###########################################
-set RPT_FILE   "fixed_setup.rpt"   ;# 읽을 리포트. 현장 이름으로 박아 둔다.
+set RPT_FILE   "fix_hold.rpt"    ;# 읽을 리포트. 현장 이름으로 박아 둔다.
                            # 상대 이름이라 **현재 폴더** 기준이다.
                            # 이 이름이 없으면 멈추지 않고 자동 탐색으로 넘어간다.
                            # 비워 두면("") 처음부터 자동 탐색만 한다.
