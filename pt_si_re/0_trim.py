@@ -88,7 +88,11 @@ SLACK_B_RE = re.compile(rb"^[ \t]*slack\s*\([^)]*\)\s+(-?[\d.]+)")
 VOLT_NAMES = ("volt", "voltage", "vdd")
 
 # 머리말 줄. report_timing 은 경로마다 이 줄을 다시 찍는다(실측: 경로 수와 같음).
-HDR_B_RE = re.compile(rb"^\s{2,}Point\b")
+HDR_B_RE = re.compile(rb"^\s*Point\b")
+DIGIT_B_RE = re.compile(rb"[0-9]")
+NETLINE_B_RE = re.compile(rb"\(net\)")
+# 핀 줄 : "  <이름> (<셀>)" 꼴. 전압은 여기에만 붙는다.
+PINLINE_B_RE = re.compile(rb"^\s+\S+\s+\([^)]*\)")
 WORD_B_RE = re.compile(rb"[a-z_]+")
 NUM_B_RE = re.compile(rb"-?\d+(?:\.\d+)?")
 
@@ -140,38 +144,42 @@ def volt_span(header):
     # 왼쪽으로 조금 여유를 두되, **앞 열 이름이 끝난 자리보다는 왼쪽으로 안 간다.**
     # 앞 열의 값도 그 이름 끝에 맞춰 정렬되므로, 이 선을 지키면 옆 열 값에
     # 절대 닿지 않는다.
-    lo = hits[idx].start() - 6
+    lo = hits[idx].start() - 12
     if idx > 0 and lo < hits[idx - 1].end():
-        lo = hits[idx - 1].end()
+        lo = hits[idx - 1].end()        # 앞 열 이름 끝보다 왼쪽으로는 안 간다
     if lo < 0:
         lo = 0
-    return (lo, hits[idx].end() + 4)
+    return lo                            # 여기서 **줄 끝까지**가 전압 열
 
 
-def line_volt(line, span):
-    """줄에서 전압 값을 읽는다. **전압 열 안에서만** 가져온다.
+def line_volt(line, lo):
+    """줄에서 전압 값을 읽는다. **전압 열에서만** 가져온다.
 
-    span 은 머리말에서 잡은 (시작, 끝) 이다. 그 구간만 잘라 **마지막 낱말**을
-    숫자로 읽는다. 구간 안에 rise/fall 표시(r/f)가 낄 수 있어서 통째로
-    float 하지 않는다.
+    전압은 맨 오른쪽 열이므로 lo 부터 **줄 끝까지**가 전압 열이다. 그 안의
+    **마지막 낱말**을 숫자로 읽는다.
 
-    옆 열은 절대 안 본다. 구간이 비어 있으면 None 이고 그 줄은 그냥 넘어간다
-    (클럭 제너레이터처럼 전압이 원래 안 찍히는 셀이 있다).
+    왜 '끝까지' 인가
+        값이 열 이름보다 길 수도(0.780000), 이름보다 오른쪽으로 더 나갈 수도
+        있다. 좁게 잡으면 값이 범위 밖으로 나가 **전부 빈칸으로 보인다.**
 
-    머리말 열 위치는 **경로마다 다르다** -- report_timing 이 그 경로의 제일 긴
-    이름에 맞춰 Point 열 폭을 바꾼다. 그래서 span 은 머리말을 만날 때마다
-    다시 잡는다.
+    왜 옆 열이 안 걸리나
+        lo 는 앞 열 이름이 끝난 자리보다 왼쪽으로 안 간다. 앞 열의 값도 그
+        이름 끝에 맞춰 정렬되므로 lo 앞에서 끝난다. 그래서 lo 뒤에 남는 것은
+        rise/fall 표시(r/f)와 전압뿐이고, 마지막 낱말이 곧 전압이다.
+
+    빈칸
+        전압이 안 찍힌 줄은 마지막 낱말이 r/f 이거나 아무것도 없다. 둘 다
+        숫자가 아니므로 None 이고 그 줄은 그냥 넘어간다(클럭 제너레이터 등).
     """
-    lo, hi = span
     if len(line) <= lo:
         return None                     # 그 열까지 오지도 않는 짧은 줄
-    parts = line[lo:hi].split()
+    parts = line[lo:].split()
     if not parts:
-        return None                     # 그 칸이 비어 있다
+        return None                     # 비어 있다
     try:
         return float(parts[-1])
     except ValueError:
-        return None                     # 숫자가 아니다 (r/f 만 있는 등)
+        return None                     # r/f 만 있는 등
 
 
 class VoltCheck(object):
@@ -196,15 +204,28 @@ class VoltCheck(object):
     def on(self):
         return self.target is not None
 
+    @staticmethod
+    def is_header(line):
+        """머리말 줄인가.
+
+        1) '  Point ...' 로 시작하면 머리말이다 (PT 기본 형식).
+        2) 아니어도, **숫자가 하나도 없고** 전압 열 이름이 낱말로 들어 있으면
+           머리말로 본다. 첫 열 이름이 Point 가 아닌 리포트도 있기 때문이다.
+           값 줄에는 반드시 숫자가 있으므로 값 줄이 잘못 걸리지 않는다.
+        """
+        if HDR_B_RE.match(line):
+            return True
+        if DIGIT_B_RE.search(line):
+            return False
+        return volt_span(line) is not None
+
     def feed(self, line):
         """블록 안의 줄을 하나 넣는다."""
         if self.target is None:
             return
-        # 전압이 이미 두 종류면 판정은 MIXED 로 끝났다. 그 경로의 남은 줄을
-        # 더 읽어 봐야 결과가 안 바뀌므로 건너뛴다(경로가 길수록 이득이 크다).
-        if len(self.seen) > 1:
-            return
-        if HDR_B_RE.match(line):
+        # 머리말은 **언제나** 본다. 열 위치가 경로마다 바뀌므로, 여기서
+        # 건너뛰면 다음 블록을 앞 블록의 위치로 읽게 된다.
+        if VoltCheck.is_header(line):
             if self.hdr is None:
                 self.hdr = line.rstrip()
             sp = volt_span(line)
@@ -212,6 +233,22 @@ class VoltCheck(object):
                 self.span = sp
             return
         if self.span is None:
+            return
+        # 전압이 이미 두 종류면 판정은 MIXED 로 끝났다. 그 경로의 남은 줄을
+        # 더 읽어 봐야 결과가 안 바뀌므로 건너뛴다(경로가 길수록 이득이 크다).
+        if len(self.seen) > 1:
+            return
+        # **핀 줄만 본다.**
+        #
+        # 요약 줄(data arrival time, slack, clock uncertainty ...)은 숫자가
+        # 열과 무관하게 맨 오른쪽에 찍힌다. 그걸 전압 열 위치에서 자르면
+        # 숫자 중간이 잘려 엉뚱한 값이 나온다. 실측: "-1.310492" 의 끝자리만
+        # 잘려 2.0 으로 읽혔고, 그 탓에 모든 경로가 mixed 가 됐다.
+        #
+        # 넷 줄도 열 구성이 달라서(Fanout/Cap 뿐) 뺀다.
+        if not PINLINE_B_RE.match(line):
+            return
+        if NETLINE_B_RE.search(line):
             return
         v = line_volt(line, self.span)
         if v is not None:
@@ -567,7 +604,7 @@ def probe(path, target):
     with open(path, "rb") as f:
         for line in f:
             n += 1
-            if hdr is None and HDR_B_RE.match(line):
+            if hdr is None and VoltCheck.is_header(line):
                 hdr = line.rstrip()
                 hdr_no = n
                 span = volt_span(hdr)
@@ -587,7 +624,7 @@ def probe(path, target):
                     print("  -> 겹치는 이름이 없습니다. 위 목록에서 전압 열을 골라")
                     print("     0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
                     return
-                print("  -> 전압 열을 찾았습니다. 글자 %d~%d" % span)
+                print("  -> 전압 열을 찾았습니다. %d번째 글자부터 줄 끝까지" % span)
                 continue
             if span is None:
                 continue
@@ -808,8 +845,34 @@ def main():
             print("  " + "!" * 66)
         elif tot_read == 0:
             print("")
-            print("  전압 값을 한 줄도 못 읽었고, 머리말('  Point ...')도 못 찾았습니다.")
+            print("  " + "!" * 66)
+            print("  전압 값을 한 줄도 못 읽었고, **머리말도 못 찾았습니다.**")
             print("  이 리포트는 형식이 다를 수 있습니다.")
+            print("")
+            print("  리포트 앞부분에서 머리말처럼 보이는 줄들 (숫자 없는 줄):")
+            shown = 0
+            try:
+                with open(files[0], "rb") as _f:
+                    for _i, _l in enumerate(_f):
+                        if _i > 400 or shown >= 8:
+                            break
+                        _t = _l.rstrip()
+                        if len(_t) < 20 or DIGIT_B_RE.search(_t):
+                            continue
+                        if len(WORD_B_RE.findall(_t.lower())) < 3:
+                            continue
+                        shown += 1
+                        print("    %3d| %s" % (_i + 1,
+                              _t[:180].decode("utf-8", "replace")))
+            except Exception as _e:                    # noqa: BLE001
+                print("    (읽지 못했습니다: %s)" % _e)
+            if shown == 0:
+                print("    (그런 줄이 없습니다)")
+            print("")
+            print("  찾고 있는 이름 : %s" % ", ".join(VOLT_NAMES))
+            print("  위 줄들 중 전압 열이 있는 줄을 보고, 그 이름을")
+            print("  0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
+            print("  " + "!" * 66)
 
         print("  mixed    = 전압이 두 개 이상 섞인 경로. macro 등 다른 전원을 지나감")
         print("  전압없음 = 그 경로에서 전압 값을 하나도 못 읽음")
