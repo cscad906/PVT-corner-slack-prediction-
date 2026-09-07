@@ -7,13 +7,19 @@
 #
 # 현재 restore session에 이미 로드된 design/library/SDC/SPEF만 사용합니다.
 # 이 파일은 read_db/read_verilog/link_design/read_sdc/read_parasitics를 실행하지 않습니다.
+# 현재 활성 parasitic의 BEOL/온도가 목표와 일치할 때만 scaling을 실행합니다.
 
 # ======================= USER SETTINGS ========================
 
 # 목표 코너와 보간 방향
+# V : 같은 process/temperature의 양쪽 voltage DB로 내삽 (기본값)
+# T : 같은 process/voltage의 양쪽 temperature DB로 내삽
+# VT: process가 같은 네 개의 voltage/temperature DB로 2D 내삽
+# BEOL은 내삽하지 않고 목표 온도의 restore parasitic을 그대로 사용합니다.
 set TARGET_PROCESS      "SSPG"    ;# report_lib에 표시되는 실제 공정 이름(예: TT, SSPG)
 set TARGET_VOLTAGE      0.75      ;# Volt
 set TARGET_TEMPERATURE  25        ;# Celsius. 영하 40도는 -40
+set TARGET_BEOL         "rcmax"   ;# rcmax / cmax / rcmin
 set SCALING_AXIS        "V"       ;# V / T / VT
 
 # 분석 종류
@@ -53,6 +59,57 @@ proc auto_scaling::same {a b} { return [expr {abs($a-$b) < 1e-8}] }
 proc auto_scaling::readable {path} {
     if {![file isfile $path] || ![file readable $path]} { error "Cannot read file: $path" }
     return [file normalize $path]
+}
+
+# SPEF/GPD의 // CORNER_NAME은 PDK마다 RC_MAX, rcmax_model처럼 표기가
+# 다를 수 있으므로 세 가지 지원 BEOL 이름으로 정규화합니다.
+proc auto_scaling::canonical_beol {value} {
+    set compact [string tolower $value]
+    regsub -all {[^[:alnum:]]} $compact "" compact
+    if {[string first "rcmax" $compact] >= 0} { return RCMAX }
+    if {[string first "rcmin" $compact] >= 0} { return RCMIN }
+    if {[string first "cmax"  $compact] >= 0} { return CMAX }
+    return ""
+}
+
+# restore session의 현재 parasitic이 요청한 BEOL과 목표 온도인지 확인합니다.
+# PrimeTime은 SPEF/GPD의 // CORNER_NAME과 // OPERATING_TEMPERATURE를
+# 각각 아래 design attribute에 보존합니다. 확인할 수 없거나 다르면 중단하여
+# 다른 BEOL/온도의 parasitic으로 그럴듯한 결과가 생성되는 것을 막습니다.
+proc auto_scaling::verify_restored_parasitics {cfg} {
+    set requested_raw [need $cfg target_beol]
+    set requested [canonical_beol $requested_raw]
+    if {$requested eq ""} {
+        error "TARGET_BEOL은 rcmax, cmax, rcmin 중 하나여야 합니다: $requested_raw"
+    }
+
+    set design [current_design]
+    if {[catch {set corner_name [get_attribute $design parasitics_corner_name]} reason] ||
+        [string trim $corner_name] eq ""} {
+        error "복원된 parasitic의 BEOL을 확인할 수 없습니다. SPEF/GPD의 // CORNER_NAME이 필요합니다. TARGET_BEOL=$requested"
+    }
+    set actual [canonical_beol $corner_name]
+    if {$actual eq ""} {
+        error "복원된 parasitic CORNER_NAME을 rcmax/cmax/rcmin으로 식별할 수 없습니다: '$corner_name'"
+    }
+    if {$actual ne $requested} {
+        error "BEOL 불일치: TARGET_BEOL=$requested, restore session parasitic=$corner_name ($actual). 목표 BEOL scenario/session을 활성화한 뒤 다시 실행하세요."
+    }
+
+    if {[catch {
+        set parasitic_t [number [get_attribute $design parasitics_operating_temperature]]
+    } reason]} {
+        error "복원된 parasitic 온도를 확인할 수 없습니다. SPEF/GPD의 // OPERATING_TEMPERATURE가 필요합니다: $reason"
+    }
+    set target_t [number [need $cfg target_t]]
+    if {![same $parasitic_t $target_t]} {
+        error "Parasitic 온도 불일치: TARGET_TEMPERATURE=$target_t C, restore session parasitic=$parasitic_t C. 목표 온도 scenario/session을 활성화한 뒤 다시 실행하세요."
+    }
+
+    puts "TARGET BEOL: $requested"
+    puts "RESTORED PARASITIC: CORNER_NAME='$corner_name', TEMPERATURE=$parasitic_t C"
+    return [dict create requested_beol $requested corner_name $corner_name \
+        temperature $parasitic_t]
 }
 
 # Exact target-temperature extraction only: never use a nearest-temperature SPEF.
@@ -381,6 +438,10 @@ proc auto_scaling::plan {cfg} {
     set process [string toupper [need $cfg target_process]]
     set tv [number [need $cfg target_v]]
     set tt [number [need $cfg target_t]]
+    set beol [canonical_beol [need $cfg target_beol]]
+    if {$beol eq ""} {
+        error "TARGET_BEOL은 rcmax, cmax, rcmin 중 하나여야 합니다."
+    }
     set mode [string toupper [need $cfg mode]]
     if {[lsearch -exact [list V T VT] $mode] < 0} {
         error "SCALING_AXIS must be V, T, or VT"
@@ -463,6 +524,7 @@ proc auto_scaling::plan {cfg} {
     dict set result process $process
     dict set result v $tv
     dict set result t $tt
+    dict set result beol $beol
     dict set result mode $mode
     dict set result family $chosen_families
     dict set result groups $groups
@@ -473,7 +535,7 @@ proc auto_scaling::plan {cfg} {
     dict set result shadows [dict get $cat shadows]
     if {$fixed ne ""} { dict set result fixed $fixed }
 
-    puts "TARGET: $process  $tv V  $tt C; mode=$mode; families=[llength $chosen_families]"
+    puts "TARGET: $process  $tv V  $tt C  $beol; mode=$mode; families=[llength $chosen_families]"
     foreach group $groups {
         puts "SCALING LIBRARY SET: [dict get $group family] (mode=[dict get $group mode])"
         if {![llength [dict get $group excluded]]} {
@@ -580,17 +642,38 @@ proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
                 append text "\nFIXED_PATH_STATUS: report_error $problem"
             } else { set count [regexp -all -line {^\s*Startpoint:} $text] }
         }
-        if {$count == 1} { incr measured } else { lappend missing $idx }
+        if {$count == 1} {
+            incr measured
+        } else {
+            set status "no_timing_path"
+            if {[regexp -line {^FIXED_PATH_STATUS:[[:space:]]*(.*)$} $text -> detail]} {
+                set status $detail
+            }
+            lappend missing [dict create idx $idx key $key status $status]
+        }
         redirect -append $out_file {
             puts "### FIXED_PATH idx=$idx key=$key"
             puts $text
             puts ""
         }
     }
-    puts "FIXED PATHS RESULT: requested=$idx measured=$measured missing=[llength $missing]"
-    if {[llength $missing]} {
-        error "Incomplete fixed-path report: [llength $missing] paths failed; idx=$missing. Inspect $out_file; no replacement paths were selected."
+    set missing_file ${out_file}.missing
+    set fp [open $missing_file w]
+    puts $fp "requested=$idx measured=$measured missing=[llength $missing]"
+    foreach item $missing {
+        puts $fp "idx=[dict get $item idx] key=[dict get $item key] status=[dict get $item status]"
     }
+    close $fp
+
+    puts "FIXED PATHS RESULT: requested=$idx measured=$measured missing=[llength $missing]"
+    if {$measured == 0} {
+        error "No fixed path was measured successfully. Inspect $out_file and $missing_file"
+    }
+    if {[llength $missing]} {
+        puts "WARNING: [llength $missing] known/invalid fixed path(s) were skipped. Details: $missing_file"
+    }
+    return [dict create requested $idx measured $measured \
+        missing [llength $missing] missing_file $missing_file]
 }
 
 proc auto_scaling::report_has_corner {text rail voltage temperature} {
@@ -636,17 +719,21 @@ proc auto_scaling::run_after_restore {cfg} {
     }
 
     # 복원 세션의 SPEF를 그대로 사용하므로 파일 기반 SPEF 선택은 수행하지 않습니다.
+    # 대신 SPEF/GPD 헤더에서 복원된 BEOL과 온도를 읽어 목표와 정확히
+    # 일치하는지 확인합니다. V/T/VT는 Liberty scaling 축입니다.
     set restored_cfg $cfg
     if {[dict exists $restored_cfg spef_template]} { dict unset restored_cfg spef_template }
     if {[dict exists $restored_cfg spef]} { dict unset restored_cfg spef }
+    set parasitics [verify_restored_parasitics $restored_cfg]
     set plan [plan $restored_cfg]
+    dict set plan restored_parasitics $parasitics
     set fixed [dict get $plan fixed]
     set dt [option $cfg delay_type max]
     if {$dt ni {max min}} { error "delay_type must be max or min" }
 
     set original_out [file normalize [dict get $cfg out_rpt]]
     set out [file join [file dirname $original_out] "restored_[file tail $original_out]"]
-    foreach suffix {"" .selection.tcl .libgroups.before .libgroups .dcalc} {
+    foreach suffix {"" .missing .selection.tcl .libgroups.before .libgroups .dcalc} {
         if {[file exists ${out}${suffix}]} {
             error "Output already exists: ${out}${suffix}. 기존 결과를 보존하기 위해 덮어쓰지 않습니다."
         }
@@ -764,7 +851,14 @@ proc auto_scaling::run_after_restore {cfg} {
     puts $fp [list set scaling_selection $record]
     close $fp
 
-    report_fixed_paths $out [dict get $fixed paths] $dt [option $cfg pba_mode ""]
+    set fp [open $out w]
+    puts $fp "### SCALING TARGET process=[dict get $plan process] voltage=[dict get $plan v] temperature=[dict get $plan t] beol=[dict get $plan beol] axis=[dict get $plan mode]"
+    puts $fp "### RESTORED PARASITIC corner_name=[dict get $parasitics corner_name] temperature=[dict get $parasitics temperature]"
+    puts $fp ""
+    close $fp
+
+    set fixed_result [report_fixed_paths $out [dict get $fixed paths] \
+        $dt [option $cfg pba_mode ""]]
     if {![file exists $out] || [file size $out] == 0} {
         error "Fixed-path timing report가 생성되지 않았습니다: $out"
     }
@@ -796,6 +890,7 @@ proc auto_scaling::run_after_restore {cfg} {
     }
 
     puts "DONE: restore-session scaling report = $out"
+    puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
     puts "VERIFY: scaling library evidence = ${out}.dcalc"
     return $out
 }
@@ -804,7 +899,7 @@ proc auto_scaling::run_after_restore {cfg} {
 
 proc auto_scaling::build_restore_config {} {
     foreach name {
-        TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE SCALING_AXIS
+        TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
         ANALYSIS FIXED_PATH_FILE RESULT_FOLDER POWER_NET GROUND_NET
     } {
         if {![info exists ::$name]} { error "USER SETTINGS에 $name 항목이 없습니다." }
@@ -821,12 +916,17 @@ proc auto_scaling::build_restore_config {} {
     set temperature [number $::TARGET_TEMPERATURE]
     set vtag [string map {. p - m} [format %.12g $voltage]]
     set ttag [string map {. p - m} [format %.12g $temperature]]
-    set filename "scaled_[string toupper $::TARGET_PROCESS]_${vtag}V_${ttag}C_[string toupper $::SCALING_AXIS]_${analysis}.rpt"
+    set beol [canonical_beol $::TARGET_BEOL]
+    if {$beol eq ""} {
+        error "TARGET_BEOL은 rcmax, cmax, rcmin 중 하나여야 합니다."
+    }
+    set filename "scaled_[string toupper $::TARGET_PROCESS]_${vtag}V_${ttag}C_${beol}_[string toupper $::SCALING_AXIS]_${analysis}.rpt"
 
     return [dict create \
         target_process $::TARGET_PROCESS \
         target_v $voltage \
         target_t $temperature \
+        target_beol $beol \
         mode $::SCALING_AXIS \
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
