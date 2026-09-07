@@ -148,11 +148,57 @@ def load_project(fp: str) -> dict:
     env_mode = os.environ.get("SI_MODE")
     if env_mode:
         p["mode"] = env_mode
+    _env_level_overrides(p)
     root = os.environ.get("SI_ROOT") or p.get("root") or "auto"
     if str(root) == "auto":
         root = os.path.dirname(REPO_ROOT)
     p["root"] = os.path.abspath(os.path.expanduser(str(root)))
     return p
+
+
+def _env_level_overrides(p: dict) -> None:
+    """``SI_LEVEL_VALUES`` / ``SI_LEVEL_COORDS``: set the level axis for one run
+    without touching config.yaml.
+
+    The level coordinates are the thing most worth sweeping right now, and
+    sweeping them by editing config.yaml is how an experiment gets lost: the
+    file is tracked, every change here touches it, and a `git pull` that
+    conflicts takes the edit with it. That happened -- a hand-set level_values
+    that had moved the hidden corners from 22 to 12 ps was gone after a pull,
+    and the run reported the declared numbers again with nothing to say why.
+
+        env SI_LEVEL_VALUES="cmax=-1,rcmin=-0.345,rcmax=1" bash scripts/run.sh base
+        env SI_LEVEL_COORDS=measured bash scripts/run.sh base
+
+    csh has no `VAR=x cmd` prefix, hence `env`. Names must match the ones in
+    corners.level_values; an unknown name is an error rather than a silent
+    no-op, since a typo here would otherwise read as "the setting did nothing".
+    """
+    raw = os.environ.get("SI_LEVEL_VALUES")
+    if raw:
+        known = set((p.get("corners") or {}).get("level_values") or {})
+        out = {}
+        for part in raw.split(","):
+            if not part.strip():
+                continue
+            assert "=" in part, (
+                f"SI_LEVEL_VALUES: expected name=value pairs separated by "
+                f"commas, got {part!r}")
+            name, val = part.split("=", 1)
+            name = name.strip()
+            assert not known or name in known, (
+                f"SI_LEVEL_VALUES: unknown level {name!r}; "
+                f"corners.level_values declares {sorted(known)}")
+            out[name] = float(val)
+        assert out, "SI_LEVEL_VALUES is set but parsed to nothing"
+        p.setdefault("corners", {})["level_values"] = out
+        print(f"[ENV] corners.level_values <- SI_LEVEL_VALUES "
+              + ", ".join(f"{k}={v:+g}" for k, v in
+                          sorted(out.items(), key=lambda kv: kv[1])), flush=True)
+    lc = os.environ.get("SI_LEVEL_COORDS")
+    if lc:
+        p.setdefault("base", {})["level_coords"] = lc
+        print(f"[ENV] base.level_coords <- SI_LEVEL_COORDS {lc}", flush=True)
 
 
 def _merge(base, over):
