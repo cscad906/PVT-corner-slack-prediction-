@@ -611,6 +611,78 @@ def _hidden_err(y, sp, loo):
     return float(np.mean(errs)) if errs else None
 
 
+def select_weighting(y, sp, phi, coords, cfg, verbose=True):
+    """Pick base.weighting among plain / local / adaptive, by the same
+    criterion select_basis uses. Enabled by ``base.weighting: auto``.
+
+    The weighting is part of the OLS base, so leaving it hand-set while the
+    basis is chosen from data is half a decision. Its numbers were already
+    being computed for the comparison print in ``run.sh base`` -- they were
+    just thrown away.
+
+    Scored the way the fit will actually run: through ``fit_field`` on the cfg,
+    so the small-grid adaptive downgrade in ``loo._effective_mode`` applies to
+    the candidate exactly as it will to the winner, and `local` is skipped when
+    no bandwidth is declared.
+
+    ``select_on: seen_loo`` is honoured but is known to rank this particular
+    choice BACKWARDS -- measured on the 14nm drop, seen-LOO crowned `local`,
+    which was 60% worse at the hidden corners. That finding is why weighting
+    was never selected automatically before. It is safe under `hidden` and
+    unsafe under `seen_loo`, so under `seen_loo` this leaves the declared value
+    alone rather than acting on a criterion already known to be wrong here.
+    """
+    import copy
+
+    import numpy as np
+
+    from si_model.training.loo import fit_field
+
+    declared = str(cfg["base"].get("weighting", "plain"))
+    if declared != "auto":
+        return cfg
+    on_hidden = str(cfg["base"].get("select_on", "hidden")) == "hidden"
+    if not on_hidden:
+        if verbose and _base_loud():
+            print("[WEIGHT] weighting: auto needs select_on: hidden -- seen-LOO "
+                  "was measured ranking the weightings backwards. Using plain.",
+                  flush=True)
+        cfg = copy.deepcopy(cfg)
+        cfg["base"]["weighting"] = "plain"
+        return cfg
+
+    S = sp.seen_idx
+    rows = []
+    for mode in ("plain", "local", "adaptive"):
+        if mode == "local" and not cfg["base"].get("bandwidth"):
+            continue
+        c = copy.deepcopy(cfg)
+        c["base"]["weighting"] = mode
+        try:
+            loo, _ = fit_field(y, phi, sp, coords, c)
+        except (AssertionError, ValueError, np.linalg.LinAlgError):
+            continue
+        h = _hidden_err(y, sp, loo)
+        if h is None:
+            continue
+        rows.append((h, mode,
+                     float(np.nanmean(np.abs(loo[:, S] - y[:, S])))))
+    if not rows:
+        cfg = copy.deepcopy(cfg)
+        cfg["base"]["weighting"] = "plain"
+        return cfg
+    rows.sort()
+    best = rows[0][1]
+    if verbose and _base_loud():
+        for h, mode, se in rows:
+            mark = "  <- chosen" if mode == best else ""
+            print(f"[WEIGHT] {mode:9s} hidden {h * 1000:8.2f} ps   "
+                  f"seen-LOO {se * 1000:8.2f}{mark}", flush=True)
+    cfg = copy.deepcopy(cfg)
+    cfg["base"]["weighting"] = best
+    return cfg
+
+
 def select_basis(y, sp, coords, cfg, verbose=True):
     """Pick the polynomial basis by SEEN-corner leave-one-out error.
 
@@ -965,6 +1037,10 @@ def expand(p: dict) -> "list[dict]":
                 base["adaptive_grid"] = bt["adaptive_grid"]
             if bt.get("weighting") == "local":
                 assert bt.get("bandwidth"), "base.weighting: local requires base.bandwidth"
+            assert str(bt.get("weighting", "plain")) in (
+                "plain", "local", "adaptive", "auto"), (
+                f"base.weighting must be plain / local / adaptive / auto, "
+                f"got {bt.get('weighting')!r}")
             # Pass bandwidth regardless of weighting -- the comparison table in
             # `run.sh base` can only score `local` if a bandwidth exists, and
             # passing it only when weighting IS local would drop local from the

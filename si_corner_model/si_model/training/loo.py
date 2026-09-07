@@ -245,6 +245,10 @@ def build_design(cfg: dict, split: Split, y=None):
     if not _base_quiet():
         print(f"[BASIS] {len(exps)} terms: {names}", flush=True)
     phi = design_matrix(coords, exps)
+    if y is not None and str(cfg["base"].get("weighting", "plain")) == "auto":
+        from si_model.run import select_weighting
+        cfg = select_weighting(y, split, phi, coords, cfg)
+        caller_cfg["base"]["weighting"] = cfg["base"]["weighting"]
     return phi, coords, exps, names
 
 

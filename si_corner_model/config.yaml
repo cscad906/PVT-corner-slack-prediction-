@@ -513,7 +513,21 @@ base:
                                     # deciding. Left at 1 here because that
                                     # choice belongs to the drop, not the code.
 
-  weighting: plain                  # plain    = one global OLS (recommended)
+  weighting: auto                   # auto     = pick the best of the three by the
+                                    #            base.select_on criterion. The
+                                    #            weighting is part of the OLS base,
+                                    #            so hand-setting it while the basis
+                                    #            is chosen from data is half a
+                                    #            decision -- and these numbers were
+                                    #            already being computed for the
+                                    #            comparison print and thrown away.
+                                    #            Needs select_on: hidden; under
+                                    #            seen_loo it falls back to plain,
+                                    #            because seen-LOO was measured
+                                    #            ranking THIS choice backwards (it
+                                    #            crowned local, 60% worse at the
+                                    #            hidden corners).
+                                    # plain    = one global OLS
                                     # local    = fixed-bandwidth weighted OLS
                                     #            (needs bandwidth)
                                     # adaptive = per-corner bandwidth, auto-selected
