@@ -246,13 +246,14 @@ proc auto_scaling::families_matching_library_names {rows families used_names} {
         used_library_names [lsort [dict keys $used_names]]]
 }
 
-# fixed path의 launch/capture pin이 실제로 참조하는 library 이름을 얻습니다.
-# 전체 PDK가 load되어 있어도 이 경로와 무관한 memory/IO family는 제외됩니다.
+# fixed path의 launch/capture/through pin이 실제로 참조하는 library 이름을 얻습니다.
+# 전체 PDK가 load되어 있어도 이 경로와 무관한 memory/IO library set은 제외됩니다.
 proc auto_scaling::family_used_by_fixed_paths {rows families fixed} {
     set pin_names {}
     foreach item [dict get $fixed paths] {
         lassign $item key from to through edges
         lappend pin_names $from $to
+        foreach pin $through { lappend pin_names $pin }
     }
     set pin_names [lsort -unique $pin_names]
     set used_names [dict create]
@@ -290,66 +291,43 @@ proc auto_scaling::bracket {values target axis} {
     return [list $lower $upper]
 }
 
-proc auto_scaling::plan {cfg} {
-    set process [string toupper [need $cfg target_process]]
-    set tv [number [need $cfg target_v]]
-    set tt [number [need $cfg target_t]]
-    set mode [string toupper [need $cfg mode]]
-    if {[lsearch -exact [list V T VT] $mode] < 0} {
-        error "SCALING_AXIS must be V, T, or VT"
-    }
-
-    set fixed ""
-    if {[option $cfg fixed_tcl ""] ne ""} {
-        set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
-    }
-
-    set cat [catalog $cfg]
-    set rows [dict get $cat rows]
-    set families {}
+# 이 library set이 요청 축에서 실제로 변하는지 확인합니다. 한 점뿐인
+# macro/IO library는 restore 상태 그대로 사용하고 scaling group에서 제외합니다.
+proc auto_scaling::family_scaling_mode {rows process family tv tt requested_mode} {
+    set vs_at_t {}
+    set ts_at_v {}
     foreach row $rows {
-        if {[dict get $row process] eq $process} {
-            lappend families [dict get $row family]
+        if {[dict get $row process] ne $process ||
+            [dict get $row family] ne $family} {
+            continue
+        }
+        if {[same [dict get $row t] $tt]} { lappend vs_at_t [dict get $row v] }
+        if {[same [dict get $row v] $tv]} { lappend ts_at_v [dict get $row t] }
+    }
+    set nv [llength [lsort -real -unique $vs_at_t]]
+    set nt [llength [lsort -real -unique $ts_at_v]]
+    switch -- $requested_mode {
+        V  { if {$nv <= 1} { return STATIC }; return V }
+        T  { if {$nt <= 1} { return STATIC }; return T }
+        VT {
+            if {$nv <= 1 && $nt <= 1} { return STATIC }
+            if {$nv > 1 && $nt <= 1} { return V }
+            if {$nv <= 1 && $nt > 1} { return T }
+            return VT
         }
     }
-    set families [lsort -unique $families]
-    set family [option $cfg family ""]
-    if {$family eq ""} {
-        if {[llength $families] == 1} {
-            set family [lindex $families 0]
-        } else {
-            set fixed_matches {}
-            set fixed_names {}
-            if {$fixed ne ""} {
-                set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
-                set fixed_matches [dict get $fixed_result family_matches]
-                set fixed_names [dict get $fixed_result used_library_names]
-            }
-            set used_matches {}
-            set used_names {}
-            # fixed path만으로 하나를 고른 경우 전체 design hierarchy는 훑지 않습니다.
-            if {[llength $fixed_matches] != 1} {
-                set used_result [family_used_by_design $rows $families]
-                set used_matches [dict get $used_result family_matches]
-                set used_names [dict get $used_result used_library_names]
-            }
-            if {[llength $fixed_matches] == 1} {
-                set family [lindex $fixed_matches 0]
-                puts "AUTO-SELECTED LIBRARY FAMILY USED BY FIXED PATHS: $family"
-            } elseif {[llength $used_matches] == 1} {
-                set family [lindex $used_matches 0]
-                puts "AUTO-SELECTED LIBRARY FAMILY USED BY DESIGN: $family"
-            } else {
-                error "Library family selection is ambiguous. PVT candidates: $families; fixed-path matches: $fixed_matches; fixed-path library names: $fixed_names; design-used matches: $used_matches; design-used library names: $used_names"
-            }
-        }
-    }
+    error "Unknown scaling mode: $requested_mode"
+}
+
+proc auto_scaling::plan_one_family {rows process family tv tt mode} {
     set pool {}
     set excluded {}
     foreach row $rows {
-        if {[dict get $row process] ne $process || [dict get $row family] ne $family} {
+        if {[dict get $row process] ne $process ||
+            [dict get $row family] ne $family} {
             continue
-        } elseif {[same [dict get $row v] $tv] && [same [dict get $row t] $tt]} {
+        }
+        if {[same [dict get $row v] $tv] && [same [dict get $row t] $tt]} {
             lappend excluded $row
         } else {
             lappend pool $row
@@ -390,10 +368,95 @@ proc auto_scaling::plan {cfg} {
                 }
             }
             if {[llength $matches] != 1} {
-                error "Need exactly one library at $process/$v V/$t C; found [llength $matches]. Missing rectangle corner or duplicate revisions."
+                error "library set '$family' needs exactly one library at $process/$v V/$t C; found [llength $matches]. Missing corner or duplicate revisions."
             }
             lappend selected [lindex $matches 0]
         }
+    }
+
+    return [dict create family $family mode $mode selected $selected excluded $excluded]
+}
+
+proc auto_scaling::plan {cfg} {
+    set process [string toupper [need $cfg target_process]]
+    set tv [number [need $cfg target_v]]
+    set tt [number [need $cfg target_t]]
+    set mode [string toupper [need $cfg mode]]
+    if {[lsearch -exact [list V T VT] $mode] < 0} {
+        error "SCALING_AXIS must be V, T, or VT"
+    }
+
+    set fixed ""
+    if {[option $cfg fixed_tcl ""] ne ""} {
+        set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
+    }
+
+    set cat [catalog $cfg]
+    set rows [dict get $cat rows]
+    set families {}
+    foreach row $rows {
+        if {[dict get $row process] eq $process} {
+            lappend families [dict get $row family]
+        }
+    }
+    set families [lsort -unique $families]
+    if {![llength $families]} {
+        error "No loaded PVT library set matches process $process"
+    }
+
+    set requested_family [option $cfg family ""]
+    if {$requested_family ne ""} {
+        if {[lsearch -exact $families $requested_family] < 0} {
+            error "Requested library set is not available: $requested_family; candidates: $families"
+        }
+        set chosen_families [list $requested_family]
+    } elseif {[llength $families] == 1} {
+        set chosen_families $families
+    } else {
+        set fixed_matches {}
+        set fixed_names {}
+        if {$fixed ne ""} {
+            set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
+            set fixed_matches [dict get $fixed_result family_matches]
+            set fixed_names [dict get $fixed_result used_library_names]
+        }
+        if {[llength $fixed_matches]} {
+            set chosen_families $fixed_matches
+            puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY FIXED PATHS: $chosen_families"
+        } else {
+            set used_result [family_used_by_design $rows $families]
+            set used_matches [dict get $used_result family_matches]
+            set used_names [dict get $used_result used_library_names]
+            if {![llength $used_matches]} {
+                error "No PVT library set matches the fixed paths or design. PVT candidates: $families; fixed-path library names: $fixed_names; design-used library names: $used_names"
+            }
+            set chosen_families $used_matches
+            puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY DESIGN: $chosen_families"
+        }
+    }
+
+    set groups {}
+    set static_sets {}
+    set selected {}
+    set excluded {}
+    foreach family $chosen_families {
+        set family_mode [family_scaling_mode $rows $process $family $tv $tt $mode]
+        if {$family_mode eq "STATIC"} {
+            lappend static_sets $family
+            puts "STATIC LIBRARY SET (not scaled): $family"
+            continue
+        }
+        if {[catch {
+            set group [plan_one_family $rows $process $family $tv $tt $family_mode]
+        } reason]} {
+            error "Cannot build scaling inputs for required library set '$family': $reason"
+        }
+        lappend groups $group
+        foreach row [dict get $group selected] { lappend selected $row }
+        foreach row [dict get $group excluded] { lappend excluded $row }
+    }
+    if {![llength $groups]} {
+        error "The fixed paths use no library set with a usable interpolation grid. Static sets: $static_sets"
     }
 
     set result [dict create]
@@ -401,22 +464,27 @@ proc auto_scaling::plan {cfg} {
     dict set result v $tv
     dict set result t $tt
     dict set result mode $mode
-    dict set result family $family
+    dict set result family $chosen_families
+    dict set result groups $groups
+    dict set result static_sets $static_sets
     dict set result selected $selected
     dict set result excluded $excluded
     dict set result catalog $rows
     dict set result shadows [dict get $cat shadows]
     if {$fixed ne ""} { dict set result fixed $fixed }
 
-    puts "TARGET: $process  $tv V  $tt C; mode=$mode; family=$family"
-    foreach row $excluded {
-        puts "EXCLUDED TARGET: [dict get $row file]"
-    }
-    if {![llength $excluded]} {
-        puts "TARGET LIBRARY: absent"
-    }
-    foreach row $selected {
-        puts "SCALING INPUT: [dict get $row file]"
+    puts "TARGET: $process  $tv V  $tt C; mode=$mode; families=[llength $chosen_families]"
+    foreach group $groups {
+        puts "SCALING LIBRARY SET: [dict get $group family] (mode=[dict get $group mode])"
+        if {![llength [dict get $group excluded]]} {
+            puts "  TARGET LIBRARY: absent"
+        }
+        foreach row [dict get $group excluded] {
+            puts "  EXCLUDED TARGET: [dict get $row file]"
+        }
+        foreach row [dict get $group selected] {
+            puts "  SCALING INPUT: [dict get $row file]"
+        }
     }
     if {[dict exists $result fixed]} {
         puts "FIXED PATHS: [dict get $result fixed count] from [dict get $result fixed file]"
@@ -584,8 +652,20 @@ proc auto_scaling::run_after_restore {cfg} {
     set gnd [option $cfg ground_name VSS]
     set target_v [dict get $plan v]
     set target_t [dict get $plan t]
-    set dbs {}
-    foreach row [dict get $plan selected] { lappend dbs [dict get $row file] }
+    set scaling_sets {}
+    set seen_scaling_db [dict create]
+    foreach group [dict get $plan groups] {
+        set dbs {}
+        foreach row [dict get $group selected] {
+            set db [dict get $row file]
+            if {[dict exists $seen_scaling_db $db]} {
+                error "The same DB was selected for multiple scaling library sets: $db"
+            }
+            dict set seen_scaling_db $db 1
+            lappend dbs $db
+        }
+        lappend scaling_sets [dict create name [dict get $group family] dbs $dbs]
+    }
 
     redirect -variable groups_before {
         report_lib_groups -scaling -show {voltage temperature process}
@@ -601,9 +681,14 @@ proc auto_scaling::run_after_restore {cfg} {
         }
         puts "RESTORE MODE: 기존 scaling group을 재사용합니다."
     } else {
-        puts "RESTORE MODE: 목표 코너를 제외한 scaling group을 생성합니다."
-        if {[catch {define_scaling_lib_group $dbs} problem]} {
-            error "Scaling group 생성 실패: $problem. 복원 세션의 link library가 선택된 입력 DB 중 하나인지 확인하세요."
+        puts "RESTORE MODE: 목표 코너를 제외한 [llength $scaling_sets]개 scaling group을 생성합니다."
+        foreach scaling_set $scaling_sets {
+            set set_name [dict get $scaling_set name]
+            set dbs [dict get $scaling_set dbs]
+            puts "DEFINE SCALING LIBRARY SET: $set_name"
+            if {[catch {define_scaling_lib_group $dbs} problem]} {
+                error "Scaling group 생성 실패($set_name): $problem. 이 library set의 DB들이 같은 cell/pin 구성을 갖는지 확인하세요."
+            }
         }
     }
 
