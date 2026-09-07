@@ -284,11 +284,20 @@ round2/<코너>/xtalk/            <- 받은 4개
 ## 우리가 돌리는 것 — 네 줄
 
 ```bash
+sh run_all.sh round2 deliver setup        # 아래 세 줄을 한 번에
+```
+
+나눠서 치려면:
+
+```bash
 python3 8_check_xtalk.py --root round2                          # 받은 것 검사
-python3 4_all_corners.py --root round2 --phase 1   # 2a 2b 2c  (annotation, SPEF 불필요)
-python3 4_all_corners.py --root round2 --phase 2   # 5a 5b 5c  (crosstalk)
+python3 4_all_corners.py --root round2 --phase 3   # 2a 2b 2c 5a 5b 5c 를 한 번에
 python3 6_collect.py     --root round2 --out deliver --mode setup
 ```
+
+`--phase 3` 은 묶음 1 과 2 를 **묶음마다 따로** 돈다. 그래서 표가 없어
+annotation 이 막힌 코너에서도 crosstalk 은 그대로 나온다. 예전처럼
+`--phase 1` / `--phase 2` 로 두 번 쳐도 결과는 같다.
 
 hold 는 **작업 폴더를 따로 두고** 같은 네 줄에 `--mode hold` 를 붙인다
 (`4_all_corners.py` 와 `6_collect.py` 에). `8_check_xtalk.py` 는 setup/hold 를

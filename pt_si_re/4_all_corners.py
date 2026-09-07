@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """4 - round2 아래 코너 폴더 전부에 같은 단계를 돌린다.
 
+    python3 4_all_corners.py --root setup --phase 3          # 묶음 1+2 한 번에
     python3 4_all_corners.py --root setup                    # 묶음 1 (annotation)
     python3 4_all_corners.py --root setup --phase 2          # 묶음 2 (crosstalk)
-    python3 4_all_corners.py --root hold  --phase 2 --mode hold
+    python3 4_all_corners.py --root hold  --phase 3 --mode hold
     python3 4_all_corners.py --root setup --only 2b          # 한 단계만
     python3 4_all_corners.py --root setup --skip-done        # 이어서
 
@@ -190,6 +191,11 @@ PHASES = {
     ],
 }
 
+# 묶음 3 = 1 과 2 를 한 번에. 목록 자체는 이어 붙인 것이지만, 도는 방식은
+# **묶음마다 따로** 돈다(run_corner_groups). 앞 묶음이 실패해도 뒤 묶음이
+# 돌아야 하기 때문이다 -- annotation 과 crosstalk 은 서로 독립이다.
+PHASES["3"] = PHASES["1"] + PHASES["2"]
+
 # PT 를 위한 wrapper 는 만들지 않는다.
 # PT 는 묶음 사이가 아니라 **둘 다보다 앞**에 있다. 담당자분이 fixed_paths.tcl 과
 # xtalk_all.tcl 을 돌려 주시고, 우리는 그 결과를 받아 1과 2를 돈다. 우리 쪽에서
@@ -207,6 +213,7 @@ NEXT_HINT = {
           "    <코너>.path_context_si_compact.by_path.rpt",
           ""),
 }
+NEXT_HINT["3"] = NEXT_HINT["2"]      # 묶음 3 도 여기가 끝이다
 
 
 def corner_dirs(root):
@@ -246,6 +253,28 @@ def show(line, sink=None):
         print("      " + line)
     else:
         sink.append("      " + line)
+
+
+def run_corner_groups(name, d, groups, args, spef, cmap, sink, progress=None):
+    """한 코너를 **묶음마다 따로** 돈다. -> (코드들, 걸린 것들, 걸린 시간)
+
+    왜 run_corner 를 그냥 한 번 부르지 않는가
+        run_corner 는 한 단계가 실패하면 그 코너의 **남은 단계를 건너뛴다.**
+        한 묶음 안에서는 맞다 -- 2b 가 실패하면 2c 는 붙일 값이 없다.
+        그런데 그 '남은 단계' 가 묶음을 넘어가면 안 된다. annotation 과
+        crosstalk 은 서로 독립이라, 표가 없어 2b 가 죽어도 crosstalk 은
+        나와야 한다. 그래서 묶음마다 따로 부른다.
+
+    묶음이 하나면(--phase 1 또는 2) run_corner 를 한 번 부르는 것과
+    **완전히 같다.** 기존 동작은 한 줄도 안 바뀐다.
+    """
+    codes, trouble = [], []
+    t0 = time.time()
+    for steps in groups:
+        c, tr, _ = run_corner(name, d, steps, args, spef, cmap, sink, progress)
+        codes += c
+        trouble += tr
+    return codes, trouble, time.time() - t0
 
 
 def run_step(script, args, quiet, sink=None):
@@ -347,9 +376,9 @@ def run_corner(name, d, steps, args, spef, cmap, sink, progress=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="round2 아래 코너 폴더 전부에 한 묶음을 돌린다. "
-                "--phase 1 = 2a/2b/2c(annotation), --phase 2 = 5a/5b/5c(crosstalk). "
-                "한 번에 다 돌지 않으므로 두 번 친다.")
+        description="round2 아래 코너 폴더 전부를 돌린다. "
+                "--phase 1 = 2a/2b/2c(annotation), --phase 2 = 5a/5b/5c(crosstalk), "
+                "--phase 3 = 둘 다 한 번에.")
     ap.add_argument("--root", required=True,
                     help="코너 폴더들이 **들어 있는 상위 폴더** (예: round2). 코너 폴더 하나가 아니다")
     ap.add_argument("--spef-root", "--spef-dir", default=None,
@@ -363,10 +392,11 @@ def main():
                     help="모든 코너가 함께 쓸 Cpin 표(2열 이상). 코너 폴더에 "
                          "%s 가 있으면 그쪽이 우선한다. 안 주면 " % CPIN_MAP_NAME +
                          "각 코너의 pin_attr.txt 를 쓴다")
-    ap.add_argument("--phase", default="1", choices=["1", "2"],
-                    help="1=2a 2b 2c (annotation, 기본), 2=5a 5b 5c (crosstalk). "
-                         "**한 번에 다 돌지 않는다 -- 두 번 쳐야 한다.** "
-                         "둘은 서로 독립이라 순서는 상관없다")
+    ap.add_argument("--phase", default="1", choices=["1", "2", "3"],
+                    help="1=2a 2b 2c (annotation, 기본), 2=5a 5b 5c (crosstalk), "
+                         "**3=둘 다 한 번에**. 1과 2는 서로 독립이라 순서는 "
+                         "상관없고, 3으로 돌려도 앞 묶음이 실패한 코너에서 뒤 "
+                         "묶음은 그대로 돈다")
     ap.add_argument("--only", default=None,
                     help="그 묶음 안에서 일부만. 쉼표로 (예: 2a,2b)")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
@@ -383,7 +413,8 @@ def main():
     args = ap.parse_args()
 
     print("=" * 68)
-    print("4 - 코너 폴더 전부 돌리기  (묶음 %s)" % args.phase)
+    print("4 - 코너 폴더 전부 돌리기  (묶음 %s)"
+          % ("1+2 한 번에" if args.phase == "3" else args.phase))
     print("=" * 68)
 
     if not os.path.isdir(args.root):
@@ -414,8 +445,18 @@ def main():
         sys.exit(1)
 
     only = set(s.strip() for s in args.only.split(",")) if args.only else None
-    steps = [s for s in PHASES[args.phase]
-             if only is None or s[1].split("_")[0] in only]
+    def keep(step):
+        return only is None or step[1].split("_")[0] in only
+
+    # 묶음 3 은 1 과 2 를 **따로** 돈다(앞이 실패해도 뒤가 돌게).
+    # 1 이나 2 는 묶음이 하나뿐이라 예전과 완전히 같은 경로다.
+    if args.phase == "3":
+        groups = [[s for s in PHASES["1"] if keep(s)],
+                  [s for s in PHASES["2"] if keep(s)]]
+        groups = [g for g in groups if g]
+    else:
+        groups = [[s for s in PHASES[args.phase] if keep(s)]]
+    steps = [s for g in groups for s in g]      # 표 머리말은 이어 붙인 것
 
     print("  대상 폴더 : %s" % args.root)
     print("  코너      : %d개" % len(corners))
@@ -506,7 +547,7 @@ def main():
             # 하나씩 돌 때는 **모아 두지 않고 그때그때 찍는다.** 모아 두면
             # 코너가 끝날 때까지 화면이 멈춰 있어, 2b 가 몇십 분 도는 동안
             # 살아 있는지조차 알 수 없다. 뒤섞일 걱정은 하나씩 돌 때는 없다.
-            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, None)
+            codes, tr, took = run_corner_groups(name, d, groups, args, spef, cmap, None)
             results.append((name, codes))
             trouble += tr
             print("  -> %s 끝. 걸린 시간 %s" % (name, fmt_dur(took)))
@@ -551,8 +592,9 @@ def main():
                           % (cname, label, took, code))
                     sys.stdout.flush()
 
-            codes, tr, took = run_corner(name, d, steps, args, spef, cmap, sink,
-                                         progress=step_done_line)
+            codes, tr, took = run_corner_groups(name, d, groups, args, spef,
+                                                cmap, sink,
+                                                progress=step_done_line)
             with lock:
                 state["done"] += 1
                 state["running"] -= 1
@@ -584,13 +626,17 @@ def main():
     print("=" * 68)
     print("코너별 결과   (전체 %s 걸림)" % fmt_dur(time.time() - t_start))
     print("-" * 68)
-    head = "  %-24s" % "코너" + "".join("%-14s" % s[0] for s in steps)
+    # 묶음 3 은 6열이라 14 로 두면 108칸이 되어 줄이 접힌다.
+    # 단계 이름도 코드도 11자를 안 넘으므로 12 면 충분하다.
+    cw = 14 if len(steps) <= 3 else 12
+    nw = 24 if len(steps) <= 3 else 20
+    head = ("  %-*s" % (nw, "코너")) + "".join("%-*s" % (cw, s[0]) for s in steps)
     print(head)
     bad = []
     for name, codes in results:
-        row = "  %-24s" % name
+        row = "  %-*s" % (nw, name[:nw - 1])
         for c in codes:
-            row += "%-14s" % c
+            row += "%-*s" % (cw, c)
         print(row)
         if any(c.startswith("E-") or c in ("-", "?") for c in codes):
             bad.append(name)
@@ -634,7 +680,8 @@ def main():
         print("=" * 68)
         sys.exit(0)
 
-    print("  묶음 %s 전부 정상입니다. 다음:" % args.phase)
+    print("  묶음 %s 전부 정상입니다. 다음:"
+          % ("1+2" if args.phase == "3" else args.phase))
     print("")
     fill = {"root": os.path.abspath(args.root), "pkg": HERE,
             "py": sys.executable}
