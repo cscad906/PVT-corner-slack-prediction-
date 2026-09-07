@@ -166,6 +166,15 @@ corners:
   ref_level: cmax                   #   path-selection reference. It MUST be
                                     #   seen (highest voltage x middle level).
 
+  # Takes effect WITHOUT a rebuild: the coordinate is re-derived from the corner
+  # names at every load, so this is a one-line edit plus a seconds-long
+  # `run.sh base`. Worth testing by hand -- on the company drop the MEASURED
+  # order is cmax < rcmin < rcmax (mean slack 1466 / 1485 / ~1524 ps at
+  # PERIC0/m25), not the declared one, so an arrangement like
+  #     {cmax: -1, rcmin: 0, rcmax: 1}     # measured order, even spacing
+  # is a candidate nobody has yet scored against the HIDDEN corners. Automatic
+  # fitting by seen-LOO was tried and rejected (see base.fit_level_values): it
+  # improved the proxy and made the hidden corners worse.
   level_values:                     # BEOL level -> axis coordinate.
     rcmin: -1                       #   Absolute values are meaningless (ref is
     cmax: 0                         #   subtracted); only the SPACING matters.

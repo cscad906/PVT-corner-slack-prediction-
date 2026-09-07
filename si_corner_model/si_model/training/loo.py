@@ -96,6 +96,47 @@ def _hidden_corner_pairs(cfg: dict) -> list:
     return out
 
 
+def relabel_levels(corners, vt: np.ndarray, cfg: dict) -> np.ndarray:
+    """Re-derive the second-axis column from the corner NAMES and the CURRENT
+    ``corners.level_values``, instead of trusting what the cache was built with.
+
+    The level coordinate is baked into ``vt`` by build_dataset, so editing
+    ``level_values`` in config.yaml used to change nothing at all until the
+    dataset was rebuilt -- a knob that silently did not move. The names carry
+    the level (``SSPG_0P5000V_cmax``), so the coordinate is derivable at every
+    load and does not need to be stored.
+
+    This matters because the level coordinates are a hypothesis worth testing
+    by hand. On the company drop the measured order is cmax < rcmin < rcmax,
+    not the declared rcmin < cmax < rcmax, and a reader may reasonably want to
+    try, say, ``{cmax: -1, rcmin: 0, rcmax: 1}`` -- the measured ORDER with even
+    spacing -- and read the hidden error off it. That is a one-line config edit
+    and a seconds-long `run.sh base`, but only if the edit takes effect.
+
+    Corners that do not parse are left exactly as the cache had them, so a
+    voltage x temperature grid (no level names at all) is untouched.
+    """
+    from si_model.parsing.keys import parse_corner
+
+    lv = _level_map(cfg)
+    prefix = str((cfg.get("data") or {}).get("corner_prefix") or "TT")
+    out = np.array(vt, dtype=float, copy=True)
+    changed = []
+    for i, name in enumerate(corners):
+        try:
+            _, a1 = parse_corner(str(name), lv, prefix)
+        except (ValueError, KeyError):
+            continue
+        if abs(float(a1) - float(out[i, 1])) > 1e-9:
+            changed.append(str(name))
+        out[i, 1] = float(a1)
+    if changed:
+        print(f"[LEVELS] level coordinates re-derived from config for "
+              f"{len(changed)} corner(s) (the cache was built with different "
+              f"level_values; no rebuild needed)", flush=True)
+    return out
+
+
 def make_split(corners, vt: np.ndarray, cfg: dict,
                measured: "np.ndarray | None" = None) -> Split:
     """Seen/hidden corner split.
@@ -109,6 +150,7 @@ def make_split(corners, vt: np.ndarray, cfg: dict,
     i.e. a pure-inference ``data.query_corners`` entry with no data behind it)
     is always hidden -- it can never be an input.
     """
+    vt = relabel_levels(corners, vt, cfg)
     sv = cfg["split"].get("seen_voltages")
     hv = set(cfg["split"].get("hidden_voltages") or [])
     h1 = _hidden_axis1_values(cfg)
