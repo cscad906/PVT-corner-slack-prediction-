@@ -1077,6 +1077,7 @@ def stage_base(m: dict) -> None:
         print(f"    [hidden mean] {v.mean():8.3f} {unit}  (worst {v.max():.3f})")
     sv = np.array([err(int(c)) for c in split.seen_idx])
     print(f"    [seen-LOO   ] {sv.mean():8.3f} {unit}  (worst {sv.max():.3f})")
+    _print_seen_fit(y, phi, split, field, unit)
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
@@ -1084,6 +1085,43 @@ def stage_base(m: dict) -> None:
     if hid and field == "slack":
         _print_basis_comparison(y, split, coords, cfg, hid)
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
+
+
+def _print_seen_fit(y, phi, split, field, unit) -> None:
+    """The IN-SAMPLE residual at seen corners, next to the leave-one-out one.
+
+    seen-LOO is not a measure of fit quality. It is fit quality divided by
+    (1 - leverage), and leverage moves when the axis coordinates move, so the
+    two are confounded in a single number. That mattered the moment a change
+    sent seen-LOO from 4 to 20 ps while the hidden corners went 22 -> 12: with
+    only the LOO number there is no way to tell whether the fit got worse or
+    the fit merely started leaning harder on the corners it was fit through.
+
+    This line separates them, and the reading is mechanical:
+
+      seen-fit BETTER, seen-LOO worse  -> the fit improved. seen-LOO rose
+        because leverage rose, and leverage rises when the fit uses its points
+        WELL: a model that relies on each measurement is a model that suffers
+        more when you take one away. Nothing is wrong; the LOO number is
+        measuring a question the deliverable never asks.
+      seen-fit WORSE too              -> the fit really did get worse, and the
+        change should be reconsidered whatever the hidden numbers say.
+    """
+    import numpy as np
+    from si_model.model.base_ols import fit_base
+
+    pred, _ = fit_base(y, phi, split.seen)
+    S = split.seen_idx
+    d = np.abs(pred[:, S] - y[:, S])
+    if field == "slack":
+        per = np.nanmean(d, axis=0) * 1000.0
+    else:
+        per = np.nanmean(d / np.clip(np.abs(y[:, S]), 1e-9, None), axis=0) * 100
+    ps = phi[split.seen]
+    h = np.einsum("ck,kj,cj->c", ps, np.linalg.pinv(ps.T @ ps), ps)
+    print(f"    [seen-fit   ] {per.mean():8.3f} {unit}  (worst {per.max():.3f})"
+          f"   <- no LOO division; mean leverage {h.mean():.3f}, "
+          f"max {h.max():.3f}")
 
 
 def _print_basis_comparison(y, split, coords, cfg, hid) -> None:
