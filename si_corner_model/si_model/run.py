@@ -665,16 +665,20 @@ def select_weighting(y, sp, phi, coords, cfg, verbose=True):
         h = _hidden_err(y, sp, loo)
         if h is None:
             continue
-        rows.append((h, mode,
+        rows.append((h, ("plain", "local", "adaptive").index(mode), mode,
                      float(np.nanmean(np.abs(loo[:, S] - y[:, S])))))
     if not rows:
         cfg = copy.deepcopy(cfg)
         cfg["base"]["weighting"] = "plain"
         return cfg
+    # Ties go to the simpler weighting. Without this a dead heat was broken
+    # alphabetically and crowned `adaptive` on a grid where the small-grid rule
+    # immediately downgrades it back to plain -- identical numbers, and a
+    # [WEIGHT] line contradicting the [BASE] line right above it.
     rows.sort()
-    best = rows[0][1]
+    best = rows[0][2]
     if verbose and _base_loud():
-        for h, mode, se in rows:
+        for h, _, mode, se in rows:
             mark = "  <- chosen" if mode == best else ""
             print(f"[WEIGHT] {mode:9s} hidden {h * 1000:8.2f} ps   "
                   f"seen-LOO {se * 1000:8.2f}{mark}", flush=True)

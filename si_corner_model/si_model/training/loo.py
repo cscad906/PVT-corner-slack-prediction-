@@ -130,10 +130,18 @@ def relabel_levels(corners, vt: np.ndarray, cfg: dict) -> np.ndarray:
         if abs(float(a1) - float(out[i, 1])) > 1e-9:
             changed.append(str(name))
         out[i, 1] = float(a1)
-    if changed:
+    # Under `measured` a difference is expected and means nothing: an earlier
+    # stage in the same process already wrote its measured coordinates into
+    # this cfg, and the next thing that happens is measuring them again from
+    # the same data. Saying "the cache was built with different level_values"
+    # there reads as a config problem in the middle of a training run, which is
+    # how it got reported. Only `declared` can differ for a reason worth
+    # hearing: someone edited level_values since the cache was built.
+    if changed and str(cfg["base"].get("level_coords", "measured")) != "measured":
         print(f"[LEVELS] level coordinates re-derived from config for "
-              f"{len(changed)} corner(s) (the cache was built with different "
-              f"level_values; no rebuild needed)", flush=True)
+              f"{len(changed)} corner(s): corners.level_values differs from "
+              f"what the cache was built with. Using the config; no rebuild "
+              f"needed.", flush=True)
     return out
 
 
