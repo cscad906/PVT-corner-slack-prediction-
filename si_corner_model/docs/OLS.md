@@ -215,7 +215,8 @@ bash scripts/run.sh base       # ← 여기만 보면 된다 (numpy만, GPU 불�
 | hidden ≈ seen-LOO 인데 둘 다 큼 | 표현력 부족 | 차수↑, `cross_max_degree: 3` |
 | seen-LOO 가 거의 0 | 파라미터가 seen 코너 수와 같다 | **차수를 낮춰라** (LOO 가 무의미한 상태) |
 | seen-LOO ≫ hidden (예: 20 vs 5) | LOO 폴드가 퇴화. 코너 하나를 빼면 파라미터 수만큼만 점이 남는다. 신경망이 배포 때보다 훨씬 어려운 문제로 학습된다 | `min_loo_dof: 2`. 다만 base 자체가 나빠질 수 있으니 1 과 2 의 hidden 값을 비교하고 결정 |
-| seen-LOO ≪ hidden (예: 4 vs 22) | 히든이 전압 끝점이라 외삽인데 LOO 폴드는 전부 안쪽. 차수로는 못 고친다 | 히든을 안쪽으로 옮기거나, 끝점이 딜리버러블이면 base 로 끝낸다 |
+| seen-LOO ≪ hidden (예: 4 vs 22) | LOO 폴드보다 히든 코너가 더 어렵다. **mean 이 아니라 코너별로 볼 것** -- 한 코너가 다 지고 있는 경우가 많다 | 아래 |
+| 그 중 그리드의 **대각 꼭짓점** (최고전압 x 최소레벨 등) 만 나쁨 | 교차항이 그 자리에서 가장 제약을 못 받는다 | `cross_max_degree: 3`, 또는 히든을 대각이 아닌 칸으로 옮긴다 |
 | 특정 코너만 나쁨 | 그리드 가장자리 외삽 | `adaptive` 확인, `adaptive_grid` 에 넓은 후보 추가 |
 
 여기서 납득할 수치가 나온 다음에 `run.sh train` 으로 넘어간다.
