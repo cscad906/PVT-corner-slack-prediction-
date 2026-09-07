@@ -11,7 +11,7 @@
 # ======================= USER SETTINGS ========================
 
 # 목표 코너와 보간 방향
-set TARGET_PROCESS      "TT"      ;# TT / SS / FF
+set TARGET_PROCESS      "SSPG"    ;# report_lib에 표시되는 실제 공정 이름(예: TT, SSPG)
 set TARGET_VOLTAGE      0.75      ;# Volt
 set TARGET_TEMPERATURE  25        ;# Celsius. 영하 40도는 -40
 set SCALING_AXIS        "V"       ;# V / T / VT
@@ -109,22 +109,94 @@ proc auto_scaling::read_fixed {path expected_type} {
     return [dict create file $path dtype $dtype count [llength $paths] paths $paths]
 }
 
-# File names encode the project's process labels; nominal process numbers alone
-# cannot reliably distinguish SS/TT/FF. Overrides also support other naming schemes.
+# 공정 이름은 TT/SS/FF로 강제 변환하지 않습니다. 예를 들어 SSPG는 SSPG로
+# 유지해야 같은 공정의 전압/온도 library만 scaling에 사용됩니다.
+proc auto_scaling::process_name {text} {
+    set lower [string tolower $text]
+    if {[regexp {(^|[^[:alnum:]])((tt|ss|ff)[[:alpha:]]*)} $lower token prefix process]} {
+        return [string toupper $process]
+    }
+    return ""
+}
+
+# report_lib의 Operating Conditions 표에서 한 library의 실제 조건을 읽습니다.
+# PrimeTime scaling용 PVT library는 한 파일에 operating condition이 하나여야
+# 자동 선택이 명확합니다. 여러 개이면 잘못 고르지 않고 중단합니다.
+proc auto_scaling::report_operating_condition {lib path} {
+    if {[catch {
+        redirect -variable report_text { report_lib -nosplit $lib }
+    } reason]} {
+        error "report_lib failed for $path: $reason"
+    }
+
+    set in_table 0
+    set rows {}
+    foreach line [split $report_text "\n"] {
+        set line [string trim $line]
+        if {$line eq "Operating Conditions:"} {
+            set in_table 1
+            continue
+        }
+        if {!$in_table} { continue }
+        if {$line eq ""} {
+            if {[llength $rows]} { break }
+            continue
+        }
+
+        set fields [regexp -all -inline {\S+} $line]
+        if {[llength $fields] < 4} { continue }
+        if {[catch {set process_value [number [lindex $fields 1]]}]} { continue }
+        if {[catch {set temperature  [number [lindex $fields 2]]}]} { continue }
+        if {[catch {set voltage      [number [lindex $fields 3]]}]} { continue }
+        lappend rows [dict create name [lindex $fields 0] \
+            process_value $process_value v $voltage t $temperature]
+    }
+
+    if {![llength $rows]} {
+        error "report_lib has no readable Operating Conditions row: $path"
+    }
+    if {[llength $rows] != 1} {
+        error "report_lib has [llength $rows] Operating Conditions rows; automatic selection is ambiguous: $path"
+    }
+    return [lindex $rows 0]
+}
+
+proc auto_scaling::report_family {lib path process} {
+    set family [get_attribute $lib full_name]
+    if {$family eq ""} { set family [file rootname [file tail $path]] }
+    set family [string tolower $family]
+    set family [string map [list [string tolower $process] PROCESS] $family]
+    regsub -all {[0-9]+(?:[p.][0-9]+)?v} $family {VOLTAGE} family
+    regsub -all {(?:m|-)?[0-9]+(?:[p.][0-9]+)?c} $family {TEMPERATURE} family
+    return $family
+}
+
+# 먼저 기존 파일명 규칙을 사용하고, 파일명에서 P/V/T를 못 찾을 때에는
+# restore session에 올라온 library의 report_lib Operating Conditions를 사용합니다.
 # override value: {process voltage temperature family}
-proc auto_scaling::corner {path overrides} {
+proc auto_scaling::corner {lib path overrides} {
     if {[dict exists $overrides $path]} {
         set fields [dict get $overrides $path]
         if {[llength $fields] != 4} { error "corner_map entry needs {process voltage temperature family}: $path" }
         lassign $fields process v t family
     } else {
         set stem [file rootname [file tail $path]]
-        set pattern {(tt|ss|ff|sf|fs)_?([0-9]+(?:[p.][0-9]+)?)v_?(m?[0-9]+(?:[p.][0-9]+)?|-[0-9]+(?:[p.][0-9]+)?)c}
-        if {![regexp -nocase $pattern $stem token process v t]} {
-            error "Cannot identify P/V/T: $path. Narrow library_globs or add a corner_map entry."
+        set pattern {((?:tt|ss|ff)[[:alpha:]]*|sf|fs)_?([0-9]+(?:[p.][0-9]+)?)v_?(m?[0-9]+(?:[p.][0-9]+)?|-[0-9]+(?:[p.][0-9]+)?)c}
+        if {[regexp -nocase $pattern $stem token process v t]} {
+            regsub -nocase $pattern $stem {PVT} family
+            set family [string tolower $family]
+        } else {
+            set condition [report_operating_condition $lib $path]
+            set process [process_name [dict get $condition name]]
+            if {$process eq ""} { set process [process_name $stem] }
+            if {$process eq ""} {
+                # TT/SS/FF 계열이 아닌 실제 condition 이름도 그대로 사용할 수 있습니다.
+                set process [string toupper [dict get $condition name]]
+            }
+            set v [dict get $condition v]
+            set t [dict get $condition t]
+            set family [report_family $lib $path $process]
         }
-        regsub -nocase $pattern $stem {PVT} family
-        set family [string tolower $family]
     }
     return [dict create file $path process [string toupper $process] \
         v [number $v] t [number $t] family $family]
@@ -271,14 +343,18 @@ proc auto_scaling::catalog {cfg} {
         set path [get_attribute $lib source_file_name]
         if {$path eq "" || [dict exists $seen $path]} { continue }
         dict set seen $path 1
-        if {[catch {set row [corner $path $overrides]}]} {
-            lappend ignored $path
+        if {[catch {set row [corner $lib $path $overrides]} reason]} {
+            lappend ignored [list $path $reason]
             continue
         }
         lappend rows $row
     }
     if {![llength $rows]} {
-        error "Restore session에서 파일명으로 P/V/T를 식별할 library를 찾지 못했습니다."
+        set detail ""
+        foreach item [lrange $ignored 0 2] {
+            append detail "\n  [lindex $item 0]: [lindex $item 1]"
+        }
+        error "Restore session의 파일명과 report_lib에서 P/V/T를 식별할 library를 찾지 못했습니다.$detail"
     }
     puts "LOADED PVT LIBRARIES: [llength $rows]"
     if {[llength $ignored]} {
