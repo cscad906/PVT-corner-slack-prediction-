@@ -19,7 +19,7 @@
 set TARGET_PROCESS      "SSPG"    ;# report_lib에 표시되는 실제 공정 이름(예: TT, SSPG)
 set TARGET_VOLTAGE      0.75      ;# Volt
 set TARGET_TEMPERATURE  25        ;# Celsius. 영하 40도는 -40
-set TARGET_BEOL         "rcmax"   ;# rcmax / cmax / rcmin
+set TARGET_BEOL         "rcmax"   ;# rcmax/cmax/rcmin 또는 session의 실제 CORNER_NAME
 set SCALING_AXIS        "V"       ;# V / T / VT
 
 # 분석 종류
@@ -62,14 +62,15 @@ proc auto_scaling::readable {path} {
 }
 
 # SPEF/GPD의 // CORNER_NAME은 PDK마다 RC_MAX, rcmax_model처럼 표기가
-# 다를 수 있으므로 세 가지 지원 BEOL 이름으로 정규화합니다.
+# 다를 수 있습니다. 세 가지 일반 이름은 자동 인식하고, 그 밖의 회사 고유
+# 이름은 대소문자와 구분 기호를 제거한 정확한 이름으로 비교합니다.
 proc auto_scaling::canonical_beol {value} {
     set compact [string tolower $value]
     regsub -all {[^[:alnum:]]} $compact "" compact
     if {[string first "rcmax" $compact] >= 0} { return RCMAX }
     if {[string first "rcmin" $compact] >= 0} { return RCMIN }
     if {[string first "cmax"  $compact] >= 0} { return CMAX }
-    return ""
+    return [string toupper $compact]
 }
 
 # restore session의 현재 parasitic이 요청한 BEOL과 목표 온도인지 확인합니다.
@@ -80,7 +81,7 @@ proc auto_scaling::verify_restored_parasitics {cfg} {
     set requested_raw [need $cfg target_beol]
     set requested [canonical_beol $requested_raw]
     if {$requested eq ""} {
-        error "TARGET_BEOL은 rcmax, cmax, rcmin 중 하나여야 합니다: $requested_raw"
+        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다: '$requested_raw'"
     }
 
     set design [current_design]
@@ -90,7 +91,7 @@ proc auto_scaling::verify_restored_parasitics {cfg} {
     }
     set actual [canonical_beol $corner_name]
     if {$actual eq ""} {
-        error "복원된 parasitic CORNER_NAME을 rcmax/cmax/rcmin으로 식별할 수 없습니다: '$corner_name'"
+        error "복원된 parasitic CORNER_NAME이 비어 있거나 이름으로 사용할 문자가 없습니다: '$corner_name'"
     }
     if {$actual ne $requested} {
         error "BEOL 불일치: TARGET_BEOL=$requested, restore session parasitic=$corner_name ($actual). 목표 BEOL scenario/session을 활성화한 뒤 다시 실행하세요."
@@ -440,7 +441,7 @@ proc auto_scaling::plan {cfg} {
     set tt [number [need $cfg target_t]]
     set beol [canonical_beol [need $cfg target_beol]]
     if {$beol eq ""} {
-        error "TARGET_BEOL은 rcmax, cmax, rcmin 중 하나여야 합니다."
+        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다."
     }
     set mode [string toupper [need $cfg mode]]
     if {[lsearch -exact [list V T VT] $mode] < 0} {
@@ -918,7 +919,7 @@ proc auto_scaling::build_restore_config {} {
     set ttag [string map {. p - m} [format %.12g $temperature]]
     set beol [canonical_beol $::TARGET_BEOL]
     if {$beol eq ""} {
-        error "TARGET_BEOL은 rcmax, cmax, rcmin 중 하나여야 합니다."
+        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다."
     }
     set filename "scaled_[string toupper $::TARGET_PROCESS]_${vtag}V_${ttag}C_${beol}_[string toupper $::SCALING_AXIS]_${analysis}.rpt"
 
