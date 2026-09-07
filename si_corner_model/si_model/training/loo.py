@@ -172,7 +172,7 @@ def build_design(cfg: dict, split: Split, y=None):
     reason, before the basis is -- see ``run.fit_level_coords``. Both hooks are
     here rather than in the callers so that base, train and predict cannot
     disagree about the grid the model was fit on."""
-    if y is not None and cfg["base"].get("fit_level_values", True):
+    if y is not None and cfg["base"].get("fit_level_values", False):
         from si_model.run import fit_level_coords
         cfg = fit_level_coords(y, split, cfg)
     ref_vt = split.vt[split.ref_ci]

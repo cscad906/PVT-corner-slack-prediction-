@@ -780,7 +780,7 @@ def expand(p: dict) -> "list[dict]":
                 # never copied here, so setting them did exactly nothing.
                 "select": bool(bt.get("select", True)),
                 "min_loo_dof": int(bt.get("min_loo_dof", 1)),
-                "fit_level_values": bool(bt.get("fit_level_values", True)),
+                "fit_level_values": bool(bt.get("fit_level_values", False)),
                 "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),
                 "adaptive_amp_ratio": bt.get("adaptive_amp_ratio", 1.5),
@@ -1082,7 +1082,81 @@ def stage_base(m: dict) -> None:
         print(f"    (skipped, no ground truth: {skipped})")
     _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
+        _print_basis_comparison(y, split, coords, cfg, hid)
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
+
+
+def _print_basis_comparison(y, split, coords, cfg, hid) -> None:
+    """What each basis candidate scores on seen-LOO AND on the hidden corners.
+
+    Printed only -- never stored, and never used to choose anything. The basis
+    is chosen by seen-LOO alone (``select_basis``), because hidden labels do
+    not exist in deployment. That is correct and it is also the whole risk: the
+    criterion is a PROXY, and nothing has ever checked that the proxy points
+    the same way as the thing it stands in for.
+
+    On PERIC0/m25 it does not. Fitting the level coordinates to minimise
+    seen-LOO took it from the declared value to 3.31 ps while the hidden
+    corners went 22 -> 27 ps. Better proxy, worse deliverable. If seen-LOO is
+    anti-correlated with hidden error on this grid, then the basis it picks is
+    suspect for the same reason -- and this table is what says so, in one run,
+    without changing what the run does.
+
+    Read the two columns together. Ranked the same way, the proxy is sound.
+    Ranked backwards, the selected row is not the row you want, and
+    ``base.select: false`` with an explicit ``v_order`` is how to take it.
+    """
+    import copy
+
+    import numpy as np
+
+    from si_model.config import expand_terms
+    from si_model.model.base_ols import design_matrix
+    from si_model.training.loo import fit_field
+
+    S = split.seen_idx
+    nv = len(np.unique(np.round(split.vt[S, 0], 9)))
+    nlv = len(np.unique(np.round(split.vt[S, 1], 9)))
+    v_cap = int(cfg["base"]["axes"][0]["order"])
+    min_dof = int(cfg["base"].get("min_loo_dof", 1))
+    rows = []
+    for vo in range(1, v_cap + 1):
+        for cross, cmd in ((False, 2), (True, 2), (True, 3)):
+            c = copy.deepcopy(cfg)
+            c["base"]["axes"][0]["order"] = vo
+            c["base"]["cross_terms"] = cross
+            c["base"]["cross_max_degree"] = cmd
+            exps, names, _ = expand_terms(c, [nv, nlv])
+            phi = design_matrix(coords, exps)
+            if len(S) - phi.shape[1] < min_dof:
+                continue
+            loo, _ = fit_field(y, phi, split, coords, c)
+            seen_e = float(np.nanmean(np.abs(loo[:, S] - y[:, S])) * 1000.0)
+            hid_e = [float(np.nanmean(np.abs(loo[:, ci] - y[:, ci])) * 1000.0)
+                     for ci in hid]
+            key = (vo, cross, cmd)
+            if any(r[0] == key for r in rows):        # cmd is a no-op without cross
+                continue
+            rows.append((key, len(names) + 1, seen_e,
+                         float(np.mean(hid_e)), float(np.max(hid_e))))
+    if not rows:
+        return
+    print("    -- basis candidates: proxy vs deliverable "
+          "(for reference, chosen on seen-LOO alone) --")
+    best_seen = min(rows, key=lambda r: r[2])[0]
+    best_hid = min(rows, key=lambda r: r[3])[0]
+    for key, k, seen_e, hid_mean, hid_worst in sorted(rows, key=lambda r: r[2]):
+        vo, cross, cmd = key
+        mark = ("  <- chosen" if key == best_seen else "")
+        mark += ("  <- best hidden" if key == best_hid else "")
+        print(f"       v^{vo} cross={str(cross):5s} {k:2d} params   "
+              f"seen-LOO {seen_e:8.2f}   hidden {hid_mean:8.2f} "
+              f"(worst {hid_worst:7.2f}){mark}")
+    if best_seen != best_hid:
+        print("       -> seen-LOO does NOT pick the best hidden basis here. The "
+              "proxy is ranking against the deliverable on this grid; take the "
+              "hidden-best row with base.select: false and an explicit v_order "
+              "/ cross_terms, and say in the report that the basis was pinned.")
 
 
 def _print_level_spacing(y, split, cfg) -> None:

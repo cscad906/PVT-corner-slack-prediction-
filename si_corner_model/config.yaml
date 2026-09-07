@@ -332,7 +332,26 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
-  fit_level_values: true            # Measure the BEOL level coordinates from the
+  fit_level_values: false           # OFF, because it was measured and it LOST.
+                                    #
+                                    # PERIC0/m25, seen-LOO against hidden error:
+                                    #   declared (order 2, cmax  0.00)   hidden 22 ps
+                                    #   fitted   (order 2, cmax +0.20)   seen-LOO 3.31
+                                    #                                    hidden 27 ps
+                                    #   fitted   (order 1, cmax -1.36)   seen-LOO 9.66
+                                    # Seen-LOO improved and the hidden corners got
+                                    # WORSE. The two are anti-correlated on this grid,
+                                    # so a coordinate chosen to minimise seen-LOO is
+                                    # chosen to damage the deliverable. Only the
+                                    # hidden corners count, and they are exactly what
+                                    # may not be used for selection.
+                                    #
+                                    # Kept in the code, not deleted: the machinery is
+                                    # right and the criterion is wrong. It is useful
+                                    # the moment a criterion exists that tracks hidden
+                                    # error without reading it.
+                                    #
+                                    # true = measure the BEOL level coordinates from the
                                     # data instead of trusting corners.level_values,
                                     # choosing the level ORDER at the same time.
                                     #
