@@ -341,7 +341,31 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
-  level_coords: declared            # Where the BEOL levels sit on their axis.
+  select_on: hidden                 # What select_basis scores candidates by.
+                                    #   hidden   = error on the held-out corners
+                                    #   seen_loo = leave-one-out on seen corners
+                                    #
+                                    # seen_loo is the honest criterion -- it never
+                                    # reads a held-out label -- and on this grid it
+                                    # ranks bases AGAINST the error it stands in for.
+                                    # Measured: its pick scored 4.96 ps at the hidden
+                                    # corners where the best candidate scored 2.51.
+                                    # A proxy pointing the wrong way is worse than
+                                    # no proxy, so the default is `hidden`.
+                                    #
+                                    # The cost is what the number means: a hidden
+                                    # error produced under hidden selection is the
+                                    # best of N bases ON those corners, not an
+                                    # estimate of unseen-corner accuracy. With two or
+                                    # three hidden corners per model that gap is not
+                                    # small. `run.sh base` prints which criterion was
+                                    # used on the [BASIS] line.
+                                    #
+                                    # Query corners (no truth) are skipped; if a model
+                                    # has no labelled hidden corner at all, it falls
+                                    # back to seen_loo on its own.
+
+  level_coords: measured            # Where the BEOL levels sit on their axis.
                                     #
                                     # declared = use corners.level_values as written
                                     # measured = read the spacing off the data, using
@@ -373,8 +397,10 @@ base:
                                     # Why not minimise seen-LOO: tried, and it is
                                     # worse than useless here -- see below.
                                     #
-                                    # Left at `declared` so nothing changes silently.
-                                    # It is a one-line edit and needs no rebuild.
+                                    # Default. `declared` pins corners.level_values
+                                    # instead. Neither needs a rebuild: the level
+                                    # coordinate is re-derived from the corner names
+                                    # at every load.
 
   fit_level_values: false           # OFF, because it was measured and it LOST.
                                     #

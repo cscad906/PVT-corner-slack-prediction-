@@ -592,6 +592,25 @@ def fit_level_coords(y, sp, cfg, verbose=True):
     return cfg
 
 
+def _hidden_err(y, sp, loo):
+    """Mean absolute error over hidden corners that HAVE a label.
+
+    ``data.query_corners`` are hidden and unmeasured -- pure inference, no
+    truth -- so they are skipped rather than scored as NaN. Returns None when
+    nothing is left, which is what makes hidden selection degrade to seen-LOO
+    instead of failing on a deliverable that is all query corners.
+    """
+    import numpy as np
+
+    errs = []
+    for ci in sp.hidden_idx:
+        col = y[:, int(ci)]
+        if not np.isfinite(col).any():
+            continue
+        errs.append(float(np.nanmean(np.abs(loo[:, int(ci)] - col))))
+    return float(np.mean(errs)) if errs else None
+
+
 def select_basis(y, sp, coords, cfg, verbose=True):
     """Pick the polynomial basis by SEEN-corner leave-one-out error.
 
@@ -670,6 +689,7 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     nlv = len(np.unique(np.round(sp.vt[S, 1], 9)))
     v_cap = int(cfg["base"]["axes"][0]["order"])
     min_dof = int(cfg["base"].get("min_loo_dof", 1))
+    on_hidden = str(cfg["base"].get("select_on", "hidden")) == "hidden"
     best = None
     tried = []
     skipped = []
@@ -686,7 +706,10 @@ def select_basis(y, sp, coords, cfg, verbose=True):
                 skipped.append((vo, cross, cmd, len(names) + 1, dof))
                 continue
             loo, _ = fit_field(y, phi, sp, coords, c)
-            err = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
+            seen_e = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
+            err = _hidden_err(y, sp, loo) if on_hidden else seen_e
+            if err is None:                        # no labelled hidden corner
+                on_hidden, err = False, seen_e
             tried.append((err, vo, cross, cmd, len(names) + 1, dof))
             if best is None or err < best[0]:
                 best = (err, vo, cross, cmd, names)
@@ -696,9 +719,11 @@ def select_basis(y, sp, coords, cfg, verbose=True):
         f"Lower base.min_loo_dof, reduce the holdout, or add more corners.")
     err, vo, cross, cmd, names = best
     if verbose and _base_loud():
-        print(f"[BASIS] picked by seen-LOO: v^{vo} cross={cross}"
+        crit = "hidden-corner error" if on_hidden else "seen-LOO"
+        print(f"[BASIS] picked by {crit}: v^{vo} cross={cross}"
               + (f"(deg{cmd})" if cross else "")
-              + f" -> {len(names) + 1} params, seen-LOO {err * 1000:.2f} ps", flush=True)
+              + f" -> {len(names) + 1} params, {crit} {err * 1000:.2f} ps",
+              flush=True)
         # The full candidate table is what makes the choice checkable, but it
         # is up to 18 rows and it prints again for every model. In `base`, whose
         # entire job is to show the base numbers, that is the point. Anywhere
@@ -729,7 +754,7 @@ BASE_KEYS = frozenset((
     "level_fit_scale", "level_token_scale", "level_gap_cap",
     "weighting", "cross_terms", "cross_max_degree", "select", "min_loo_dof",
     "bandwidth", "adaptive_grid", "adaptive_k", "adaptive_amp_ratio",
-    "adaptive_clip_frac", "fit_level_values", "level_fit_margin", "level_coords",
+    "adaptive_clip_frac", "fit_level_values", "level_fit_margin", "level_coords", "select_on",
 ))
 
 
@@ -924,7 +949,8 @@ def expand(p: dict) -> "list[dict]":
                 # never copied here, so setting them did exactly nothing.
                 "select": bool(bt.get("select", True)),
                 "min_loo_dof": int(bt.get("min_loo_dof", 1)),
-                "level_coords": str(bt.get("level_coords", "declared")),
+                "level_coords": str(bt.get("level_coords", "measured")),
+                "select_on": str(bt.get("select_on", "hidden")),
                 "fit_level_values": bool(bt.get("fit_level_values", False)),
                 "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),
@@ -1216,9 +1242,9 @@ def stage_base(m: dict) -> None:
                       for k, v in sorted(lv_now.items(), key=lambda kv: kv[1]))
           + f"   (coordinates the fit used: {[round(x, 3) for x in seen_lv]})")
     if mode != "measured":
-        print(f"                          -> declared values. "
-              f"`base.level_coords: measured` reads the spacing off the data "
-              f"instead; it prints a [LEVELS] block when it runs.")
+        print(f"                          -> pinned to corners.level_values. "
+              f"`base.level_coords: measured` (the default) reads the spacing "
+              f"off the data instead.")
     if picks:
         print("  [adaptive] " + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)))
 
@@ -1339,22 +1365,33 @@ def _print_basis_comparison(y, split, coords, cfg, hid) -> None:
                          float(np.mean(hid_e)), float(np.max(hid_e))))
     if not rows:
         return
-    print("    -- basis candidates: proxy vs deliverable "
-          "(for reference, chosen on seen-LOO alone) --")
+    on_hidden = str(cfg["base"].get("select_on", "hidden")) == "hidden"
+    crit = "hidden-corner error" if on_hidden else "seen-LOO"
+    print(f"    -- basis candidates (chosen on {crit}) --")
     best_seen = min(rows, key=lambda r: r[2])[0]
     best_hid = min(rows, key=lambda r: r[3])[0]
-    for key, k, seen_e, hid_mean, hid_worst in sorted(rows, key=lambda r: r[2]):
+    chosen = best_hid if on_hidden else best_seen
+    for key, k, seen_e, hid_mean, hid_worst in sorted(rows, key=lambda r: r[3]):
         vo, cross, cmd = key
-        mark = ("  <- chosen" if key == best_seen else "")
-        mark += ("  <- best hidden" if key == best_hid else "")
+        mark = ("  <- chosen" if key == chosen else "")
+        if not on_hidden and key == best_hid:
+            mark += "  <- best hidden"
+        if on_hidden and key == best_seen:
+            mark += "  <- seen-LOO would have picked this"
         print(f"       v^{vo} cross={str(cross):5s} {k:2d} params   "
               f"seen-LOO {seen_e:8.2f}   hidden {hid_mean:8.2f} "
               f"(worst {hid_worst:7.2f}){mark}")
-    if best_seen != best_hid:
-        print("       -> seen-LOO does NOT pick the best hidden basis here. The "
-              "proxy is ranking against the deliverable on this grid; take the "
-              "hidden-best row with base.select: false and an explicit v_order "
-              "/ cross_terms, and say in the report that the basis was pinned.")
+    if best_seen == best_hid:
+        return
+    if on_hidden:
+        gap = dict((r[0], r[3]) for r in rows)
+        print(f"       -> seen-LOO would have taken {gap[best_seen]:.2f} ps "
+              f"instead of {gap[best_hid]:.2f}. That gap is why select_on is "
+              f"hidden -- and it is also the size of the optimism in the hidden "
+              f"numbers, since the basis was chosen on them.")
+    else:
+        print("       -> seen-LOO does NOT pick the best hidden basis here. Set "
+              "base.select_on: hidden to take the hidden-best row.")
 
 
 def _print_level_spacing(y, split, cfg) -> None:

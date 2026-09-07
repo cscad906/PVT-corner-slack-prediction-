@@ -219,7 +219,7 @@ def build_design(cfg: dict, split: Split, y=None):
     # caller reports the axis it asked for rather than the axis that was used
     # -- which is indistinguishable from the switch not working.
     caller_cfg = cfg
-    if y is not None and str(cfg["base"].get("level_coords", "declared")) == "measured":
+    if y is not None and str(cfg["base"].get("level_coords", "measured")) == "measured":
         from si_model.run import measured_level_coords
         cfg = measured_level_coords(y, split, cfg)
     if y is not None and cfg["base"].get("fit_level_values", False):

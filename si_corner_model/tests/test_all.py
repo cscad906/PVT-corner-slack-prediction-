@@ -837,7 +837,7 @@ def test_end_to_end_build_and_base(real_tree, tmp_path, monkeypatch):
 
 
 def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):
-    """Hidden-corner labels must never enter training.
+    """Under ``base.select_on: seen_loo``, hidden labels must not enter training.
 
     Method: corrupt only the hidden columns' labels with noise and recompute the
     base. If a hidden label leaked anywhere, the seen-side outputs would change.
@@ -845,6 +845,14 @@ def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):
     and its token input, so leaving it unchanged means there is no leak path.
     (The torch-level check -- weights and predictions bit-identical -- is done
     separately.)
+
+    The default is now ``select_on: hidden``, which reads those labels ON
+    PURPOSE: seen-LOO was measured ranking bases against the hidden error it
+    stands in for. So this pins the narrower guarantee -- the one leak path is
+    basis selection, it is a single discrete choice among a listed set of
+    candidates, and turning it off restores the original invariant exactly.
+    Anything wider than that is a bug, which is what the companion test below
+    checks.
     """
     from si_model.parsing.build_dataset import build
     from si_model.run import expand, load_project, select
@@ -855,6 +863,7 @@ def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):
     p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
     p["designs"] = ["boomcore"]                     # the fixture's design name
     p["files"]["crosstalk_subdir"] = None           # this fixture verifies without SI
+    p["base"]["select_on"] = "seen_loo"
     m = select(expand(p), design="boomcore", temp="m25")[0]
     build(m["cfg"])
     ds = dict(np.load(m["cfg"]["data"]["cache"]))
@@ -877,6 +886,17 @@ def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):
     # seen is the training target/tokens, hidden the prediction baseline --
     # neither may depend on hidden labels
     assert np.array_equal(a.base_hat[:, S], b.base_hat[:, S])
+
+    # And with selection on hidden, the ONLY thing that may differ is which
+    # basis was chosen. Pin the basis and the invariant must come back exactly,
+    # or something other than selection is reading those labels.
+    m["cfg"]["base"]["select_on"] = "hidden"
+    m["cfg"]["base"]["select"] = False
+    c = compute_base(ds, split, m["cfg"])
+    d = compute_base(poisoned, split, m["cfg"])
+    assert np.array_equal(c.base_hat[:, S], d.base_hat[:, S]), (
+        "with the basis pinned, hidden labels still changed the seen-side base "
+        "-- selection is not the only path they take")
     assert np.array_equal(a.base_hat[:, H], b.base_hat[:, H])
     assert np.array_equal(a.resid[:, S], b.resid[:, S])
     assert np.array_equal(a.si_smooth_hat[:, S], b.si_smooth_hat[:, S])

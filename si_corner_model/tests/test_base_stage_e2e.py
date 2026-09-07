@@ -102,10 +102,11 @@ def test_level_values_env_reaches_the_fit(tmp_path, monkeypatch, capsys):
     config differs. If the override is dropped anywhere between the environment
     and the design matrix, both runs return the same number.
     """
-    _run(tmp_path, monkeypatch, *THREE)
+    pin = {"level_coords": "declared", "select_on": "seen_loo"}
+    _run(tmp_path, monkeypatch, *THREE, base=pin)
     declared, _ = _hidden(capsys)
 
-    _run(tmp_path, monkeypatch, *THREE,
+    _run(tmp_path, monkeypatch, *THREE, base=pin,
          env={"SI_LEVEL_VALUES": "cmax=-1,rcmin=-0.345,rcmax=1"})
     fitted, out = _hidden(capsys)
 
@@ -117,11 +118,13 @@ def test_level_values_env_reaches_the_fit(tmp_path, monkeypatch, capsys):
 
 def test_measured_finds_the_planted_axis(tmp_path, monkeypatch, capsys):
     """`level_coords: measured` must reach the same answer on its own."""
-    _run(tmp_path, monkeypatch, *THREE,
+    pin = {"level_coords": "declared", "select_on": "seen_loo"}
+    _run(tmp_path, monkeypatch, *THREE, base=pin,
          env={"SI_LEVEL_VALUES": "cmax=-1,rcmin=-0.345,rcmax=1"})
     by_hand, _ = _hidden(capsys)
 
-    _run(tmp_path, monkeypatch, *THREE, env={"SI_LEVEL_COORDS": "measured"})
+    _run(tmp_path, monkeypatch, *THREE, base={"select_on": "seen_loo"},
+         env={"SI_LEVEL_COORDS": "measured"})
     measured, out = _hidden(capsys)
 
     assert "[LEVELS] level_coords: measured over" in out
