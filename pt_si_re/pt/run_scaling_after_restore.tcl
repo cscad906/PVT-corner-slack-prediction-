@@ -20,10 +20,10 @@ set SCALING_AXIS        "V"       ;# V / T / VT
 set ANALYSIS            "setup"   ;# setup / hold
 
 # 1_union.py가 만든 fixed path 파일
-set FIXED_PATH_FILE "/home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_prediction/pt_si_re/example/round1/corners/fixed_paths.tcl"
+set FIXED_PATH_FILE "fixed_paths.tcl"
 
 # 결과 폴더
-set RESULT_FOLDER "/home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_prediction/pt_si_re/pt/auto_scaling_output"
+set RESULT_FOLDER "auto_scaling_output"
 
 # 복원 세션의 단일 전원 이름
 set POWER_NET  "VDD"
