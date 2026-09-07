@@ -598,10 +598,15 @@ proc auto_scaling::report_has_corner {text rail voltage temperature} {
         if {![regexp {^\s+\S+\s+(-?[0-9]+(?:\.[0-9]+)?)\s+\{([^\n]*)\}} $line -> found_t rails]} {
             continue
         }
-        set pattern [format {%s:([-+]?[0-9]+(?:\.[0-9]+)?)} $rail]
-        if {[regexp $pattern $rails -> found_v] &&
-            [same [number $found_v] $voltage] && [same [number $found_t] $temperature]} {
-            return 1
+        # 실제 UPF supply 이름이 VDD가 아닐 수 있으므로 이 온도의 모든
+        # power-rail voltage를 검사합니다. ground(보통 0V)는 일치하지 않습니다.
+        foreach pair [regexp -all -inline {[^[:space:]:]+:[-+]?[0-9]+(?:\.[0-9]+)?} $rails] {
+            set colon [string last ":" $pair]
+            set found_v [string range $pair [expr {$colon+1}] end]
+            if {[same [number $found_v] $voltage] &&
+                [same [number $found_t] $temperature]} {
+                return 1
+            }
         }
     }
     return 0
@@ -702,8 +707,9 @@ proc auto_scaling::run_after_restore {cfg} {
 
     set cells [get_cells -hierarchical -quiet *]
     if {![sizeof_collection $cells]} { error "현재 design에 leaf cell이 없습니다." }
-    set all_supply [get_supply_nets -quiet *]
-    set power_supply [get_supply_nets -quiet $rail]
+    set all_supply [get_supply_nets -quiet -hierarchy *]
+    set power_supply ""
+    set ground_supply ""
     if {![sizeof_collection $all_supply]} {
         puts "RESTORE MODE: supply net이 없어 단일 전원 domain을 생성합니다."
         create_power_domain AUTO_SCALING_TOP
@@ -712,15 +718,35 @@ proc auto_scaling::run_after_restore {cfg} {
         set_domain_supply_net AUTO_SCALING_TOP \
             -primary_power_net $rail -primary_ground_net $gnd
         set power_supply [get_supply_nets -quiet $rail]
-    } elseif {[sizeof_collection $power_supply] != 1} {
-        set available [get_object_name $all_supply]
-        error "POWER_NET '$rail'을 하나로 찾을 수 없습니다. 복원 세션 supply nets: $available"
+        set ground_supply [get_supply_nets -quiet $gnd]
+    } else {
+        # UPF가 복원된 경우 이름을 추측하지 않고 design cell에 실제 연결된
+        # power/ground 타입 supply net을 사용합니다. USER SETTINGS의 이름이
+        # 실제로 존재하면 그 net을 우선하여 multi-voltage design도 지원합니다.
+        set power_supply [get_supply_nets -quiet -hierarchy $rail]
+        set ground_supply [get_supply_nets -quiet -hierarchy $gnd]
+        if {![sizeof_collection $power_supply]} {
+            set power_supply [get_supply_nets -quiet -pg_types power -of_objects $cells]
+        }
+        if {![sizeof_collection $ground_supply]} {
+            set ground_supply [get_supply_nets -quiet -pg_types ground -of_objects $cells]
+        }
+        if {![sizeof_collection $power_supply]} {
+            set power_supply [get_supply_nets -quiet -hierarchy -pg_types power *]
+        }
+        if {![sizeof_collection $ground_supply]} {
+            set ground_supply [get_supply_nets -quiet -hierarchy -pg_types ground *]
+        }
+        if {![sizeof_collection $power_supply]} {
+            error "복원된 UPF에서 design cell에 연결된 power-type supply net을 찾지 못했습니다. Available supply nets: [get_object_name $all_supply]"
+        }
     }
 
+    puts "POWER SUPPLY NETS: [get_object_name $power_supply]"
     check_status set_temperature [list set_temperature $target_t -object_list $cells]
     check_status set_voltage [list set_voltage $target_v -object_list $power_supply]
-    set ground_supply [get_supply_nets -quiet $gnd]
-    if {[sizeof_collection $ground_supply] == 1} {
+    if {[sizeof_collection $ground_supply]} {
+        puts "GROUND SUPPLY NETS: [get_object_name $ground_supply]"
         check_status set_ground [list set_voltage 0.0 -object_list $ground_supply]
     }
     check_status update_timing {update_timing -full}
