@@ -271,6 +271,104 @@ def _base_loud() -> bool:
     return _stage() == "base" or os.environ.get("SI_VERBOSE", "0") != "0"
 
 
+def measured_level_coords(y, sp, cfg, verbose=True):
+    """Set the level coordinates from the MEASURED level response, using seen
+    corners only. Enabled by ``base.level_coords: measured``.
+
+    Not an optimisation and not a search -- there is nothing to tune and no
+    proxy involved. At every voltage where all levels are seen, the level means
+    say directly how far apart the levels are; the extremes are pinned at -1 and
+    +1 and the rest fall where the measurements put them. Averaged over such
+    voltages.
+
+    This is the honest version of the question "just pick the best spacing".
+    Picking it to minimise HIDDEN error is not available: there are two hidden
+    corners, fitting even one parameter to them overfits, and the reported
+    hidden error would stop meaning "how well does this do on corners it has
+    not seen" -- which is the entire deliverable. Picking it to minimise
+    seen-LOO was tried and is worse than useless here: it improved the proxy
+    from the declared value and took the hidden corners from 22 to 27 ps
+    (base.fit_level_values, now off). This third route asks the seen corners
+    what the axis IS, rather than asking a proxy what it should be.
+
+    On the company drop (PERIC0/m25) the level means are cmax 1466, rcmin 1485,
+    rcmax 1524 ps, which places them at -1, -0.345, +1 -- the measured ORDER
+    that reordering already showed matters (22 -> 12 ps plain, 3 ps local), now
+    with the measured SPACING as well, which even spacing gets wrong by 2x.
+
+    Falls back to the declared coordinates, with a reason, whenever the grid
+    cannot answer: fewer than three levels, or no voltage carrying them all.
+    """
+    import copy
+
+    import numpy as np
+
+    tag = "[LEVELS]"
+    try:
+        lv_all = {str(k): float(v) for k, v in
+                  (cfg["base"]["axes"][1].get("levels") or {}).items()}
+    except (KeyError, IndexError):
+        return cfg
+    present = [n for n, c in lv_all.items()
+               if np.any(np.abs(sp.vt[:, 1] - c) < 1e-9)]
+    if len(present) < 3:
+        if verbose and _base_loud():
+            print(f"{tag} level_coords: measured -- {len(present)} levels in "
+                  f"this grid, nothing to place (two levels define the axis "
+                  f"between them). Declared values kept.", flush=True)
+        return cfg
+
+    means = {n: [] for n in present}
+    n_used = 0
+    for v in np.unique(np.round(sp.vt[:, 0], 9)):
+        at = {}
+        for ci in range(sp.vt.shape[0]):
+            if not sp.seen[ci] or abs(sp.vt[ci, 0] - v) > 1e-9:
+                continue
+            for n in present:
+                if abs(sp.vt[ci, 1] - lv_all[n]) < 1e-9:
+                    at[n] = ci
+        if len(at) < len(present):        # need every level at this voltage
+            continue
+        for n in present:
+            means[n].append(float(np.nanmean(y[:, at[n]])))
+        n_used += 1
+    if not n_used:
+        if verbose and _base_loud():
+            print(f"{tag} level_coords: measured -- no voltage has all of "
+                  f"{sorted(present)} seen, so the spacing cannot be read off. "
+                  f"Declared values kept.", flush=True)
+        return cfg
+
+    mu = {n: float(np.mean(v)) for n, v in means.items()}
+    order = sorted(present, key=lambda n: mu[n])
+    lo, hi = mu[order[0]], mu[order[-1]]
+    if abs(hi - lo) < 1e-12:
+        return cfg
+    new = {n: -1.0 + (mu[n] - lo) / (hi - lo) * 2.0 for n in present}
+    for n, c in lv_all.items():          # levels absent from this grid: keep
+        new.setdefault(n, c)
+
+    if verbose and _base_loud():
+        print(f"{tag} level_coords: measured over {n_used} voltage(s) carrying "
+              f"all {len(present)} levels", flush=True)
+        for n in order:
+            print(f"          {n:>8s} mean {mu[n] * 1000.0:9.2f} ps   "
+                  f"declared {lv_all[n]:+.3f} -> {new[n]:+.3f}", flush=True)
+        if [n for n, _ in sorted(lv_all.items(), key=lambda kv: kv[1])
+            if n in present] != order:
+            print(f"          -> the measured ORDER is {' < '.join(order)}, "
+                  f"not the declared one. That is the change that took the "
+                  f"hidden corners from 22 to 12 ps.", flush=True)
+    cfg = copy.deepcopy(cfg)
+    cfg["base"]["axes"][1]["levels"] = dict(new)
+    vt2 = sp.vt.copy()
+    for n, c in new.items():
+        vt2[np.abs(sp.vt[:, 1] - lv_all[n]) < 1e-9, 1] = c
+    sp.vt = vt2
+    return cfg
+
+
 def fit_level_coords(y, sp, cfg, verbose=True):
     """Choose the second-axis (BEOL level) COORDINATES and its polynomial ORDER
     from the data, by the same seen-corner LOO criterion that already chooses
@@ -585,7 +683,7 @@ BASE_KEYS = frozenset((
     "level_fit_scale", "level_token_scale", "level_gap_cap",
     "weighting", "cross_terms", "cross_max_degree", "select", "min_loo_dof",
     "bandwidth", "adaptive_grid", "adaptive_k", "adaptive_amp_ratio",
-    "adaptive_clip_frac", "fit_level_values", "level_fit_margin",
+    "adaptive_clip_frac", "fit_level_values", "level_fit_margin", "level_coords",
 ))
 
 
@@ -780,6 +878,7 @@ def expand(p: dict) -> "list[dict]":
                 # never copied here, so setting them did exactly nothing.
                 "select": bool(bt.get("select", True)),
                 "min_loo_dof": int(bt.get("min_loo_dof", 1)),
+                "level_coords": str(bt.get("level_coords", "declared")),
                 "fit_level_values": bool(bt.get("fit_level_values", False)),
                 "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),

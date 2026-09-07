@@ -341,6 +341,41 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
+  level_coords: declared            # Where the BEOL levels sit on their axis.
+                                    #
+                                    # declared = use corners.level_values as written
+                                    # measured = read the spacing off the data, using
+                                    #            SEEN corners only
+                                    #
+                                    # `measured` is not a search and has nothing to
+                                    # tune. At every voltage carrying all levels, the
+                                    # level means say directly how far apart they are;
+                                    # the extremes are pinned at -1 / +1 and the rest
+                                    # land where the measurements put them.
+                                    #
+                                    # On PERIC0/m25 the means are cmax 1466, rcmin
+                                    # 1485, rcmax 1524 ps, giving
+                                    #     cmax -1.000   rcmin -0.345   rcmax +1.000
+                                    # against a declared -1 / 0 / +1. Both the ORDER
+                                    # and the spacing differ: cmax is not in the
+                                    # middle, it is at one end. Fixing only the order
+                                    # took the hidden corners from 22 to 12 ps (plain)
+                                    # and 3 ps (local). The spacing here is a further
+                                    # 2x correction that has not been scored yet.
+                                    #
+                                    # Why not simply pick the spacing that minimises
+                                    # HIDDEN error: there are two hidden corners, one
+                                    # parameter fit to two numbers overfits, and the
+                                    # reported hidden error would stop meaning "how
+                                    # well does this do on corners it has not seen",
+                                    # which is the whole deliverable. In deployment
+                                    # those corners have no labels at all.
+                                    # Why not minimise seen-LOO: tried, and it is
+                                    # worse than useless here -- see below.
+                                    #
+                                    # Left at `declared` so nothing changes silently.
+                                    # It is a one-line edit and needs no rebuild.
+
   fit_level_values: false           # OFF, because it was measured and it LOST.
                                     #
                                     # PERIC0/m25, seen-LOO against hidden error:
