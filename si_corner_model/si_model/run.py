@@ -953,6 +953,7 @@ def _print_level_spacing(y, split, cfg) -> None:
     vt, seen = split.vt, split.seen
     volts = np.unique(np.round(vt[:, 0], 9))
     rows = {name: [] for name, _ in by_coord[1:-1]}
+    raw = {name: [] for name, _ in by_coord}      # mean field value per level
     n_used = 0
     for v in volts:
         at = {}
@@ -975,7 +976,11 @@ def _print_level_spacing(y, split, cfg) -> None:
             y_m = float(np.nanmean(y[:, at[name]]))
             rows[name].append(lo_c + (y_m - y_lo) / (y_hi - y_lo) * (hi_c - lo_c))
             used = True
-        n_used += 1 if used else 0
+        if used:
+            n_used += 1
+            for name in raw:
+                if name in at:
+                    raw[name].append(float(np.nanmean(y[:, at[name]])))
     if not n_used or not any(rows.values()):
         present = sorted({n for n, c in coord_of.items()
                           if any(abs(vt[ci, 1] - c) < 1e-9 and seen[ci]
@@ -987,22 +992,44 @@ def _print_level_spacing(y, split, cfg) -> None:
 
     print(f"{tag} measured at {n_used} voltage(s) where "
           f"{lo_name}/{hi_name} are both seen")
-    print(f"                  {lo_name:>8s} {lo_c:7.3f} (anchor)      "
-          f"{hi_name:>8s} {hi_c:7.3f} (anchor)")
+    # The raw per-level means are what every conclusion below is derived from.
+    # Printing only the derived coordinate makes a surprising number
+    # un-checkable, and the first one this produced WAS surprising (-1.984).
     worst = 0.0
-    for name, vals in rows.items():
+    for name, c in by_coord:
+        r = np.asarray(raw[name]) if raw[name] else None
+        mean_s = f"mean {r.mean() * 1000.0:10.2f} ps" if r is not None else " " * 18
+        if name in (lo_name, hi_name):
+            print(f"                  {name:>8s} {c:7.3f} (anchor)          "
+                  f"{mean_s}")
+            continue
+        vals = rows.get(name)
         if not vals:
             continue
         a = np.asarray(vals)
-        gap = abs(float(a.mean()) - coord_of[name])
         span = abs(hi_c - lo_c)
-        worst = max(worst, gap / span if span else 0.0)
-        print(f"                  {name:>8s} declared {coord_of[name]:7.3f}   "
-              f"measured {a.mean():7.3f}  (spread {a.max() - a.min():.3f} "
-              f"across voltages)")
-    if worst > 0.05:
-        print(f"                  -> declared and measured differ by "
-              f"{worst * 100:.0f}% of the axis. Put the measured value in "
+        worst = max(worst, abs(float(a.mean()) - c) / span if span else 0.0)
+        print(f"                  {name:>8s} {c:7.3f} declared -> "
+              f"{a.mean():7.3f} measured  {mean_s}  (spread "
+              f"{a.max() - a.min():.3f})")
+    # Order is the blunt statement of the same thing, and the one that says
+    # whether this is a spacing problem or an ordering problem.
+    dec = [n for n, _ in by_coord]
+    got = sorted(dec, key=lambda n: (float(np.mean(rows[n])) if rows.get(n)
+                                     else coord_of[n]))
+    if dec != got:
+        print(f"                  -> ORDER DISAGREES. declared "
+              f"{' < '.join(dec)}, measured {' < '.join(got)}.")
+        print(f"                     level_values assumes an order the data "
+              f"does not have, so the level polynomial is fit on the wrong "
+              f"axis. Either the coordinates are wrong, or these levels are "
+              f"not one severity axis at all -- check the mean column above "
+              f"against what each corner is supposed to mean, and check that "
+              f"the level token in the filenames maps to the corner you "
+              f"think it does (run.sh check).")
+    elif worst > 0.05:
+        print(f"                  -> spacing is off by {worst * 100:.0f}% of "
+              f"the axis (order is right). Put the measured value in "
               f"corners.level_values and re-run; the level polynomial is fit "
               f"on these coordinates.")
 
