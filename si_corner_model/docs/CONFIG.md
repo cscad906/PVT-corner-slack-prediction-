@@ -176,7 +176,9 @@ corners:
 |---|---|---|
 | `v_order` / `level_order` | `auto` | 다항식 차수. auto = 식별 가능한 최대치 (전압은 6, 레벨은 2 상한). 실제 차수는 `select_basis` 가 seen-LOO 로 고른다 |
 | `cross_terms` / `cross_max_degree` | true / 2 | 교차항 사용 / 총차수 상한 |
-| `weighting` | `adaptive` | `plain` \| `local` \| `adaptive` |
+| `select` | `true` | true = v_order 까지 전부 시도해 seen-LOO 가 가장 낮은 것을 고른다. false = 적은 차수를 그대로 쓴다. **true 일 때 `v_order` 는 선택이 아니라 상한이다** |
+| `min_loo_dof` | `1` | LOO 폴드가 가져야 할 최소 자유도 (= seen 코너 수 - 파라미터 수). 1 = 완전결정만 제외(기본). 2 로 올리면 폴드가 퇴화한 후보도 제외 -- seen-LOO 는 신경망의 학습 타깃이기도 하므로 [OLS.md](OLS.md) 의 표를 먼저 볼 것 |
+| `weighting` | `plain` | `plain` \| `local` \| `adaptive` |
 | `bandwidth` | — | `local` 일 때 필수 |
 | `adaptive_grid` | `null` | `adaptive` 후보 대역폭. null = 자동 유도 |
 | `adaptive_k` / `adaptive_amp_ratio` / `adaptive_clip_frac` | 6 / 1.5 / 0.3 | adaptive 세부 |

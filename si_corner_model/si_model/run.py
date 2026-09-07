@@ -280,9 +280,42 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     by its LOO error on SEEN corners only, so hidden labels never influence the
     choice (picking by hidden error would leak the very thing being held out).
 
-    Candidates with fewer than 1 degree of freedom are excluded: their fit
-    passes through every seen point, driving seen-LOO to ~0 and winning for the
-    wrong reason.
+    ``base.min_loo_dof`` (default 1) sets how many leave-one-out degrees of
+    freedom a candidate must have to be considered at all. Default 1 only
+    excludes the fully-determined case; RAISING it is a deliberate choice, and
+    what it buys is this:
+
+    The seen-LOO residual is also the network's training target (loo.py). It is
+    the exact closed form of "refit without corner c, then predict c", so the
+    ``/(1-h)`` in base_ols is not an artifact -- it is the true LOO error. But
+    that makes the TRAINING task and the DEPLOYMENT task different problems
+    whenever the fold is near-degenerate. Measured on the 14nm 125C grid
+    (6 seen corners) with the selected v^3 basis (5 params, dof=1):
+
+        corner          leverage h    1/(1-h)
+        0.5   rcmax       0.7500        4.0
+        0.5   cmax        0.7500        4.0
+        0.54  cmax        1.0000     undefined   <- fold is unidentifiable
+        0.6   rcmax       1.0000     undefined   <- fold is unidentifiable
+        0.685 rcmax       0.7500        4.0
+        0.685 cmax        0.7500        4.0
+
+    Dropping one of 6 corners leaves 5 points for 5 parameters, so the LOO fit
+    interpolates exactly and two folds have no solution at all. Seen-LOO came
+    out at 20 ps while the base's actual hidden-corner error was 5 ps -- and
+    20/5 = 4.0 is exactly the leverage factor. The network was taught to correct
+    20 ps of "I lost a corner", then deployed on 5 ps of "interpolate between
+    corners", and the hidden-corner checkpoint rejected every epoch: the shipped
+    model equalled the base to within 0.01 ps at both temperatures.
+
+    At v^2 on the same grid (4 params, dof=2) the worst leverage is 0.797 and no
+    fold is degenerate. Whether that trade is worth it depends on how much base
+    accuracy the lower order costs, which differs per drop -- hence a config
+    knob and not a hardcoded rule. Compare the two ``run.sh base`` outputs
+    before changing it.
+
+    Excluded candidates are printed with their dof, so a silently dropped
+    candidate can never hide again.
 
     Verified on the real 14nm drop: this picks the hidden-optimal basis at both
     temperatures (125C -> v^3 no-cross, m25C -> v^3 with cross), where a
@@ -315,8 +348,10 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     nv = len(np.unique(np.round(sp.vt[S, 0], 9)))
     nlv = len(np.unique(np.round(sp.vt[S, 1], 9)))
     v_cap = int(cfg["base"]["axes"][0]["order"])
+    min_dof = int(cfg["base"].get("min_loo_dof", 1))
     best = None
     tried = []
+    skipped = []
     for vo in range(1, v_cap + 1):
         for cross, cmd in ((False, 2), (True, 2), (True, 3)):
             c = copy.deepcopy(cfg)
@@ -325,16 +360,19 @@ def select_basis(y, sp, coords, cfg, verbose=True):
             c["base"]["cross_max_degree"] = cmd
             exps, names, _ = expand_terms(c, [nv, nlv])
             phi = design_matrix(coords, exps)
-            if len(S) - phi.shape[1] < 1:            # 0 dof -> seen-LOO is meaningless
+            dof = len(S) - phi.shape[1]
+            if dof < min_dof:
+                skipped.append((vo, cross, cmd, len(names) + 1, dof))
                 continue
             loo, _ = fit_field(y, phi, sp, coords, c)
             err = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
-            tried.append((err, vo, cross, cmd, len(names) + 1))
+            tried.append((err, vo, cross, cmd, len(names) + 1, dof))
             if best is None or err < best[0]:
                 best = (err, vo, cross, cmd, names)
     assert best is not None, (
-        "no usable basis -- too few seen corners. Reduce the holdout or add "
-        "more corners")
+        f"no usable basis: every candidate had fewer than base.min_loo_dof="
+        f"{min_dof} leave-one-out degrees of freedom on {len(S)} seen corners. "
+        f"Lower base.min_loo_dof, reduce the holdout, or add more corners.")
     err, vo, cross, cmd, names = best
     if verbose and _base_loud():
         print(f"[BASIS] picked by seen-LOO: v^{vo} cross={cross}"
@@ -345,9 +383,14 @@ def select_basis(y, sp, coords, cfg, verbose=True):
         # entire job is to show the base numbers, that is the point. Anywhere
         # else it buries the line the reader is waiting for, so it is behind a
         # switch there: SI_BASIS_TABLE=1.
-        for e, v, cr, cd, k in sorted(tried):
-            print(f"          v^{v} cross={str(cr):5s} {k} params  {e * 1000:8.2f} ps",
-                  flush=True)
+        for e, v, cr, cd, k, d in sorted(tried):
+            print(f"          v^{v} cross={str(cr):5s} {k} params  dof={d}  "
+                  f"{e * 1000:8.2f} ps", flush=True)
+        # Excluded candidates used to vanish without a word, which is how a
+        # degenerate fold stayed invisible. Say what was dropped and why.
+        for v, cr, cd, k, d in sorted(skipped):
+            print(f"          v^{v} cross={str(cr):5s} {k} params  dof={d}  "
+                  f"     skipped (< base.min_loo_dof={min_dof})", flush=True)
     cfg["base"]["axes"][0]["order"] = vo
     cfg["base"]["cross_terms"] = cross
     cfg["base"]["cross_max_degree"] = cmd

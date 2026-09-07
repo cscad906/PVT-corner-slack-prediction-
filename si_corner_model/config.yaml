@@ -332,6 +332,46 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
+  select: true                      # true  = try every order up to v_order and
+                                    #         KEEP THE BEST by seen-corner LOO
+                                    #         (recommended -- the right order
+                                    #         differs by design and temperature)
+                                    # false = use v_order / level_order /
+                                    #         cross_terms exactly as written
+                                    #
+                                    # Note that with select: true, v_order is a
+                                    # CAP, not a choice. To make the search stop
+                                    # at v^2, leave select on and set v_order: 2.
+
+  min_loo_dof: 1                    # How many leave-one-out degrees of freedom a
+                                    # candidate needs to be considered.
+                                    #   dof = seen corners - polynomial params
+                                    #
+                                    # 1 = only skip the fully-determined case
+                                    #     (the default; nothing changes)
+                                    # 2 = also skip candidates whose LOO folds
+                                    #     are near-degenerate
+                                    #
+                                    # Why you might raise it: seen-LOO is also
+                                    # the network's TRAINING TARGET. At dof=1 the
+                                    # fold has as many points as parameters, so
+                                    # the network is trained on "predict a corner
+                                    # after losing a corner" while it is deployed
+                                    # on "interpolate with every corner present"
+                                    # -- different problems. Measured on 14nm
+                                    # 125C (6 seen, v^3 = 5 params): seen-LOO
+                                    # 20 ps vs the base's real hidden error 5 ps,
+                                    # two of six folds unidentifiable, and the
+                                    # trained model came out equal to the base.
+                                    #
+                                    # It is a TRADE: a lower order gives the
+                                    # network an honest target but may make the
+                                    # base itself worse. Run `run.sh base` at 1
+                                    # and at 2 and compare the two numbers it
+                                    # prints (seen-LOO, and hidden error) before
+                                    # deciding. Left at 1 here because that
+                                    # choice belongs to the drop, not the code.
+
   weighting: plain                  # plain    = one global OLS (recommended)
                                     # local    = fixed-bandwidth weighted OLS
                                     #            (needs bandwidth)
