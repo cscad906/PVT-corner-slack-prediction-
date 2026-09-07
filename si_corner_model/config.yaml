@@ -343,6 +343,23 @@ base:
                                     # CAP, not a choice. To make the search stop
                                     # at v^2, leave select on and set v_order: 2.
 
+  # Everything under `base:` can also be set PER TEMPERATURE, inside temps[],
+  # exactly like the holdout keys -- listed keys win, the rest are inherited:
+  #
+  #   temps:
+  #     - tag: "125"
+  #       levels: [rcmax, cmax]
+  #       hidden_corners: [[0.5, cmax]]
+  #       base: {min_loo_dof: 2}          # only this temperature
+  #     - tag: m25
+  #       levels: [rcmax, cmax, rcmin]
+  #       base: {weighting: adaptive}     # only this temperature
+  #
+  # Each temperature has its OWN grid -- 125C has no rcmin here, so it has 2
+  # levels where m25 has 3, and a different number of seen corners. The right
+  # order and the right weighting follow the grid, not the drop, so one global
+  # `base` was forcing a single compromise onto two different problems.
+
   min_loo_dof: 1                    # How many leave-one-out degrees of freedom a
                                     # candidate needs to be considered.
                                     #   dof = seen corners - polynomial params

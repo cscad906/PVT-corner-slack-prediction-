@@ -403,6 +403,31 @@ def _auto(value, default: str) -> str:
     return default if value is None or str(value) == "auto" else str(value)
 
 
+BASE_KEYS = frozenset((
+    "v_order", "level_order", "v_fit_scale", "v_token_scale", "v_gap_cap",
+    "level_fit_scale", "level_token_scale", "level_gap_cap",
+    "weighting", "cross_terms", "cross_max_degree", "select", "min_loo_dof",
+    "bandwidth", "adaptive_grid", "adaptive_k", "adaptive_amp_ratio",
+    "adaptive_clip_frac",
+))
+
+
+def _check_base_keys(b: dict, where: str) -> None:
+    """Reject a `base:` key this build does not consume.
+
+    Not typo protection -- that is the cheap half. `select` and `min_loo_dof`
+    were both spelled correctly in config.yaml, documented, and silently
+    dropped on the way to the engine, so changing them did nothing at all and
+    nothing said so. A key that is not read is now an error rather than a
+    setting that appears to be honoured.
+    """
+    unknown = sorted(set(b) - BASE_KEYS)
+    assert not unknown, (
+        f"{where}: unknown base key(s) {unknown}. Known keys are "
+        f"{sorted(BASE_KEYS)}. If one of these is new, it also has to be "
+        f"forwarded into the engine config in `expand`, or it will be ignored.")
+
+
 def _order(spec, n_levels: int, cap: int) -> int:
     """``auto`` -> the highest order those levels can identify, capped."""
     if spec is None or str(spec) == "auto":
@@ -435,6 +460,7 @@ def expand(p: dict) -> "list[dict]":
         pd = project_for(p, design)
         co, fi = pd["corners"], pd["files"]
         sp, pa, b = pd.get("split") or {}, pd.get("parsing") or {}, pd.get("base") or {}
+        _check_base_keys(b, design)
         proc = co["process"]
         volts = [float(v) for v in co["voltages"]]
         lvals = {str(k): float(v) for k, v in co["level_values"].items()}
@@ -444,6 +470,13 @@ def expand(p: dict) -> "list[dict]":
         ddir = os.path.join(p["root"], design)
         for t in pd["temps"]:
             tag, levels = str(t["tag"]), list(t["levels"])
+            # `base` is settable per temperature, like the holdout keys.
+            # The right weighting and the right basis are not properties
+            # of the drop, they are properties of the GRID, and each
+            # temperature has its own grid (125C has no rcmin here). A
+            # single global `base` forced one compromise onto both.
+            bt = _merge(b, t.get("base") or {})
+            _check_base_keys(bt, f"{design} temp {tag}")
             for lv in levels:
                 assert lv in lvals, \
                     f"temp {tag}: level {lv!r} missing from corners.level_values {sorted(lvals)}"
@@ -552,38 +585,42 @@ def expand(p: dict) -> "list[dict]":
                      # the order by seen-corner LOO, and expand_terms drops terms
                      # the grid cannot identify -- so this only makes the higher
                      # orders available to be chosen.
-                     "order": _order(b.get("v_order"), len(seen_v), 6),
-                     "fit_scale": float(b.get("v_fit_scale", 1.0)),
-                     "token_scale": float(b.get("v_token_scale", 0.1)),
-                     "gap_cap": float(b.get("v_gap_cap", 2.5))},
+                     "order": _order(bt.get("v_order"), len(seen_v), 6),
+                     "fit_scale": float(bt.get("v_fit_scale", 1.0)),
+                     "token_scale": float(bt.get("v_token_scale", 0.1)),
+                     "gap_cap": float(bt.get("v_gap_cap", 2.5))},
                     {"name": "rc", "ref": lvals[ref_lv],
-                     "order": _order(b.get("level_order"), n_seen_lv, 2),
+                     "order": _order(bt.get("level_order"), n_seen_lv, 2),
                      "levels": lvals,
-                     "fit_scale": float(b.get("level_fit_scale", 1.0)),
-                     "token_scale": float(b.get("level_token_scale", 1.0)),
-                     "gap_cap": float(b.get("level_gap_cap", 2.0))},
+                     "fit_scale": float(bt.get("level_fit_scale", 1.0)),
+                     "token_scale": float(bt.get("level_token_scale", 1.0)),
+                     "gap_cap": float(bt.get("level_gap_cap", 2.0))},
                 ],
-                "weighting": b.get("weighting", "adaptive"),
-                "cross_terms": b.get("cross_terms", True),
-                "cross_max_degree": b.get("cross_max_degree", 2),
-                "adaptive_k": b.get("adaptive_k", 6),
-                "adaptive_amp_ratio": b.get("adaptive_amp_ratio", 1.5),
-                "adaptive_clip_frac": b.get("adaptive_clip_frac", 0.3),
+                "weighting": bt.get("weighting", "adaptive"),
+                "cross_terms": bt.get("cross_terms", True),
+                "cross_max_degree": bt.get("cross_max_degree", 2),
+                # These two were readable in config.yaml and documented, but
+                # never copied here, so setting them did exactly nothing.
+                "select": bool(bt.get("select", True)),
+                "min_loo_dof": int(bt.get("min_loo_dof", 1)),
+                "adaptive_k": bt.get("adaptive_k", 6),
+                "adaptive_amp_ratio": bt.get("adaptive_amp_ratio", 1.5),
+                "adaptive_clip_frac": bt.get("adaptive_clip_frac", 0.3),
             }
             # `auto` fixes the basis SIZE here from what is identifiable; the
             # actual choice among candidate bases is made in stage_base/compute
             # by seen-LOO (see select_basis) because the right answer is
             # data-dependent, not something to hard-code.
-            if b.get("adaptive_grid"):
-                base["adaptive_grid"] = b["adaptive_grid"]
-            if b.get("weighting") == "local":
-                assert b.get("bandwidth"), "base.weighting: local requires base.bandwidth"
+            if bt.get("adaptive_grid"):
+                base["adaptive_grid"] = bt["adaptive_grid"]
+            if bt.get("weighting") == "local":
+                assert bt.get("bandwidth"), "base.weighting: local requires base.bandwidth"
             # Pass bandwidth regardless of weighting -- the comparison table in
             # `run.sh base` can only score `local` if a bandwidth exists, and
             # passing it only when weighting IS local would drop local from the
             # table forever.
-            if b.get("bandwidth"):
-                base["bandwidth"] = b["bandwidth"]
+            if bt.get("bandwidth"):
+                base["bandwidth"] = bt["bandwidth"]
 
             models.append({
                 "name": f"{design}/{tag}", "design": design, "temp": tag,
