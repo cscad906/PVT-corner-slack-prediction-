@@ -144,18 +144,22 @@ proc auto_scaling::bracket {values target axis} {
     return [list $lower $upper]
 }
 
-# Pure Tcl: no PT commands, no library loads, no output files.
 proc auto_scaling::plan {cfg} {
     set process [string toupper [need $cfg target_process]]
     set tv [number [need $cfg target_v]]
     set tt [number [need $cfg target_t]]
     set mode [string toupper [need $cfg mode]]
-    if {$mode ni {V T VT}} { error "mode must be V, T, or VT (no automatic change of interpolation axis)" }
+    if {[lsearch -exact [list V T VT] $mode] < 0} {
+        error "SCALING_AXIS must be V, T, or VT"
+    }
+
     set cat [catalog $cfg]
     set rows [dict get $cat rows]
     set families {}
     foreach row $rows {
-        if {[dict get $row process] eq $process} { lappend families [dict get $row family] }
+        if {[dict get $row process] eq $process} {
+            lappend families [dict get $row family]
+        }
     }
     set families [lsort -unique $families]
     set family [option $cfg family ""]
@@ -171,10 +175,12 @@ proc auto_scaling::plan {cfg} {
         if {[dict get $row process] ne $process || [dict get $row family] ne $family} {
             continue
         } elseif {[same [dict get $row v] $tv] && [same [dict get $row t] $tt]} {
-            # Exclude every exact target representation before building the group.
             lappend excluded $row
-        } else { lappend pool $row }
+        } else {
+            lappend pool $row
+        }
     }
+
     set eligible {}
     set vs {}
     set ts {}
@@ -187,14 +193,26 @@ proc auto_scaling::plan {cfg} {
         lappend vs $v
         lappend ts $t
     }
-    if {$mode eq "T"} { set vv [list $tv] } else { set vv [bracket $vs $tv voltage] }
-    if {$mode eq "V"} { set tts [list $tt] } else { set tts [bracket $ts $tt temperature] }
+
+    if {$mode eq "T"} {
+        set vv [list $tv]
+    } else {
+        set vv [bracket $vs $tv voltage]
+    }
+    if {$mode eq "V"} {
+        set tts [list $tt]
+    } else {
+        set tts [bracket $ts $tt temperature]
+    }
+
     set selected {}
     foreach v $vv {
         foreach t $tts {
             set matches {}
             foreach row $eligible {
-                if {[same [dict get $row v] $v] && [same [dict get $row t] $t]} { lappend matches $row }
+                if {[same [dict get $row v] $v] && [same [dict get $row t] $t]} {
+                    lappend matches $row
+                }
             }
             if {[llength $matches] != 1} {
                 error "Need exactly one library at $process/$v V/$t C; found [llength $matches]. Missing rectangle corner or duplicate revisions."
@@ -202,25 +220,34 @@ proc auto_scaling::plan {cfg} {
             lappend selected [lindex $matches 0]
         }
     }
-    set result [dict create process $process v $tv t $tt mode $mode family $family \
-        selected $selected excluded $excluded catalog $rows shadows [dict get $cat shadows]]
-    # Library-only callers may omit extraction settings. run always requires them.
-    if {[dict exists $cfg spef_template] || [dict exists $cfg spef]} {
-        dict set result spef [select_spef $cfg]
-        dict set result rc [option $cfg target_rc ""]
-    }
+
+    set result [dict create]
+    dict set result process $process
+    dict set result v $tv
+    dict set result t $tt
+    dict set result mode $mode
+    dict set result family $family
+    dict set result selected $selected
+    dict set result excluded $excluded
+    dict set result catalog $rows
+    dict set result shadows [dict get $cat shadows]
     if {[option $cfg fixed_tcl ""] ne ""} {
         dict set result fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
     }
+
     puts "TARGET: $process  $tv V  $tt C; mode=$mode; family=$family"
-    foreach row $excluded { puts "EXCLUDED TARGET: [dict get $row file]" }
-    if {![llength $excluded]} { puts "TARGET LIBRARY: absent (prediction only; no target library required)" }
-    foreach row $selected { puts "SCALING INPUT: [dict get $row file]" }
-    if {[dict exists $result spef]} { puts "TARGET SPEF: [dict get $result spef]" }
+    foreach row $excluded {
+        puts "EXCLUDED TARGET: [dict get $row file]"
+    }
+    if {![llength $excluded]} {
+        puts "TARGET LIBRARY: absent"
+    }
+    foreach row $selected {
+        puts "SCALING INPUT: [dict get $row file]"
+    }
     if {[dict exists $result fixed]} {
         puts "FIXED PATHS: [dict get $result fixed count] from [dict get $result fixed file]"
     }
-    puts "Same-stem LIB files superseded by DB: [llength [dict get $cat shadows]]"
     return $result
 }
 
