@@ -166,7 +166,15 @@ def build_design(cfg: dict, split: Split, y=None):
     When ``base.select`` is on (the default) and ``y`` is given, the basis is
     CHOSEN by seen-corner LOO rather than assumed -- see ``run.select_basis``.
     Every stage (base / train / predict) passes the same y, so they all land on
-    the same basis and the model matches the base it was trained against."""
+    the same basis and the model matches the base it was trained against.
+
+    The second-axis COORDINATES are chosen the same way and for the same
+    reason, before the basis is -- see ``run.fit_level_coords``. Both hooks are
+    here rather than in the callers so that base, train and predict cannot
+    disagree about the grid the model was fit on."""
+    if y is not None and cfg["base"].get("fit_level_values", True):
+        from si_model.run import fit_level_coords
+        cfg = fit_level_coords(y, split, cfg)
     ref_vt = split.vt[split.ref_ci]
     scales = np.asarray(fit_scales(cfg))
     A = split.vt.shape[1]

@@ -271,6 +271,183 @@ def _base_loud() -> bool:
     return _stage() == "base" or os.environ.get("SI_VERBOSE", "0") != "0"
 
 
+def fit_level_coords(y, sp, cfg, verbose=True):
+    """Choose the second-axis (BEOL level) COORDINATES and its polynomial ORDER
+    from the data, by the same seen-corner LOO criterion that already chooses
+    the voltage basis.
+
+    ``corners.level_values`` is a hand-written guess -- typically -1 / 0 / 1 --
+    and only its SPACING carries meaning, since the reference is subtracted
+    before fitting. Nothing ever checked it, and the level polynomial is fit
+    against exactly those numbers, so a middle level that does not really sit
+    halfway makes the fit wrong between the levels and worse beyond them. That
+    is where the held-out corners are.
+
+    Measured on the company drop (PERIC0/m25, mean slack per level):
+
+        rcmin   1485 ps        declared -1
+        cmax    1466 ps        declared  0     <- not between the other two
+        rcmax  ~1524 ps        declared +1
+
+    cmax is outside rcmin altogether: the declared order rcmin < cmax < rcmax
+    is not the order the data has. On those coordinates the two m25 holdouts
+    came out at 14 ps (a level-axis INTERPOLATION) and 30 ps against 5 ps at
+    125C -- which has two levels, so its axis is defined by its own endpoints
+    and cannot be wrong this way.
+
+    Order and coordinates have to be chosen TOGETHER, because the coordinate is
+    only identifiable at order 1. With three levels a quadratic passes through
+    all three exactly whatever coordinates they are given, so the seen corners
+    say nothing about where the middle one belongs. Measured on synthetic data
+    whose true middle level sits at -1.984:
+
+        level_order 2   fitted -0.040    seen-LOO  3.04 -> 3.04 ps   (no signal)
+        level_order 1   fitted -1.980    seen-LOO 27.15 -> 2.25 ps   (recovered)
+
+    Both parameterizations spend two parameters on the level axis. The order-1
+    one spends them on a single shared severity axis, which is a far stronger
+    constraint away from the measured cells than a free quadratic.
+
+    Two levels are held fixed as anchors -- the axis is invariant under any
+    affine map, so only the positions BETWEEN them are free -- and hidden
+    labels are never read, exactly as in ``select_basis``. The declared setup
+    is always among the candidates and only loses by more than
+    ``base.level_fit_margin``, so this can match but not silently undercut what
+    the config asserted.
+
+    ``base.fit_level_values: false`` pins the declared numbers. A grid with
+    fewer than three levels has nothing to fit and is returned untouched.
+    """
+    import copy
+
+    import numpy as np
+
+    from si_model.config import expand_terms, fit_scales
+    from si_model.model.base_ols import design_matrix
+    from si_model.training.loo import Split, fit_field
+
+    try:
+        lv_all = {str(k): float(v) for k, v in
+                  (cfg["base"]["axes"][1].get("levels") or {}).items()}
+    except (KeyError, IndexError):
+        return cfg
+    # Only levels that actually occur in THIS grid can be fit: 125C declares
+    # rcmin globally but never measures it.
+    present = [n for n, c in lv_all.items()
+               if np.any(np.abs(sp.vt[:, 1] - c) < 1e-9)]
+    if len(present) < 3:
+        return cfg
+    order = sorted(present, key=lambda n: lv_all[n])
+    lo_n, hi_n = order[0], order[-1]
+    lo_c, hi_c = lv_all[lo_n], lv_all[hi_n]
+    span = abs(hi_c - lo_c) or 1.0
+    free = order[1:-1]
+    declared_order = int(cfg["base"]["axes"][1]["order"])
+    margin = float(cfg["base"].get("level_fit_margin", 0.02))
+
+    def coords_for(lv):
+        vt2 = sp.vt.copy()
+        for name, coord in lv.items():
+            vt2[np.abs(sp.vt[:, 1] - lv_all[name]) < 1e-9, 1] = coord
+        ref_vt = vt2[sp.ref_ci]
+        scales = np.asarray(fit_scales(cfg))
+        return vt2, np.stack([(vt2[:, a] - ref_vt[a]) / scales[a]
+                              for a in range(vt2.shape[1])], 1)
+
+    def scorer(lvl_order):
+        """seen-LOO under a level map, with basis and level order held fixed.
+
+        The voltage basis is selected ONCE here and then frozen. Re-selecting
+        it inside the coordinate search lets the basis absorb whatever the
+        coordinates do, which flattens the objective until the winner is noise
+        -- measured: every true position from 0.0 to -1.984 converged to the
+        same +0.990 with seen-LOO unmoved.
+        """
+        c = copy.deepcopy(cfg)
+        c["base"]["axes"][1]["order"] = lvl_order
+        vt0, co0 = coords_for(lv_all)
+        if c["base"].get("select", True):
+            c = select_basis(y, sp, co0, c, verbose=False)
+            c["base"]["axes"][1]["order"] = lvl_order
+        n_seen_lv = [int(np.unique(np.round(vt0[sp.seen_idx, a], 9)).size)
+                     for a in range(vt0.shape[1])]
+        exps, _, _ = expand_terms(c, n_seen_lv)
+
+        def sc(lv):
+            vt2, co = coords_for(lv)
+            sp2 = Split(sp.corners, vt2, sp.seen, sp.hidden, sp.ref_ci)
+            loo, _ = fit_field(y, design_matrix(co, exps), sp2, co, c)
+            S = sp2.seen_idx
+            return float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
+        return sc
+
+    def search(lvl_order):
+        """Best (seen-LOO, level map) at this level order."""
+        sc = scorer(lvl_order)
+        best, best_err = dict(lv_all), sc(lv_all)
+        for _ in range(2):
+            for name in free:
+                # Sweep well outside the anchors: the whole point is that a
+                # level may not lie between them.
+                grid = list(np.linspace(lo_c - span, hi_c + span, 41))
+                grid.append(lv_all[name])          # never lose to the guess
+                cur, cur_err = best[name], best_err
+                for c in grid:
+                    t = dict(best); t[name] = float(c)
+                    e = sc(t)
+                    # A move must EARN it. With a flat objective a strict
+                    # inequality wanders: that is how a coordinate whose true
+                    # value was 0.4 drifted to +0.990 on unchanged seen-LOO.
+                    if e < cur_err * (1.0 - margin):
+                        cur, cur_err = float(c), e
+                if cur != best[name]:
+                    step = 2.0 * span / 40.0
+                    for c in np.linspace(cur - step, cur + step, 21):
+                        t = dict(best); t[name] = float(c)
+                        e = sc(t)
+                        if e < cur_err:
+                            cur, cur_err = float(c), e
+                best[name], best_err = cur, cur_err
+        return best_err, best
+
+    declared_err = scorer(declared_order)(lv_all)
+    cands = []
+    for lvl_order in range(1, declared_order + 1):
+        err, lv = search(lvl_order)
+        cands.append((err, lvl_order, lv))
+    best_err, best_order, best_lv = min(cands, key=lambda t: t[0])
+
+    take = best_err < declared_err * (1.0 - margin)
+    if verbose and _base_loud():
+        for err, lvl_order, lv in sorted(cands, key=lambda t: t[0]):
+            pos = ", ".join(f"{n}={lv[n]:+.3f}" for n in free)
+            print(f"[LEVELS] level_order {lvl_order}: {pos}  "
+                  f"seen-LOO {err * 1000:8.2f} ps", flush=True)
+        print(f"[LEVELS] declared (order {declared_order}, "
+              + ", ".join(f"{n}={lv_all[n]:+.3f}" for n in free)
+              + f") seen-LOO {declared_err * 1000:.2f} ps", flush=True)
+        if take:
+            print(f"[LEVELS] -> using level_order {best_order} with the fitted "
+                  f"coordinates (anchors {lo_n} {lo_c:+.3f}, {hi_n} "
+                  f"{hi_c:+.3f}). base.fit_level_values: false pins the "
+                  f"declared ones.", flush=True)
+        else:
+            print(f"[LEVELS] -> keeping the declared values: nothing beat them "
+                  f"by {margin * 100:.0f}%. At level_order {declared_order} "
+                  f"with {len(present)} levels the polynomial fits the seen "
+                  f"corners exactly at any coordinates, so a flat result here "
+                  f"means the seen corners cannot settle it -- read the "
+                  f"[level axis] line for what they CAN say.", flush=True)
+    if not take:
+        return cfg
+    cfg = copy.deepcopy(cfg)
+    cfg["base"]["axes"][1]["levels"] = dict(best_lv)
+    cfg["base"]["axes"][1]["order"] = best_order
+    vt2, _ = coords_for(best_lv)
+    sp.vt = vt2                     # every later stage reads the fitted grid
+    return cfg
+
+
 def select_basis(y, sp, coords, cfg, verbose=True):
     """Pick the polynomial basis by SEEN-corner leave-one-out error.
 
@@ -408,7 +585,7 @@ BASE_KEYS = frozenset((
     "level_fit_scale", "level_token_scale", "level_gap_cap",
     "weighting", "cross_terms", "cross_max_degree", "select", "min_loo_dof",
     "bandwidth", "adaptive_grid", "adaptive_k", "adaptive_amp_ratio",
-    "adaptive_clip_frac",
+    "adaptive_clip_frac", "fit_level_values", "level_fit_margin",
 ))
 
 
@@ -603,6 +780,8 @@ def expand(p: dict) -> "list[dict]":
                 # never copied here, so setting them did exactly nothing.
                 "select": bool(bt.get("select", True)),
                 "min_loo_dof": int(bt.get("min_loo_dof", 1)),
+                "fit_level_values": bool(bt.get("fit_level_values", True)),
+                "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),
                 "adaptive_amp_ratio": bt.get("adaptive_amp_ratio", 1.5),
                 "adaptive_clip_frac": bt.get("adaptive_clip_frac", 0.3),

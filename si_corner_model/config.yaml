@@ -332,6 +332,41 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
+  fit_level_values: true            # Measure the BEOL level coordinates from the
+                                    # data instead of trusting corners.level_values,
+                                    # choosing the level ORDER at the same time.
+                                    #
+                                    # level_values (-1 / 0 / 1) is a guess. Only the
+                                    # spacing means anything, and it asserts that the
+                                    # middle level sits exactly halfway. On the
+                                    # company drop it does not: PERIC0/m25 mean slack
+                                    # is rcmin 1485, cmax 1466, rcmax ~1524 ps --
+                                    # cmax is OUTSIDE rcmin, not between the two. The
+                                    # level polynomial was being fit on an axis the
+                                    # data does not have, and the two m25 holdouts
+                                    # came out at 14 and 30 ps against 5 ps at 125C
+                                    # (which has 2 levels, so its axis is defined by
+                                    # its own endpoints and cannot be wrong this way).
+                                    #
+                                    # Order and coordinates are chosen together
+                                    # because the coordinate only means anything at
+                                    # order 1: with 3 levels a quadratic passes
+                                    # through all three whatever coordinates they get.
+                                    # Measured on synthetic data with a true middle
+                                    # level at -1.984:
+                                    #   level_order 2  fitted -0.040  no improvement
+                                    #   level_order 1  fitted -1.980  27.1 -> 2.2 ps
+                                    #
+                                    # Scored by seen-corner LOO, exactly like the
+                                    # basis -- hidden labels are never read. The
+                                    # declared setup is always a candidate.
+                                    # false = use corners.level_values as written.
+  level_fit_margin: 0.02            # A fitted position must beat the declared one by
+                                    # this fraction of seen-LOO to be used. Guards a
+                                    # flat objective: with a strict inequality the
+                                    # search wandered to a meaningless value while
+                                    # seen-LOO never moved.
+
   select: true                      # true  = try every order up to v_order and
                                     #         KEEP THE BEST by seen-corner LOO
                                     #         (recommended -- the right order
