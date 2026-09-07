@@ -932,11 +932,18 @@ def _print_level_spacing(y, split, cfg) -> None:
     """
     import numpy as np
 
+    tag = "    [level axis ]"
     try:
         lv = cfg["base"]["axes"][1].get("levels") or {}
     except (KeyError, IndexError):
-        return
-    if len(lv) < 3:                     # 2 levels define the axis by themselves
+        lv = {}
+    if len(lv) < 3:
+        # Two levels define the axis between them: there is no middle level
+        # whose position could be wrong. Say so rather than printing nothing --
+        # a check that stays silent is indistinguishable from a check that is
+        # not running, which is exactly how it was first reported missing.
+        print(f"{tag} {len(lv)} levels declared -- nothing to measure "
+              f"(a 2-level axis is defined by its own endpoints)", flush=True)
         return
     coord_of = {str(k): float(v) for k, v in lv.items()}
     by_coord = sorted(coord_of.items(), key=lambda kv: kv[1])
@@ -970,9 +977,15 @@ def _print_level_spacing(y, split, cfg) -> None:
             used = True
         n_used += 1 if used else 0
     if not n_used or not any(rows.values()):
+        present = sorted({n for n, c in coord_of.items()
+                          if any(abs(vt[ci, 1] - c) < 1e-9 and seen[ci]
+                                 for ci in range(vt.shape[0]))})
+        print(f"{tag} cannot measure: no voltage has {lo_name} and {hi_name} "
+              f"seen together with a level in between. Seen levels here: "
+              f"{present}", flush=True)
         return
 
-    print(f"    [level axis ] measured at {n_used} voltage(s) where "
+    print(f"{tag} measured at {n_used} voltage(s) where "
           f"{lo_name}/{hi_name} are both seen")
     print(f"                  {lo_name:>8s} {lo_c:7.3f} (anchor)      "
           f"{hi_name:>8s} {hi_c:7.3f} (anchor)")
