@@ -1310,6 +1310,31 @@ def _print_seen_fit(y, phi, split, field, unit) -> None:
           f"max {h.max():.3f}")
 
 
+def _order_agreement(y, at) -> float:
+    """Fraction of paths whose level ordering matches the ordering of the means.
+
+    The level axis is ONE shared coordinate: every path is assumed to see the
+    levels in the same order, differing only in how strongly. That assumption
+    has never been checked, and it is the one that decides whether fixing the
+    coordinates can work at all. If a third of paths order rcmin and cmax the
+    other way round, no single axis is right for them, the polynomial fits the
+    majority, and the rest are a floor that no amount of respacing removes.
+
+    Asked directly by the reader who noticed that correcting the order made
+    seen-LOO worse rather than better -- "is the order different per corner?"
+    """
+    import numpy as np
+
+    names = sorted(at, key=lambda n: at[n])
+    cols = np.stack([y[:, at[n]] for n in names], axis=1)      # [N, L]
+    ok = np.isfinite(cols).all(axis=1)
+    if not ok.any():
+        return float("nan")
+    ranks = np.argsort(np.argsort(cols[ok], axis=1), axis=1)
+    mean_rank = np.argsort(np.argsort(np.nanmean(cols[ok], axis=0)))
+    return float((ranks == mean_rank[None, :]).all(axis=1).mean())
+
+
 def _print_basis_comparison(y, split, coords, cfg, hid) -> None:
     """What each basis candidate scores on seen-LOO AND on the hidden corners.
 
@@ -1442,6 +1467,7 @@ def _print_level_spacing(y, split, cfg) -> None:
     volts = np.unique(np.round(vt[:, 0], 9))
     rows = {name: [] for name, _ in by_coord[1:-1]}
     raw = {name: [] for name, _ in by_coord}      # mean field value per level
+    agree = []
     n_used = 0
     for v in volts:
         at = {}
@@ -1469,6 +1495,8 @@ def _print_level_spacing(y, split, cfg) -> None:
             for name in raw:
                 if name in at:
                     raw[name].append(float(np.nanmean(y[:, at[name]])))
+            if len(at) == len(coord_of):
+                agree.append(_order_agreement(y, at))
     if not n_used or not any(rows.values()):
         present = sorted({n for n, c in coord_of.items()
                           if any(abs(vt[ci, 1] - c) < 1e-9 and seen[ci]
@@ -1500,6 +1528,16 @@ def _print_level_spacing(y, split, cfg) -> None:
         print(f"                  {name:>8s} {c:7.3f} declared -> "
               f"{a.mean():7.3f} measured  {mean_s}  (spread "
               f"{a.max() - a.min():.3f})")
+    if agree:
+        a = float(np.mean(agree)) * 100.0
+        print(f"                  per-path agreement with this order: {a:.1f}% "
+              f"of paths rank the levels the same way as the mean does")
+        if a < 90.0:
+            print(f"                  -> {100.0 - a:.1f}% of paths order the "
+                  f"levels differently, so NO single coordinate is right for "
+                  f"all of them. A shared axis fits the majority and misfits "
+                  f"the rest; that misfit is a floor no spacing can remove, "
+                  f"and it is what the neural residual would have to carry.")
     # Order is the blunt statement of the same thing, and the one that says
     # whether this is a spacing problem or an ordering problem.
     dec = [n for n, _ in by_coord]
