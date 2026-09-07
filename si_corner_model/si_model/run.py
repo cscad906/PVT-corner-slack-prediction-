@@ -901,8 +901,97 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
+    _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
+
+
+def _print_level_spacing(y, split, cfg) -> None:
+    """Measure where each BEOL level actually sits on the severity axis, and
+    compare it with the coordinates ``corners.level_values`` declares.
+
+    Those coordinates are a guess. Only their SPACING matters (the reference is
+    subtracted before fitting), and the usual -1 / 0 / 1 asserts that the middle
+    level is exactly halfway between the outer two. Nothing checks that, and
+    everything downstream is built on it: the level polynomial is fit on those
+    coordinates, so a middle level that really sits at 0.4 makes the quadratic
+    wrong everywhere, worst at the ends.
+
+    It does not have to be a guess. At any voltage where all levels are seen,
+    the measured values give the answer directly: place the outer two levels at
+    their declared coordinates and read off where the measurement puts the ones
+    in between. Averaged over such voltages, with the spread reported -- if the
+    implied position moves with voltage, then no single spacing fits and the
+    cross terms are carrying it.
+
+    Observed on PERIC0/m25, where this was written: hidden (0.5, cmax) is a
+    level-axis INTERPOLATION -- rcmin and rcmax are both seen at 0.5 -- and
+    still came out at 14 ps, while the level-axis extrapolation (0.685, rcmin)
+    came out at 30. An interpolation that bad is the axis coordinates being
+    wrong, not the fit.
+    """
+    import numpy as np
+
+    try:
+        lv = cfg["base"]["axes"][1].get("levels") or {}
+    except (KeyError, IndexError):
+        return
+    if len(lv) < 3:                     # 2 levels define the axis by themselves
+        return
+    coord_of = {str(k): float(v) for k, v in lv.items()}
+    by_coord = sorted(coord_of.items(), key=lambda kv: kv[1])
+    lo_name, lo_c = by_coord[0]
+    hi_name, hi_c = by_coord[-1]
+
+    vt, seen = split.vt, split.seen
+    volts = np.unique(np.round(vt[:, 0], 9))
+    rows = {name: [] for name, _ in by_coord[1:-1]}
+    n_used = 0
+    for v in volts:
+        at = {}
+        for ci in range(vt.shape[0]):
+            if not seen[ci] or abs(vt[ci, 0] - v) > 1e-9:
+                continue
+            for name, c in coord_of.items():
+                if abs(vt[ci, 1] - c) < 1e-9:
+                    at[name] = ci
+        if lo_name not in at or hi_name not in at:
+            continue
+        y_lo = float(np.nanmean(y[:, at[lo_name]]))
+        y_hi = float(np.nanmean(y[:, at[hi_name]]))
+        if abs(y_hi - y_lo) < 1e-12:
+            continue
+        used = False
+        for name in rows:
+            if name not in at:
+                continue
+            y_m = float(np.nanmean(y[:, at[name]]))
+            rows[name].append(lo_c + (y_m - y_lo) / (y_hi - y_lo) * (hi_c - lo_c))
+            used = True
+        n_used += 1 if used else 0
+    if not n_used or not any(rows.values()):
+        return
+
+    print(f"    [level axis ] measured at {n_used} voltage(s) where "
+          f"{lo_name}/{hi_name} are both seen")
+    print(f"                  {lo_name:>8s} {lo_c:7.3f} (anchor)      "
+          f"{hi_name:>8s} {hi_c:7.3f} (anchor)")
+    worst = 0.0
+    for name, vals in rows.items():
+        if not vals:
+            continue
+        a = np.asarray(vals)
+        gap = abs(float(a.mean()) - coord_of[name])
+        span = abs(hi_c - lo_c)
+        worst = max(worst, gap / span if span else 0.0)
+        print(f"                  {name:>8s} declared {coord_of[name]:7.3f}   "
+              f"measured {a.mean():7.3f}  (spread {a.max() - a.min():.3f} "
+              f"across voltages)")
+    if worst > 0.05:
+        print(f"                  -> declared and measured differ by "
+              f"{worst * 100:.0f}% of the axis. Put the measured value in "
+              f"corners.level_values and re-run; the level polynomial is fit "
+              f"on these coordinates.")
 
 
 def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
