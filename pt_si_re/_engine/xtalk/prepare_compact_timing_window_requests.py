@@ -8,7 +8,7 @@ from typing import Set
 
 
 def write_lines(path: Path, values: Set[str]) -> None:
-    with path.open("w") as fh:
+    with path.open("w", encoding="utf-8", errors="surrogateescape") as fh:
         for value in sorted(values):
             if value:
                 fh.write(value + "\n")
@@ -31,7 +31,7 @@ def main() -> int:
     aggressor_nets: Set[str] = set()
     rows = 0
 
-    with feature_file.open(newline="") as fh:
+    with feature_file.open(newline="", encoding="utf-8", errors="surrogateescape") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
             rows += 1

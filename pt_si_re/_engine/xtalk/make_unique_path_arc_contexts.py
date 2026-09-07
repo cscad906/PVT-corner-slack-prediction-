@@ -17,7 +17,7 @@ def main() -> int:
     out_file = Path(sys.argv[2])
 
     contexts: Dict[Tuple[str, str, str], Dict[str, str]] = OrderedDict()
-    with in_file.open(newline="") as fh:
+    with in_file.open(newline="", encoding="utf-8", errors="surrogateescape") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
             key = (row["victim_net"], row["victim_driver_pin"], row["victim_load_pin"])
@@ -42,7 +42,7 @@ def main() -> int:
         "first_arc_idx",
         "occurrence_count",
     ]
-    with out_file.open("w", newline="") as fh:
+    with out_file.open("w", newline="", encoding="utf-8", errors="surrogateescape") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
         writer.writeheader()
         writer.writerows(contexts.values())

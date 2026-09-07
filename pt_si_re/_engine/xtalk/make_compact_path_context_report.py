@@ -27,13 +27,13 @@ FIELDNAMES = [
 
 
 def read_tsv_by_key(path: Path, key: str) -> Dict[str, Dict[str, str]]:
-    with path.open(newline="") as fh:
+    with path.open(newline="", encoding="utf-8", errors="surrogateescape") as fh:
         return {row[key]: row for row in csv.DictReader(fh, delimiter="\t")}
 
 
 def read_segment_map(path: Path) -> Dict[Tuple[str, str, str, str, str], str]:
     out: Dict[Tuple[str, str, str, str, str], str] = {}
-    with path.open(newline="") as fh:
+    with path.open(newline="", encoding="utf-8", errors="surrogateescape") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             key = (row["path_id"], row["arc_idx"], row["victim_net"], row["victim_driver_pin"], row["victim_load_pin"])
             out[key] = row["path_segment"]
@@ -61,7 +61,7 @@ def build_rows(
 ) -> Dict[str, Dict[str, object]]:
     segment_by_arc = read_segment_map(path_arc_file)
     by_path: Dict[str, Dict[str, object]] = OrderedDict()
-    with feature_file.open(newline="") as fh:
+    with feature_file.open(newline="", encoding="utf-8", errors="surrogateescape") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             path_id = row["path_id"]
             if path_id not in by_path:
@@ -102,7 +102,7 @@ def build_rows(
 
 def write_flat(by_path: Dict[str, Dict[str, object]], out: Path) -> int:
     count = 0
-    with out.open("w", newline="") as fh:
+    with out.open("w", newline="", encoding="utf-8", errors="surrogateescape") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, delimiter="\t", lineterminator="\n")
         writer.writeheader()
         for data in by_path.values():
@@ -113,7 +113,7 @@ def write_flat(by_path: Dict[str, Dict[str, object]], out: Path) -> int:
 
 
 def write_by_path(by_path: Dict[str, Dict[str, object]], out: Path) -> None:
-    with out.open("w", newline="") as fh:
+    with out.open("w", newline="", encoding="utf-8", errors="surrogateescape") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, delimiter="\t", lineterminator="\n")
         for data in by_path.values():
             meta = data["meta"]

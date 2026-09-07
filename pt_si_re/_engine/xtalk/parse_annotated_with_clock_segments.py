@@ -238,7 +238,7 @@ def parse_report(report: Path, emit) -> List[Dict[str, str]]:
 
 
 def write_tsv(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
-    with path.open("w", newline="") as fh:
+    with path.open("w", newline="", encoding="utf-8", errors="surrogateescape") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t", lineterminator="\n", extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
@@ -279,7 +279,7 @@ def main() -> int:
             "raw_net_line",
     ]
     n_rows = 0
-    with victim_out.open("w", newline="") as fh:
+    with victim_out.open("w", newline="", encoding="utf-8", errors="surrogateescape") as fh:
         writer = csv.DictWriter(fh, fieldnames=victim_fields, delimiter="\t",
                                 lineterminator="\n", extrasaction="ignore")
         writer.writeheader()

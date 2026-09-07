@@ -35,8 +35,21 @@ def force_utf8():
     if sys.version_info[0] < 3:
         return
     enc = (getattr(sys.stdout, "encoding", None) or "").lower().replace("-", "")
+
+    # 'backslashreplace' 를 쓰는 이유
+    #     입력 파일을 errors="surrogateescape" 로 읽으므로, 넷 이름에 UTF-8 이
+    #     아닌 바이트가 있으면 그것이 \udcXX 형태로 문자열에 남는다. 그 이름을
+    #     화면에 찍으려 하면 기본(strict) 처리에서 죽는다.
+    #         UnicodeEncodeError: 'utf-8' codec can't encode character '\udcb5'
+    #     backslashreplace 는 죽지 않으면서 어떤 바이트였는지도 보여 준다.
     if "utf8" in enc:
-        return
+        # 이미 UTF-8 이라 인코딩은 맞다. 오류 처리만 느슨하게 바꾼다.
+        try:
+            sys.stdout.reconfigure(errors="backslashreplace")   # 3.7+
+            sys.stderr.reconfigure(errors="backslashreplace")
+            return
+        except Exception:
+            pass                                               # 3.6 -> 아래에서 감싼다
     try:
         import codecs
         writer = codecs.getwriter("utf-8")
@@ -44,9 +57,8 @@ def force_utf8():
         # 바이트 스트림이라 그대로 감싼다.
         out = getattr(sys.stdout, "buffer", sys.stdout)
         err = getattr(sys.stderr, "buffer", sys.stderr)
-        # 'replace' : 혹시 못 쓰는 글자가 있어도 죽지 말고 ? 로 대신한다.
-        sys.stdout = writer(out, "replace")
-        sys.stderr = writer(err, "replace")
+        sys.stdout = writer(out, "backslashreplace")
+        sys.stderr = writer(err, "backslashreplace")
     except Exception:
         # 여기서 실패해도 스크립트 자체는 계속 가야 한다.
         pass
@@ -75,7 +87,10 @@ class _AtomicWrite(object):
     def __enter__(self):
         import io
         if sys.version_info[0] >= 3:
-            self.fh = io.open(self.tmp, "w", encoding="utf-8")
+            # 읽을 때 surrogateescape 로 살려 둔 바이트를 그대로 써낸다.
+            # 이것이 없으면 "surrogates not allowed" 로 쓰기에서 죽는다.
+            self.fh = io.open(self.tmp, "w", encoding="utf-8",
+                              errors="surrogateescape")
         else:
             self.fh = open(self.tmp, "w")
         return self.fh

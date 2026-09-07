@@ -171,7 +171,7 @@ def read_raw_blocks(path: Path) -> Dict[str, Dict[str, object]]:
 
 
 def load_contexts(path: Path) -> Dict[Tuple[str, str, str], str]:
-    with path.open(newline="") as fh:
+    with path.open(newline="", encoding="utf-8", errors="surrogateescape") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         return {
             (row["victim_net"], row["victim_driver_pin"], row["victim_load_pin"]): row["context_id"]
@@ -196,7 +196,7 @@ def write_summary(blocks: Dict[str, Dict[str, object]], out: Path) -> None:
         "rise_active_count",
         "fall_active_count",
     ]
-    with out.open("w", newline="") as fh:
+    with out.open("w", newline="", encoding="utf-8", errors="surrogateescape") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
         writer.writeheader()
         for context_id in sorted(blocks, key=lambda x: int(x)):
@@ -349,7 +349,8 @@ def main() -> int:
     missing_context = 0
     status_counts: Counter[str] = Counter()
 
-    with path_rows_file.open(newline="") as pf, active_out.open("w", newline="") as of:
+    with path_rows_file.open(newline="", encoding="utf-8", errors="surrogateescape") as pf, \
+            active_out.open("w", newline="", encoding="utf-8", errors="surrogateescape") as of:
         reader = csv.DictReader(pf, delimiter="\t")
         writer = csv.DictWriter(of, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
         writer.writeheader()

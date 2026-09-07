@@ -248,7 +248,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     except OSError:
         _spef_size = None
 
-    with open(report_path, 'r') as f:
+    with open(report_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
         report_lines = f.readlines()
 
     queries = []
@@ -346,7 +346,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     norm_leaf_to_ids = {}
     id_to_name = {}
     name_entries = []
-    with open(spef_path, 'r') as f:
+    with open(spef_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
         in_name_map = False
         for line in f:
             _tk(f)
@@ -383,7 +383,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
     _sys.stdout.flush()
     _tk = Tick("2-1. port alias", _spef_size)
     port_id_to_dnet_ids = {}
-    with open(spef_path, 'r') as f:
+    with open(spef_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
         current_dnet = None
         for raw in f:
             _tk(f)
@@ -629,7 +629,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                     'recv_node_token': recv[0]['node_token'],
                 }
 
-        with open(spef_path, 'r') as f:
+        with open(spef_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
             current_dnet = None
             in_conn = False
             conn_entries = []
@@ -825,7 +825,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                     continue
                 driver_only_hits[q_idx] = dnet_id
 
-        with open(spef_path, 'r') as f:
+        with open(spef_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
             current_dnet = None
             in_conn = False
             conn_entries = []
@@ -1029,7 +1029,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
                     if best_r < prev_r:
                         results[idx] = (best_r, best_d, best_c)
 
-    with open(spef_path, 'r') as f:
+    with open(spef_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
         for line in f:
             _tk3(f)
             line = line.strip()
@@ -1100,7 +1100,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         coords = {}
         res_lines = []
         conn_caps = {}
-        with open(spef_path, 'r') as f:
+        with open(spef_path, 'r', encoding='utf-8', errors='surrogateescape') as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -1200,7 +1200,7 @@ def annotate_timing_report(report_path, spef_path, output_path, lib_path=None,
         append_str = f" {str_dist:>10} {str_rpath:>10} {str_cpin:>10}\n"
         report_lines[idx] = padded_line + append_str
 
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding='utf-8', errors='surrogateescape') as f:
         f.writelines(report_lines)
 
     print(f"완료! 수정된 리포트가 저장되었습니다: {output_path}")
