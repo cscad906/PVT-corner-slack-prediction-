@@ -226,6 +226,10 @@ proc auto_scaling::used_library_names {} {
 
 proc auto_scaling::family_used_by_design {rows families} {
     set used_names [used_library_names]
+    return [families_matching_library_names $rows $families $used_names]
+}
+
+proc auto_scaling::families_matching_library_names {rows families used_names} {
     set matched {}
     foreach family $families {
         set is_used 0
@@ -240,6 +244,36 @@ proc auto_scaling::family_used_by_design {rows families} {
     }
     return [dict create family_matches [lsort -unique $matched] \
         used_library_names [lsort [dict keys $used_names]]]
+}
+
+# fixed path의 launch/capture pin이 실제로 참조하는 library 이름을 얻습니다.
+# 전체 PDK가 load되어 있어도 이 경로와 무관한 memory/IO family는 제외됩니다.
+proc auto_scaling::family_used_by_fixed_paths {rows families fixed} {
+    set pin_names {}
+    foreach item [dict get $fixed paths] {
+        lassign $item key from to through edges
+        lappend pin_names $from $to
+    }
+    set pin_names [lsort -unique $pin_names]
+    set used_names [dict create]
+    if {[llength $pin_names]} {
+        set pins [get_pins -quiet -exact $pin_names]
+        if {[sizeof_collection $pins]} {
+            set cells [get_cells -quiet -of_objects $pins]
+            if {[sizeof_collection $cells]} {
+                set lib_cells [get_lib_cells -quiet -of_objects $cells]
+                foreach_in_collection lib_cell $lib_cells {
+                    set full_name [get_attribute $lib_cell full_name]
+                    set slash [string first "/" $full_name]
+                    if {$slash > 0} {
+                        dict set used_names \
+                            [string range $full_name 0 [expr {$slash-1}]] 1
+                    }
+                }
+            }
+        }
+    }
+    return [families_matching_library_names $rows $families $used_names]
 }
 
 proc auto_scaling::bracket {values target axis} {
@@ -265,6 +299,11 @@ proc auto_scaling::plan {cfg} {
         error "SCALING_AXIS must be V, T, or VT"
     }
 
+    set fixed ""
+    if {[option $cfg fixed_tcl ""] ne ""} {
+        set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
+    }
+
     set cat [catalog $cfg]
     set rows [dict get $cat rows]
     set families {}
@@ -279,13 +318,29 @@ proc auto_scaling::plan {cfg} {
         if {[llength $families] == 1} {
             set family [lindex $families 0]
         } else {
-            set used_result [family_used_by_design $rows $families]
-            set used_matches [dict get $used_result family_matches]
-            if {[llength $used_matches] == 1} {
+            set fixed_matches {}
+            set fixed_names {}
+            if {$fixed ne ""} {
+                set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
+                set fixed_matches [dict get $fixed_result family_matches]
+                set fixed_names [dict get $fixed_result used_library_names]
+            }
+            set used_matches {}
+            set used_names {}
+            # fixed path만으로 하나를 고른 경우 전체 design hierarchy는 훑지 않습니다.
+            if {[llength $fixed_matches] != 1} {
+                set used_result [family_used_by_design $rows $families]
+                set used_matches [dict get $used_result family_matches]
+                set used_names [dict get $used_result used_library_names]
+            }
+            if {[llength $fixed_matches] == 1} {
+                set family [lindex $fixed_matches 0]
+                puts "AUTO-SELECTED LIBRARY FAMILY USED BY FIXED PATHS: $family"
+            } elseif {[llength $used_matches] == 1} {
                 set family [lindex $used_matches 0]
                 puts "AUTO-SELECTED LIBRARY FAMILY USED BY DESIGN: $family"
             } else {
-                error "Library family selection is ambiguous. PVT candidates: $families; design-used matches: $used_matches; design-used library names: [dict get $used_result used_library_names]"
+                error "Library family selection is ambiguous. PVT candidates: $families; fixed-path matches: $fixed_matches; fixed-path library names: $fixed_names; design-used matches: $used_matches; design-used library names: $used_names"
             }
         }
     }
@@ -351,9 +406,7 @@ proc auto_scaling::plan {cfg} {
     dict set result excluded $excluded
     dict set result catalog $rows
     dict set result shadows [dict get $cat shadows]
-    if {[option $cfg fixed_tcl ""] ne ""} {
-        dict set result fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
-    }
+    if {$fixed ne ""} { dict set result fixed $fixed }
 
     puts "TARGET: $process  $tv V  $tt C; mode=$mode; family=$family"
     foreach row $excluded {
