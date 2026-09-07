@@ -198,8 +198,48 @@ proc auto_scaling::corner {lib path overrides} {
             set family [report_family $lib $path $process]
         }
     }
+    set lib_name [get_attribute $lib full_name]
     return [dict create file $path process [string toupper $process] \
-        v [number $v] t [number $t] family $family]
+        v [number $v] t [number $t] family $family lib_name $lib_name]
+}
+
+# restore session의 현재 design 인스턴스들이 실제로 참조하는 library 이름입니다.
+# 단순히 메모리에 load만 된 PDK library는 여기에 포함되지 않습니다.
+proc auto_scaling::used_library_names {} {
+    set names [dict create]
+    if {![llength [info commands ::get_cells]] ||
+        ![llength [info commands ::get_lib_cells]]} {
+        return $names
+    }
+    set cells [get_cells -quiet -hierarchical *]
+    if {![sizeof_collection $cells]} { return $names }
+    set lib_cells [get_lib_cells -quiet -of_objects $cells]
+    foreach_in_collection lib_cell $lib_cells {
+        set full_name [get_attribute $lib_cell full_name]
+        set slash [string first "/" $full_name]
+        if {$slash > 0} {
+            dict set names [string range $full_name 0 [expr {$slash-1}]] 1
+        }
+    }
+    return $names
+}
+
+proc auto_scaling::family_used_by_design {rows families} {
+    set used_names [used_library_names]
+    set matched {}
+    foreach family $families {
+        set is_used 0
+        foreach row $rows {
+            if {[dict get $row family] ne $family} { continue }
+            if {[dict exists $used_names [dict get $row lib_name]]} {
+                set is_used 1
+                break
+            }
+        }
+        if {$is_used} { lappend matched $family }
+    }
+    return [dict create family_matches [lsort -unique $matched] \
+        used_library_names [lsort [dict keys $used_names]]]
 }
 
 proc auto_scaling::bracket {values target axis} {
@@ -236,10 +276,18 @@ proc auto_scaling::plan {cfg} {
     set families [lsort -unique $families]
     set family [option $cfg family ""]
     if {$family eq ""} {
-        if {[llength $families] != 1} {
-            error "Choose one library family using family or narrower globs. Candidates: $families"
+        if {[llength $families] == 1} {
+            set family [lindex $families 0]
+        } else {
+            set used_result [family_used_by_design $rows $families]
+            set used_matches [dict get $used_result family_matches]
+            if {[llength $used_matches] == 1} {
+                set family [lindex $used_matches 0]
+                puts "AUTO-SELECTED LIBRARY FAMILY USED BY DESIGN: $family"
+            } else {
+                error "Library family selection is ambiguous. PVT candidates: $families; design-used matches: $used_matches; design-used library names: [dict get $used_result used_library_names]"
+            }
         }
-        set family [lindex $families 0]
     }
     set pool {}
     set excluded {}
