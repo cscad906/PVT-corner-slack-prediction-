@@ -1158,6 +1158,21 @@ def stage_base(m: dict) -> None:
         # but stays silent, so build is followed straight by epochs.
         # `run.sh base` is where these numbers are meant to be read.
         return
+    # State the level axis actually in force, always. `level_coords: measured`
+    # not taking effect looks exactly like it taking effect and changing
+    # nothing, and the [level axis] diagnostic below prints either way -- which
+    # is how a switch that was never read got reported as a measurement.
+    mode = str(cfg["base"].get("level_coords", "declared"))
+    lv_now = (cfg["base"]["axes"][1].get("levels") or {})
+    seen_lv = sorted({float(v) for v in split.vt[split.seen_idx, 1]})
+    print(f"    [level axis in force] level_coords: {mode}   "
+          + ", ".join(f"{k}={float(v):+.3f}"
+                      for k, v in sorted(lv_now.items(), key=lambda kv: kv[1]))
+          + f"   (coordinates the fit used: {[round(x, 3) for x in seen_lv]})")
+    if mode != "measured":
+        print(f"                          -> declared values. "
+              f"`base.level_coords: measured` reads the spacing off the data "
+              f"instead; it prints a [LEVELS] block when it runs.")
     if picks:
         print("  [adaptive] " + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)))
 
