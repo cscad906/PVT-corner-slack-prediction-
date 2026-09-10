@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
 """Summarize and plot fixed-path ground-truth slack reports without extra packages."""
 
-from __future__ import annotations
-
 import argparse
 import csv
 import html
 import math
 import statistics
-from dataclasses import dataclass
 from pathlib import Path
 
 from compare_scaling_mae import TO_PS, parse_report
 
 
-@dataclass(frozen=True)
-class ReportData:
-    label: str
-    path: Path
-    total: int
-    unresolved: int
-    values_ps: list[float]
+class ReportData(object):
+    """Resolved values and counts for one report; compatible with Python 3.6."""
+
+    __slots__ = ("label", "path", "total", "unresolved", "values_ps")
+
+    def __init__(self, label, path, total, unresolved, values_ps):
+        self.label = label
+        self.path = path
+        self.total = total
+        self.unresolved = unresolved
+        self.values_ps = values_ps
 
 
-def percentile(values: list[float], percent: float) -> float:
+def percentile(values, percent):
     ordered = sorted(values)
     if len(ordered) == 1:
         return ordered[0]
@@ -36,19 +37,19 @@ def percentile(values: list[float], percent: float) -> float:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def unique_labels(paths: list[Path]) -> list[str]:
+def unique_labels(paths):
     stems = [path.stem for path in paths]
-    counts: dict[str, int] = {}
-    labels: list[str] = []
+    counts = {}
+    labels = []
     for path, stem in zip(paths, stems):
         counts[stem] = counts.get(stem, 0) + 1
         labels.append(stem if stems.count(stem) == 1 else f"{stem}_{counts[stem]}")
     return labels
 
 
-def load_reports(paths: list[Path], factor: float) -> tuple[list[ReportData], list[dict]]:
-    reports: list[ReportData] = []
-    path_rows: list[dict] = []
+def load_reports(paths, factor):
+    reports = []
+    path_rows = []
     for label, path in zip(unique_labels(paths), paths):
         parsed = parse_report(path)
         values = []
@@ -76,7 +77,7 @@ def load_reports(paths: list[Path], factor: float) -> tuple[list[ReportData], li
     return reports, path_rows
 
 
-def summary_row(report: ReportData) -> dict:
+def summary_row(report):
     values = report.values_ps
     return {
         "report": report.label,
@@ -84,7 +85,7 @@ def summary_row(report: ReportData) -> dict:
         "total_blocks": report.total,
         "resolved_paths": len(values),
         "unresolved_paths": report.unresolved,
-        "mean_ps": statistics.fmean(values),
+        "mean_ps": sum(values) / len(values),
         "median_ps": statistics.median(values),
         "stddev_ps": statistics.pstdev(values),
         "min_ps": min(values),
@@ -97,7 +98,7 @@ def summary_row(report: ReportData) -> dict:
     }
 
 
-def write_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
+def write_csv(path, rows, columns):
     with path.open("w", newline="") as output:
         writer = csv.DictWriter(output, fieldnames=columns)
         writer.writeheader()
@@ -109,14 +110,13 @@ def write_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
             })
 
 
-def svg_text(x: float, y: float, text: str, *, size: int = 13,
-             anchor: str = "start", weight: str = "normal", color: str = "#172033") -> str:
+def svg_text(x, y, text, size=13, anchor="start", weight="normal", color="#172033"):
     return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" '
             f'text-anchor="{anchor}" font-weight="{weight}" fill="{color}">'
             f'{html.escape(text)}</text>')
 
 
-def nice_ticks(low: float, high: float, count: int = 6) -> list[float]:
+def nice_ticks(low, high, count=6):
     if low == high:
         return [low]
     raw = (high - low) / max(count - 1, 1)
@@ -133,7 +133,7 @@ def nice_ticks(low: float, high: float, count: int = 6) -> list[float]:
     return ticks
 
 
-def histogram(values: list[float], low: float, high: float, bins: int) -> list[int]:
+def histogram(values, low, high, bins):
     counts = [0] * bins
     span = high - low
     for value in values:
@@ -142,7 +142,7 @@ def histogram(values: list[float], low: float, high: float, bins: int) -> list[i
     return counts
 
 
-def write_terminal_histogram(path: Path, reports: list[ReportData], bins: int) -> None:
+def write_terminal_histogram(path, reports, bins):
     """Write a fixed-width ASCII histogram that can be read with cat/less."""
     all_values = [value for report in reports for value in report.values_ps]
     low, high = min(all_values), max(all_values)
@@ -194,7 +194,7 @@ def write_terminal_histogram(path: Path, reports: list[ReportData], bins: int) -
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_distribution_svg(path: Path, reports: list[ReportData], bins: int) -> None:
+def write_distribution_svg(path, reports, bins):
     all_values = [value for report in reports for value in report.values_ps]
     low, high = min(all_values), max(all_values)
     if low == high:
@@ -212,7 +212,7 @@ def write_distribution_svg(path: Path, reports: list[ReportData], bins: int) -> 
     ticks = nice_ticks(low, high)
     colors = ["#3678c8", "#e36b3d", "#2f9e72", "#8b5cc7", "#c18b28", "#d14d72"]
 
-    def x_pos(value: float) -> float:
+    def x_pos(value):
         return left + (value - low) / (high - low) * plot_width
 
     elements = [
@@ -272,7 +272,7 @@ def write_distribution_svg(path: Path, reports: list[ReportData], bins: int) -> 
     path.write_text("\n".join(elements), encoding="utf-8")
 
 
-def write_boxplot_svg(path: Path, reports: list[ReportData]) -> None:
+def write_boxplot_svg(path, reports):
     all_values = [value for report in reports for value in report.values_ps]
     low, high = min(all_values), max(all_values)
     if low == high:
@@ -289,7 +289,7 @@ def write_boxplot_svg(path: Path, reports: list[ReportData]) -> None:
     height = top + row_height * len(reports) + bottom
     ticks = nice_ticks(low, high)
 
-    def x_pos(value: float) -> float:
+    def x_pos(value):
         return left + (value - low) / (high - low) * plot_width
 
     elements = [
@@ -336,7 +336,7 @@ def write_boxplot_svg(path: Path, reports: list[ReportData]) -> None:
     path.write_text("\n".join(elements), encoding="utf-8")
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(
         description="Ground-truth fixed-path report별 slack 통계와 분포 그래프를 생성합니다.")
     parser.add_argument("reports", type=Path, nargs="+",

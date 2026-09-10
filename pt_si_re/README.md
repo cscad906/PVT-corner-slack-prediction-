@@ -12,6 +12,9 @@ crosstalk 을 붙여 학습 입력 두 개를 만든다.
 이 문서 하나로 끝까지 갈 수 있게 써 두었다. 막히면 `코드표.md`, 원격으로 물어볼
 때는 `원격문의.md`.
 
+restore session에 이미 로드된 library와 parasitic으로 PrimeTime native scaling을
+평가하는 별도 흐름은 [`pt/README.md`](pt/README.md)를 따른다.
+
 ---
 
 ## 역할이 나뉜다 — 이게 제일 중요하다

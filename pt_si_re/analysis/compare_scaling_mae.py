@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Compare a PrimeTime scaling fixed-path report with target-corner ground truth."""
 
-from __future__ import annotations
-
 import argparse
 import csv
 import json
 import math
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -21,21 +18,25 @@ TO_PS = {"s": 1.0e12, "ms": 1.0e9, "us": 1.0e6,
          "ns": 1.0e3, "ps": 1.0, "fs": 1.0e-3}
 
 
-@dataclass(frozen=True)
-class PathResult:
-    idx: int
-    key: str
-    slack: float | None
+class PathResult(object):
+    """One fixed-path result; kept simple for Synopsys Python 3.6."""
+
+    __slots__ = ("idx", "key", "slack")
+
+    def __init__(self, idx, key, slack):
+        self.idx = idx
+        self.key = key
+        self.slack = slack
 
 
-def parse_report(path: Path) -> dict[str, PathResult]:
+def parse_report(path):
     """Read ### FIXED_PATH blocks and the slack in each successfully measured block."""
-    results: dict[str, PathResult] = {}
-    current_idx: int | None = None
-    current_key: str | None = None
-    current_slack: float | None = None
+    results = {}
+    current_idx = None
+    current_key = None
+    current_slack = None
 
-    def finish() -> None:
+    def finish():
         nonlocal current_idx, current_key, current_slack
         if current_key is None or current_idx is None:
             return
@@ -62,9 +63,9 @@ def parse_report(path: Path) -> dict[str, PathResult]:
     return results
 
 
-def evaluate(scaled: dict[str, PathResult], truth: dict[str, PathResult], factor: float) -> tuple[list[dict], dict]:
-    rows: list[dict] = []
-    errors: list[float] = []
+def evaluate(scaled, truth, factor):
+    rows = []
+    errors = []
     scaled_resolved = sum(item.slack is not None for item in scaled.values())
     truth_resolved = sum(item.slack is not None for item in truth.values())
 
@@ -120,7 +121,7 @@ def evaluate(scaled: dict[str, PathResult], truth: dict[str, PathResult], factor
     return rows, summary
 
 
-def write_csv(path: Path, rows: list[dict]) -> None:
+def write_csv(path, rows):
     columns = ["idx", "path_key", "ground_truth_ps", "pt_scaling_ps",
                "pt_scaling_err_ps", "abs_error_ps", "status"]
     with path.open("w", newline="") as output:
@@ -134,7 +135,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
             })
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(
         description="PrimeTime scaling slack와 실제 target-corner slack의 path별 MAE를 계산합니다.")
     parser.add_argument("scaled_rpt", type=Path, help="run_scaling_after_restore.tcl 결과 .rpt")
