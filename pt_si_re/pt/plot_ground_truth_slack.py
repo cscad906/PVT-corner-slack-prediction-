@@ -142,6 +142,58 @@ def histogram(values: list[float], low: float, high: float, bins: int) -> list[i
     return counts
 
 
+def write_terminal_histogram(path: Path, reports: list[ReportData], bins: int) -> None:
+    """Write a fixed-width ASCII histogram that can be read with cat/less."""
+    all_values = [value for report in reports for value in report.values_ps]
+    low, high = min(all_values), max(all_values)
+    if low == high:
+        margin = max(abs(low) * 0.05, 1.0)
+        low, high = low - margin, high + margin
+    bin_width = (high - low) / bins
+    bar_width = 42
+    lines = [
+        "GROUND-TRUTH FIXED-PATH SLACK DISTRIBUTIONS",
+        "All reports use the same Slack(ps) bins. Resolved paths only.",
+        "A '<0>' marker means that the bin contains 0 ps.",
+        "",
+    ]
+    for report in reports:
+        row = summary_row(report)
+        counts = histogram(report.values_ps, low, high, bins)
+        max_count = max(counts)
+        lines.extend([
+            "=" * 100,
+            f"REPORT     : {report.label}",
+            f"SOURCE     : {report.path}",
+            f"PATHS      : resolved {len(report.values_ps)} / total {report.total}; "
+            f"unresolved {report.unresolved}; violated {row['violated_paths']}",
+            f"MEAN       : {row['mean_ps']:.3f} ps",
+            f"MEDIAN     : {row['median_ps']:.3f} ps",
+            f"STDDEV     : {row['stddev_ps']:.3f} ps",
+            f"MIN/P05    : {row['min_ps']:.3f} / {row['p05_ps']:.3f} ps",
+            f"Q1/Q3      : {row['q1_ps']:.3f} / {row['q3_ps']:.3f} ps",
+            f"P95/MAX    : {row['p95_ps']:.3f} / {row['max_ps']:.3f} ps",
+            "",
+            "Slack range (ps)                 count   ratio   distribution",
+            "-" * 100,
+        ])
+        for index, count in enumerate(counts):
+            bin_low = low + index * bin_width
+            bin_high = low + (index + 1) * bin_width
+            closing = "]" if index == bins - 1 else ")"
+            zero_marker = "<0>" if bin_low <= 0.0 < bin_high or (
+                index == bins - 1 and bin_low <= 0.0 <= bin_high) else "   "
+            length = 0 if max_count == 0 else round(count / max_count * bar_width)
+            if count and length == 0:
+                length = 1
+            ratio = count / len(report.values_ps) * 100.0
+            lines.append(
+                f"{zero_marker} [{bin_low:10.3f}, {bin_high:10.3f}{closing} "
+                f"{count:6d} {ratio:6.2f}%  {'#' * length}")
+        lines.append("")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_distribution_svg(path: Path, reports: list[ReportData], bins: int) -> None:
     all_values = [value for report in reports for value in report.values_ps]
     low, high = min(all_values), max(all_values)
@@ -310,12 +362,14 @@ def main() -> None:
     paths_path = args.output_dir / "ground_truth_path_slacks.csv"
     distribution_path = args.output_dir / "ground_truth_slack_distribution.svg"
     boxplot_path = args.output_dir / "ground_truth_slack_boxplot.svg"
+    terminal_path = args.output_dir / "ground_truth_slack_terminal.txt"
 
     write_csv(summary_path, summaries, list(summaries[0]))
     write_csv(paths_path, path_rows,
               ["report", "source_report", "idx", "path_key", "slack_ps", "status"])
     write_distribution_svg(distribution_path, reports, args.bins)
     write_boxplot_svg(boxplot_path, reports)
+    write_terminal_histogram(terminal_path, reports, args.bins)
 
     print("=== Ground-truth slack statistics ===")
     for row in summaries:
@@ -326,6 +380,8 @@ def main() -> None:
     print(f"path CSV    : {paths_path}")
     print(f"histogram   : {distribution_path}")
     print(f"boxplot     : {boxplot_path}")
+    print(f"terminal    : {terminal_path}")
+    print(f"view command: less -S {terminal_path}")
 
 
 if __name__ == "__main__":
