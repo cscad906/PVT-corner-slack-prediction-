@@ -886,6 +886,9 @@ proc auto_scaling::run_after_restore {cfg} {
     }
     if {!$arc_found} { error "Scaling 사용 여부를 검증할 cell arc를 찾지 못했습니다." }
     write_text ${out}.dcalc $dcalc_text
+    if {[regexp -nocase {SLG-320|DEL-012|scaling extrapolation problem|due to extrapolation in scaling} $dcalc_text]} {
+        error "report_delay_calculation에서 scaling 외삽/적용 취소 오류가 검출되었습니다. 결과를 사용하지 마세요: ${out}.dcalc"
+    }
     if {[string first "Scaling libraries used" $dcalc_text] < 0} {
         error "report_delay_calculation에서 scaling library 사용 증거를 찾지 못했습니다. 결과를 사용하지 마세요: ${out}.dcalc"
     }

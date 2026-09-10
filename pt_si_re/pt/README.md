@@ -75,6 +75,13 @@ target이 입력 grid 바깥이면 외삽이므로 중단합니다. BEOL은 scal
 restore session에서 현재 활성화된 target temperature/BEOL parasitic을 그대로
 사용합니다. voltage가 달라도 같은 temperature와 BEOL의 parasitic을 사용합니다.
 
+외삽 차단은 PrimeTime V-2023.12-SP4의 command reference와 실행 결과로 확인한
+조건입니다. 이 버전의 `define_scaling_lib_group` 도움말은 scaling group 범위
+밖의 operating condition을 사용할 수 없다고 설명합니다. 0.60/0.65 V library
+group에 0.55 V를 설정한 검사에서도 PrimeTime이 `SLG-320`과 `DEL-012`를 내고
+scaling 적용을 취소했습니다. 다른 PrimeTime major version을 사용할 때는 해당
+버전의 `man SLG-320`과 `man define_scaling_lib_group`을 다시 확인합니다.
+
 고정된 한 점만 있는 SRAM, macro, IO library set은 scaling group에 넣지 않고
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
@@ -216,6 +223,9 @@ grep -n "Scaling libraries used" /company/work/pt_scaling_eval/scaling_output/*.
 ```
 
 문자열이 없거나 `SLG-320`, `DEL-012`가 있으면 결과를 사용하지 않습니다.
+Tcl도 `.dcalc`에서 이 두 오류 또는 외삽 취소 문구를 발견하면 완료 처리하지 않고
+중단합니다. PrimeTime은 외삽 실패 뒤에도 `Scaling libraries used` 목록을 표시할
+수 있으므로, 목록 존재 여부만으로 성공을 판단하면 안 됩니다.
 
 ```bash
 grep -nE "SLG-320|DEL-012|Error:|Fatal:" \
