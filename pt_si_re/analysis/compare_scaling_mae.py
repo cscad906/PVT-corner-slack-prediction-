@@ -1,67 +1,58 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""PrimeTime scaling 결과와 target-corner 실측 결과의 path별 오차를 계산한다.
+# -*- coding: ascii -*-
+"""Compare PrimeTime scaling slack with target-corner ground truth.
 
-가장 자주 쓰는 명령
-    pt_si_re 디렉터리에서 다음과 같이 실행한다.
-
+QUICK START (run from the pt_si_re directory)
     python3 analysis/compare_scaling_mae.py \
-        auto_scaling_output/scaled_SSPG_0p5V_25C_rcmax_V_hold.rpt \
-        ground_truth/SSPG_0p5V_25C_rcmax_hold.rpt \
+        auto_scaling_output/scaled_TARGET.rpt \
+        ground_truth/TARGET.rpt \
         --input-unit ns \
         --output-prefix results/pt_scaling_vs_groundtruth
 
-입력 순서
-    첫 번째 파일  : PrimeTime scaling으로 만든 fixed-path timing report
-                    (run_scaling_after_restore.tcl의 scaled_*.rpt)
-    두 번째 파일  : 실제 target corner의 DB/lib를 사용해 측정한 ground truth
-                    fixed-path timing report
+INPUT ORDER
+    1) scaled_rpt       : scaled_*.rpt from run_scaling_after_restore.tcl
+    2) ground_truth_rpt : fixed-path report measured with the real target DB/lib
 
-    순서를 바꾸면 error와 bias의 부호가 반대로 계산되므로 주의한다.
+    Do not reverse the files because error and bias signs would be reversed.
 
-비교 전에 맞아야 하는 것
-    두 report는 같은 fixed_paths.tcl에서 생성돼야 한다. 각 경로 앞에
+REQUIRED REPORT FORMAT
+    Both reports must come from the same fixed_paths.tcl and contain this marker
+    before every path:
 
         ### FIXED_PATH idx=... key=...
 
-    마커가 있어야 하며, 스크립트는 idx가 아니라 key로 같은 경로를 맞춘다.
-    setup끼리 또는 hold끼리 비교해야 하고 timing constraint도 같아야 한다.
-    report_timing의 시간 단위도 두 파일이 같아야 한다.
+    Paths are matched by key, not idx. Compare setup with setup or hold with
+    hold, using the same constraints and report time unit.
 
-시간 단위
-    --input-unit은 입력 report에 기록된 slack 숫자의 단위다. 기본값은 ns다.
-    결과 CSV와 MAE/RMSE/bias 출력은 항상 ps로 변환된다. PrimeTime report가
-    ns라면 기본값 그대로 사용한다.
+TIME UNIT
+    --input-unit is the slack unit in both reports and defaults to ns. All
+    reported slack and error values are converted to ps.
 
-오차 정의
+METRICS
     error = PT scaling slack - ground-truth slack
+    MAE   = mean absolute error
+    RMSE  = root mean square error
+    bias  = signed mean error; positive means scaling slack is larger than GT
+    worst = largest absolute error
 
-    MAE   : path별 |error|의 평균
-    RMSE  : 큰 오차에 더 민감한 제곱평균제곱근
-    bias  : error의 부호를 유지한 평균. 양수면 scaling slack이 GT보다 큼
-    worst : 비교된 path 중 가장 큰 |error|
+    Only paths with readable slack in both reports enter the metrics. Missing
+    or unresolved paths remain in the CSV with a status and are excluded from
+    MAE, RMSE, and bias.
 
-    양쪽 report에서 slack을 모두 읽은 path만 위 네 통계에 포함한다. 한쪽에
-    path block이 없거나 report_timing이 실패해 slack이 없는 path는 CSV에
-    상태와 함께 남지만 MAE 계산에서는 제외된다.
+OUTPUT
+    --output-prefix results/pt_scaling_vs_groundtruth creates:
+      results/pt_scaling_vs_groundtruth.csv   per-path values and errors
+      results/pt_scaling_vs_groundtruth.json  counts and summary metrics
 
-출력
-    --output-prefix results/pt_scaling_vs_groundtruth 라고 주면 다음 두 파일이
-    생긴다. 상위 폴더가 없으면 자동으로 만든다. prefix에는 확장자를 붙이지
-    않는 것이 가장 명확하다.
+    The parent directory is created automatically. Give a prefix without an
+    extension so the .csv and .json output names are clear.
 
-    results/pt_scaling_vs_groundtruth.csv
-        path별 GT slack, scaling slack, signed error, absolute error, 상태
-
-    results/pt_scaling_vs_groundtruth.json
-        비교 path 수, 제외 path 수, MAE, RMSE, bias, worst path 요약
-
-결과 확인
+VIEW WITHOUT VS CODE
     cat results/pt_scaling_vs_groundtruth.json
     column -s, -t results/pt_scaling_vs_groundtruth.csv | less -S
 
-필요 환경
-    Python 3.6 이상. 외부 Python 패키지는 필요 없다.
+RUNTIME
+    Python 3.6 or newer. No external Python package is required.
 """
 
 import argparse
@@ -200,13 +191,13 @@ def write_csv(path, rows):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PrimeTime scaling slack와 실제 target-corner slack의 path별 MAE를 계산합니다.")
-    parser.add_argument("scaled_rpt", type=Path, help="run_scaling_after_restore.tcl 결과 .rpt")
-    parser.add_argument("ground_truth_rpt", type=Path, help="실제 target library로 측정한 fixed-path .rpt")
+        description="PrimeTime scaling slack\uc640 \uc2e4\uc81c target-corner slack\uc758 path\ubcc4 MAE\ub97c \uacc4\uc0b0\ud569\ub2c8\ub2e4.")
+    parser.add_argument("scaled_rpt", type=Path, help="run_scaling_after_restore.tcl \uacb0\uacfc .rpt")
+    parser.add_argument("ground_truth_rpt", type=Path, help="\uc2e4\uc81c target library\ub85c \uce21\uc815\ud55c fixed-path .rpt")
     parser.add_argument("--input-unit", choices=TO_PS, default="ns",
-                        help="두 report의 slack 시간 단위 (기본값: ns)")
+                        help="\ub450 report\uc758 slack \uc2dc\uac04 \ub2e8\uc704 (\uae30\ubcf8\uac12: ns)")
     parser.add_argument("--output-prefix", type=Path, default=Path("pt_scaling_vs_groundtruth"),
-                        help="출력 파일 앞부분 (기본값: pt_scaling_vs_groundtruth)")
+                        help="\ucd9c\ub825 \ud30c\uc77c \uc55e\ubd80\ubd84 (\uae30\ubcf8\uac12: pt_scaling_vs_groundtruth)")
     args = parser.parse_args()
 
     for path in (args.scaled_rpt, args.ground_truth_rpt):

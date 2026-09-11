@@ -1,74 +1,60 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Ground-truth fixed-path slack의 통계와 분포 그림을 만든다.
+# -*- coding: ascii -*-
+"""Create statistics and plots for ground-truth fixed-path slack.
 
-가장 자주 쓰는 명령
-    pt_si_re 디렉터리에서 ground truth report 여러 개를 한꺼번에 지정한다.
-
+QUICK START (run from the pt_si_re directory)
     python3 analysis/plot_ground_truth_slack.py \
         ground_truth/*.rpt \
         --input-unit ns \
         --output-dir results/ground_truth_slack
 
-    report 하나만 볼 때도 사용법은 같다.
-
+    One-report example:
     python3 analysis/plot_ground_truth_slack.py \
-        ground_truth/SSPG_0p5V_25C_rcmax_hold.rpt \
+        ground_truth/TARGET.rpt \
         --output-dir results/one_corner
 
-입력
-    fixed_paths.tcl로 측정한 ground-truth .rpt 파일을 하나 이상 준다. 각 경로
-    앞에 다음 마커가 있어야 한다.
+INPUT
+    Give one or more ground-truth reports made with fixed_paths.tcl. Every path
+    must begin with:
 
         ### FIXED_PATH idx=... key=...
 
-    여러 report가 완전히 같은 path 집합일 필요는 없다. 이 스크립트는 각
-    report의 분포를 독립적으로 계산한다. 다만 코너끼리 공정하게 비교하려면
-    같은 fixed_paths.tcl로 만든 report를 넣는 것이 좋다.
+    Reports are summarized independently and may contain different path sets.
+    For a fair corner comparison, use reports made from the same fixed_paths.tcl.
 
-시간 단위와 포함 기준
-    --input-unit은 report slack 숫자의 단위이며 기본값은 ns다. 모든 CSV,
-    터미널 표와 SVG의 값은 ps로 변환된다. slack을 읽지 못한 path block은
-    unresolved로 세지만 평균과 분포 계산에서는 제외한다.
+TIME UNIT AND INCLUDED PATHS
+    --input-unit is the report slack unit and defaults to ns. CSV, terminal,
+    and SVG values are converted to ps. A block without readable slack is
+    counted as unresolved and excluded from statistics and distributions.
 
-통계 의미
-    mean    평균 slack
-    median  정렬했을 때 중앙값
-    stddev  모집단 표준편차
-    min/max 최솟값/최댓값
-    p05/p95 하위 5%/95% 위치
-    q1/q3   하위 25%/75% 위치
-    violated_paths  slack < 0인 path 수
+STATISTICS
+    mean/median    average and middle slack
+    stddev         population standard deviation
+    min/max        minimum and maximum
+    p05/p95        5th and 95th percentiles
+    q1/q3          25th and 75th percentiles
+    violated_paths number of paths with slack < 0
 
-출력
-    --output-dir results/ground_truth_slack을 주면 아래 다섯 파일을 만든다.
-    폴더가 없으면 자동 생성하며, 같은 이름의 기존 파일은 덮어쓴다.
+OUTPUT
+    --output-dir results/ground_truth_slack creates:
+      ground_truth_slack_summary.csv       per-report summary
+      ground_truth_path_slacks.csv         per-path slack and status
+      ground_truth_slack_distribution.svg  common-bin histograms
+      ground_truth_slack_boxplot.svg       min/Q1/median/Q3/max/mean
+      ground_truth_slack_terminal.txt      terminal text histogram
 
-    ground_truth_slack_summary.csv
-        report별 평균, median, 표준편차, min/q1/q3/max, 위반 path 수
+    The directory is created automatically. Existing files with these names
+    are overwritten.
 
-    ground_truth_path_slacks.csv
-        report와 path별 slack(ps), resolved/unresolved 상태
-
-    ground_truth_slack_distribution.svg
-        모든 report에 동일한 slack 구간을 적용한 histogram
-
-    ground_truth_slack_boxplot.svg
-        min, Q1, median, Q3, max와 평균을 비교하는 box plot
-
-    ground_truth_slack_terminal.txt
-        GUI나 VS Code 없이 less로 확인할 수 있는 텍스트 histogram
-
-결과 확인
+VIEW WITHOUT VS CODE
     column -s, -t results/ground_truth_slack/ground_truth_slack_summary.csv | less -S
     less -S results/ground_truth_slack/ground_truth_slack_terminal.txt
 
-histogram 막대가 너무 거칠거나 촘촘하면 --bins를 바꾼다. 기본값은 30이며
-2 이상이어야 한다.
+HISTOGRAM BINS
+    --bins controls histogram resolution. Its default is 30 and minimum is 2.
 
-필요 환경
-    Python 3.6 이상. matplotlib 등 외부 패키지는 필요 없다. SVG 파일도
-    Python 표준 라이브러리만으로 생성한다.
+RUNTIME
+    Python 3.6 or newer. No matplotlib or other external package is required.
 """
 
 import argparse
@@ -408,15 +394,15 @@ def write_boxplot_svg(path, reports):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ground-truth fixed-path report별 slack 통계와 분포 그래프를 생성합니다.")
+        description="Ground-truth fixed-path report\ubcc4 slack \ud1b5\uacc4\uc640 \ubd84\ud3ec \uadf8\ub798\ud504\ub97c \uc0dd\uc131\ud569\ub2c8\ub2e4.")
     parser.add_argument("reports", type=Path, nargs="+",
-                        help="fixed_paths.tcl로 생성한 ground-truth .rpt 파일들")
+                        help="fixed_paths.tcl\ub85c \uc0dd\uc131\ud55c ground-truth .rpt \ud30c\uc77c\ub4e4")
     parser.add_argument("--input-unit", choices=TO_PS, default="ns",
-                        help="report slack 단위 (기본값: ns; 출력은 ps)")
+                        help="report slack \ub2e8\uc704 (\uae30\ubcf8\uac12: ns; \ucd9c\ub825\uc740 ps)")
     parser.add_argument("--output-dir", type=Path, default=Path("ground_truth_slack_stats"),
-                        help="결과 폴더 (기본값: ground_truth_slack_stats)")
+                        help="\uacb0\uacfc \ud3f4\ub354 (\uae30\ubcf8\uac12: ground_truth_slack_stats)")
     parser.add_argument("--bins", type=int, default=30,
-                        help="histogram bin 개수 (기본값: 30)")
+                        help="histogram bin \uac1c\uc218 (\uae30\ubcf8\uac12: 30)")
     args = parser.parse_args()
 
     if args.bins < 2:
