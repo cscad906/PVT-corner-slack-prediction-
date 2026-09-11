@@ -2,9 +2,24 @@
 # -*- coding: utf-8 -*-
 """1 - 코너별 리포트를 합쳐 '측정할 경로 목록' 을 만든다.  (1회차 -> 2회차)
 
-    python3 1_union.py --dir round1/corners --max-paths 2000
+분석 종류를 명령에서 반드시 확인한다.
 
-가장 많이 쓰는 옵션 두 개
+    # setup 분석: 입력 report가 -delay_type max인 경우
+    python3 1_union.py --dir round1/corners --mode setup --max-paths 2000
+
+    # hold 분석: 입력 report가 -delay_type min인 경우
+    python3 1_union.py --dir round1/corners --mode hold --max-paths 2000
+
+    --mode를 생략하면 setup이 기본값이고 fixed_paths.tcl에 DTYPE=max가 들어간다.
+    hold에서는 반드시 --mode hold를 넣어야 하며 DTYPE=min이 들어간다.
+    --dir의 corners는 단순한 폴더 이름이며 setup/hold를 결정하지 않는다.
+
+가장 먼저 볼 옵션
+    --mode setup|hold
+                    setup -> max, hold -> min. 기본은 setup이다.
+                    1회차 report_timing의 -delay_type과 반드시 같아야 한다.
+
+자주 쓰는 추가 옵션 두 개
     --max-paths N   합친 뒤 **가장 나쁜 slack 부터** N개만 남긴다. 개수로 바로
                     자르는 것이라 문턱값을 계산할 필요가 없다.
                     2회차가 경로당 약 0.1초/코너라 **N이 그대로 시간이 된다.**
@@ -473,7 +488,8 @@ def main():
                     help="vi 로 보기 좋게 정렬한 요약 파일")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
                     help="setup(-delay_type max) / hold(min). **1회차 리포트를 "
-                         "뽑을 때 쓴 것과 같아야 한다.** 2회차 tcl 에 그대로 들어간다")
+                         "뽑을 때 쓴 것과 같아야 한다.** 2회차 tcl 에 그대로 들어간다. "
+                         "기본은 setup(max)이므로 hold에서는 --mode hold를 반드시 지정")
     ap.add_argument("--per-corner-max", type=int, default=None,
                     help="**합치기 전에** 코너마다 이 개수만 남긴다. 리포트가 "
                          "너무 커서 코너별로 먼저 줄여야 할 때. 각 코너의 "
