@@ -585,6 +585,17 @@ python3 4_all_corners.py --root <round2> --phase 1 --skip-done
 이미 만들어진 단계는 `SKIP` 으로 건너뛰고 안 된 것만 이어서 한다.
 코너 17개 중 12개에서 끊겨도 처음부터 다시 할 필요가 없다.
 
+실행하거나 파일을 바꾸지 않고 코너별 완료 상태만 확인하려면:
+
+```bash
+python3 4_check_results.py --root <round2> --phase 3 --mode hold
+```
+
+`annotation`과 `crosstalk`을 `OK / PARTIAL / MISSING`으로 표시한다. 단순히
+파일 이름만 보는 것이 아니라 `.part`, 빈 파일, TSV 마지막 줄과 필수 열,
+5c 입력/출력 행 수, fixed-path 블록 수, setup/hold까지 확인한다. 검사 과정은
+읽기 전용이며 파일을 만들거나 수정하지 않는다.
+
 ### 코너 하나만 손으로
 
 `4_all_corners.py` 는 아래를 대신 쳐줄 뿐이다. 결과 파일은 바이트 단위로 같다.
@@ -854,6 +865,7 @@ StarRC `COUPLING_CAP: YES`). grounded SPEF 면 crosstalk 결과가 무의미하�
 5b_pairs.py        받은 PT 출력에서 victim-aggressor 쌍
 5c_report.py       -> 14열 리포트                                ★
 4_all_corners.py   위를 코너 전부에 (--phase 1 / 2)
+4_check_results.py 코너별 완료/누락/중단 결과 검사 (읽기만 함)
 6_collect.py       최종 2종만 넘길 형태로 모으기
 9_diagnose.py      N/A 원인을 넷 단위로 분류 (필요할 때만)
 ```
