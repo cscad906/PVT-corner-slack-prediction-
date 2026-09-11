@@ -292,12 +292,19 @@ python3 /path/to/repository/analysis/compare_scaling_mae.py \
 - `path_errors.csv`: path별 ground truth, scaling slack, signed error, absolute error
 - `summary.json`: compared/excluded path 수, MAE, RMSE, bias, worst error
 
-`--output-dir`을 생략하면 실행 위치의 `pt_scaling_comparison/`에 두 파일이
-생성됩니다.
+`--output-dir`은 코너별 결과 폴더가 들어갈 상위 폴더입니다. 생략하면 실행
+위치의 `pt_scaling_comparison/<ground-truth-report-name>/`에 두 파일이
+생성됩니다. 같은 코너를 다시 실행하면 기존 파일을 덮어쓰지 않고 폴더 이름에
+`_run2`, `_run3`가 자동으로 붙습니다.
 
 `scaled_blocks`, `ground_truth_blocks`, `compared_paths`, `excluded_paths`를 반드시
 확인합니다. known-invalid path 외에 새로 제외된 path가 있으면 MAE를 승인하지
 않습니다.
+
+터미널의 `status counts`와 `summary.json`은 제외 원인을 보여줍니다.
+`missing_*_block`이 많으면 서로 다른 `fixed_paths.tcl` 또는 잘못 선택한 report를
+의심하고, `unresolved_*_path`가 많으면 해당 report에서 실제 timing path가
+생성되지 않은 것이므로 scaling의 `.missing`과 PrimeTime 로그를 확인합니다.
 
 ## 10. ground-truth slack 분포 확인
 

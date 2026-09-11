@@ -38,18 +38,22 @@ METRICS
     MAE, RMSE, and bias.
 
 OUTPUT
-    By default, the script creates:
-      pt_scaling_comparison/path_errors.csv  per-path values and errors
-      pt_scaling_comparison/summary.json     counts and summary metrics
+    The target-corner name is taken from the ground-truth report filename.
+    For ground_truth/SSPG_0p57V_25C_RCMAX_setup.rpt, the script creates:
+      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/path_errors.csv
+      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/summary.json
+
+    Existing results are never overwritten. Running the same corner again
+    creates SSPG_0p57V_25C_RCMAX_setup_run2, then _run3, and so on.
 
     To select another result directory, add:
       --output-dir results/TARGET
 
-    The output directory is created automatically.
+    The selected directory is the common root for all corner result folders.
 
 VIEW WITHOUT VS CODE
-    cat pt_scaling_comparison/summary.json
-    column -s, -t pt_scaling_comparison/path_errors.csv | less -S
+    cat pt_scaling_comparison/TARGET/summary.json
+    column -s, -t pt_scaling_comparison/TARGET/path_errors.csv | less -S
 
 RUNTIME
     Python 3.6 or newer. No external Python package is required.
@@ -137,6 +141,9 @@ def evaluate(scaled, truth, factor):
         elif gt is None:
             error = None
             status = "missing_ground_truth_block"
+        elif pred_ps is None and truth_ps is None:
+            error = None
+            status = "unresolved_both_paths"
         elif pred_ps is None:
             error = None
             status = "unresolved_scaling_path"
@@ -158,12 +165,22 @@ def evaluate(scaled, truth, factor):
     abs_errors = [abs(value) for value in errors]
     compared_rows = [row for row in rows if row["abs_error_ps"] is not None]
     worst_row = max(compared_rows, key=lambda row: row["abs_error_ps"])
+    status_counts = {}
+    for row in rows:
+        status = row["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+    scaled_keys = set(scaled)
+    truth_keys = set(truth)
     summary = {
         "scaled_blocks": len(scaled),
         "scaled_resolved": scaled_resolved,
         "ground_truth_blocks": len(truth),
         "ground_truth_resolved": truth_resolved,
+        "shared_path_keys": len(scaled_keys & truth_keys),
+        "scaled_only_blocks": len(scaled_keys - truth_keys),
+        "ground_truth_only_blocks": len(truth_keys - scaled_keys),
         "compared_paths": len(errors),
+        "status_counts": status_counts,
         "mae_ps": sum(abs_errors) / len(abs_errors),
         "rmse_ps": math.sqrt(sum(value * value for value in errors) / len(errors)),
         "bias_ps": sum(errors) / len(errors),
@@ -188,13 +205,33 @@ def write_csv(path, rows):
             })
 
 
+def safe_corner_name(report_path):
+    """Return a filesystem-safe target-corner name from the GT report name."""
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", report_path.stem).strip("._")
+    return name or "target_corner"
+
+
+def create_result_dir(output_root, corner_name):
+    """Atomically create a new corner directory without overwriting a run."""
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_number = 1
+    while True:
+        directory_name = corner_name if run_number == 1 else f"{corner_name}_run{run_number}"
+        result_dir = output_root / directory_name
+        try:
+            result_dir.mkdir()
+            return result_dir
+        except FileExistsError:
+            run_number += 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="PrimeTime scaling slack\uc640 \uc2e4\uc81c target-corner slack\uc758 path\ubcc4 MAE\ub97c \uacc4\uc0b0\ud569\ub2c8\ub2e4.")
     parser.add_argument("scaled_rpt", type=Path, help="run_scaling_after_restore.tcl \uacb0\uacfc .rpt")
     parser.add_argument("ground_truth_rpt", type=Path, help="\uc2e4\uc81c target library\ub85c \uce21\uc815\ud55c fixed-path .rpt")
     parser.add_argument("--output-dir", type=Path, default=Path("pt_scaling_comparison"),
-                        help="\uacb0\uacfc \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
+                        help="\ucf54\ub108\ubcc4 \uacb0\uacfc\ub97c \uc800\uc7a5\ud560 \uc0c1\uc704 \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
     args = parser.parse_args()
 
     for path in (args.scaled_rpt, args.ground_truth_rpt):
@@ -211,9 +248,10 @@ def main():
         "ground_truth_report": str(args.ground_truth_rpt.resolve()),
     })
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = args.output_dir / "path_errors.csv"
-    json_path = args.output_dir / "summary.json"
+    corner_name = safe_corner_name(args.ground_truth_rpt)
+    result_dir = create_result_dir(args.output_dir, corner_name)
+    csv_path = result_dir / "path_errors.csv"
+    json_path = result_dir / "summary.json"
     write_csv(csv_path, rows)
     with json_path.open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
@@ -221,6 +259,10 @@ def main():
     print("=== PrimeTime scaling vs ground truth ===")
     print(f"compared paths : {summary['compared_paths']}")
     print(f"excluded paths : {summary['excluded_paths']}")
+    print(f"shared keys    : {summary['shared_path_keys']}")
+    print("status counts  :")
+    for status, count in sorted(summary["status_counts"].items()):
+        print(f"  {status:<29} {count}")
     print(f"MAE            : {summary['mae_ps']:.3f} ps")
     print(f"RMSE           : {summary['rmse_ps']:.3f} ps")
     print(f"bias           : {summary['bias_ps']:+.3f} ps")
