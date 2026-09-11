@@ -30,11 +30,7 @@ import sys
 
 CPIN_COLS = ("line_no", "net", "recv_pin", "cpin")
 DISTRES_COLS = ("line_no", "net", "dist", "res")
-VICTIM_COLS = ("path_id", "victim_net", "victim_driver_pin",
-               "victim_load_pin")
-SUMMARY_COLS = ("path_id", "startpoint", "endpoint")
 ACTIVE_COLS = ("path_id", "analysis_type", "victim_net")
-CONTEXT_COLS = ("context_id", "report_status")
 FLAT_COLS = (
     "path_segment", "victim_net", "aggressor_net", "crosstalk_delta",
     "aggressor_bump", "number_of_aggressors", "victim_load_pin",
@@ -94,13 +90,65 @@ def tsv_info(path, required, need_rows=True, collect=None):
     return True, count, values, ""
 
 
-def count_prefix(path, prefix):
-    count = 0
-    with open(path, "rb") as fh:
-        for line in fh:
-            if line.startswith(prefix):
-                count += 1
-    return count
+def bypath_info(path):
+    """Return (ok, path_blocks, data_rows, reason) for the final report."""
+    if not os.path.isfile(path):
+        return False, 0, 0, "missing %s" % path
+    if os.path.getsize(path) == 0:
+        return False, 0, 0, "empty %s" % path
+    if not ends_with_newline(path):
+        return False, 0, 0, "last line is incomplete: %s" % path
+
+    blocks = 0
+    headers = 0
+    rows = 0
+    rows_in_block = None
+    have_header = False
+    try:
+        with open(path, "r", encoding="utf-8", errors="surrogateescape",
+                  newline="") as fh:
+            for line_no, line in enumerate(fh, 1):
+                if line.startswith("### FIXED_PATH "):
+                    if rows_in_block == 0:
+                        return (False, blocks, rows,
+                                "empty FIXED_PATH block before line %d: %s"
+                                % (line_no, path))
+                    blocks += 1
+                    rows_in_block = 0
+                    have_header = False
+                    continue
+                if not line.strip() or line.startswith("#"):
+                    continue
+                values = next(csv.reader([line.rstrip("\r\n")], delimiter="\t"))
+                if tuple(values) == FLAT_COLS:
+                    if blocks == 0 or have_header:
+                        return (False, blocks, rows,
+                                "unexpected table header at line %d: %s"
+                                % (line_no, path))
+                    headers += 1
+                    have_header = True
+                    continue
+                if blocks == 0 or not have_header:
+                    return (False, blocks, rows,
+                            "data outside a FIXED_PATH block at line %d: %s"
+                            % (line_no, path))
+                if len(values) != len(FLAT_COLS):
+                    return (False, blocks, rows,
+                            "broken 14-column row at line %d: %s"
+                            % (line_no, path))
+                rows += 1
+                rows_in_block += 1
+    except (OSError, UnicodeError, csv.Error) as exc:
+        return False, blocks, rows, "cannot parse %s (%s)" % (path, exc)
+
+    if blocks == 0:
+        return False, 0, rows, "no FIXED_PATH blocks: %s" % path
+    if headers != blocks:
+        return (False, blocks, rows, "table header count does not match blocks: %s"
+                % path)
+    if rows_in_block == 0:
+        return False, blocks, rows, "last FIXED_PATH block has no rows: %s" % path
+    return True, blocks, rows, ""
 
 
 def part_files(directory):
@@ -148,78 +196,54 @@ def check_annotation(name, directory, root):
 
 def check_crosstalk(name, directory, root, wanted_mode):
     work = os.path.join(directory, "xtalk")
-    victim = os.path.join(work, "path_victim_nets.tsv")
-    summary = os.path.join(work, "path_summary.tsv")
-    context = os.path.join(work, "context_summary.tsv")
     active = os.path.join(work, "active_features.tsv")
-    vpins = os.path.join(work, "victim_load_pins.txt")
-    anets = os.path.join(work, "aggressor_nets.txt")
     flat = os.path.join(work, "compact_flat.tsv")
     final = os.path.join(
         directory, name + ".path_context_si_compact.by_path.rpt")
-    products = (victim, summary, context, active, vpins, anets, flat, final)
-    has_any = any(os.path.exists(path) for path in products)
+    final_products = (flat, final)
+    intermediate_names = (
+        "path_victim_nets.tsv", "path_summary.tsv", "context_summary.tsv",
+        "active_features.tsv", "victim_load_pins.txt", "aggressor_nets.txt",
+    )
+    intermediates = tuple(os.path.join(work, item)
+                          for item in intermediate_names)
+    has_any = any(os.path.exists(path)
+                  for path in final_products + intermediates)
     problems = []
 
-    checks = {}
-    for label, path, cols, collect in (
-            ("victim", victim, VICTIM_COLS, "path_id"),
-            ("summary", summary, SUMMARY_COLS, "path_id"),
-            ("context", context, CONTEXT_COLS, None),
-            ("active", active, ACTIVE_COLS, "path_id"),
-            ("flat", flat, FLAT_COLS, None)):
-        checks[label] = tsv_info(path, cols, collect=collect)
-        if not checks[label][0]:
-            problems.append(checks[label][3])
+    flat_check = tsv_info(flat, FLAT_COLS)
+    if not flat_check[0]:
+        problems.append(flat_check[3])
+    final_check = bypath_info(final)
+    if not final_check[0]:
+        problems.append(final_check[3])
 
-    if not file_nonempty(vpins):
-        problems.append(("empty " if os.path.isfile(vpins) else "missing ") + vpins)
-    if not os.path.isfile(anets):
-        problems.append("missing %s" % anets)
-    elif not ends_with_newline(anets) and os.path.getsize(anets) > 0:
-        problems.append("last line is incomplete: %s" % anets)
+    if flat_check[0] and final_check[0]:
+        if flat_check[1] != final_check[2]:
+            problems.append("5c final row mismatch: flat=%d by-path=%d"
+                            % (flat_check[1], final_check[2]))
 
-    if not file_nonempty(final):
-        problems.append(("empty " if os.path.isfile(final) else "missing ") + final)
-    elif not ends_with_newline(final):
-        problems.append("last line is incomplete: %s" % final)
-
-    if checks["victim"][0] and checks["summary"][0]:
-        victim_ids = checks["victim"][2]
-        summary_ids = checks["summary"][2]
-        if not victim_ids.issubset(summary_ids):
-            problems.append("5a path IDs disagree (victim is not a subset of summary)")
-        if os.path.getmtime(summary) < os.path.getmtime(victim):
-            problems.append("5a summary is older than victim output")
-
-    if checks["active"][0]:
-        if file_nonempty(vpins) and os.path.getmtime(vpins) < os.path.getmtime(active):
-            problems.append("5b victim request is older than active output")
-        if os.path.isfile(anets) and os.path.getmtime(anets) < os.path.getmtime(active):
-            problems.append("5b aggressor request is older than active output")
-        if wanted_mode:
-            mode_ok, _n, modes, _why = tsv_info(
-                active, ACTIVE_COLS, collect="analysis_type")
-            if mode_ok and modes != {wanted_mode}:
-                problems.append("mode is %s, expected %s"
-                                % (",".join(sorted(modes)) or "blank",
-                                   wanted_mode))
-
-    if checks["active"][0] and checks["flat"][0]:
-        active_rows = checks["active"][1]
-        flat_rows = checks["flat"][1]
-        if active_rows != flat_rows:
-            problems.append("5c row mismatch: active=%d flat=%d"
-                            % (active_rows, flat_rows))
-
-    if checks["active"][0] and file_nonempty(final):
-        active_paths = len(checks["active"][2])
-        final_paths = count_prefix(final, b"### FIXED_PATH ")
-        if active_paths != final_paths:
-            problems.append("5c path mismatch: active=%d final=%d"
-                            % (active_paths, final_paths))
-        if file_nonempty(flat) and os.path.getmtime(final) < os.path.getmtime(flat):
-            problems.append("5c by-path report is older than flat output")
+    # active_features is useful for stronger checks, but older/copied result
+    # packages may intentionally contain only the two final 5c products.
+    # Its absence alone must not turn a valid final result into PARTIAL.
+    if os.path.exists(active):
+        active_check = tsv_info(active, ACTIVE_COLS, collect="path_id")
+        if not active_check[0]:
+            problems.append(active_check[3])
+        else:
+            if flat_check[0] and active_check[1] != flat_check[1]:
+                problems.append("5c row mismatch: active=%d flat=%d"
+                                % (active_check[1], flat_check[1]))
+            if final_check[0] and len(active_check[2]) != final_check[1]:
+                problems.append("5c path mismatch: active=%d final=%d"
+                                % (len(active_check[2]), final_check[1]))
+            if wanted_mode:
+                mode_check = tsv_info(
+                    active, ACTIVE_COLS, collect="analysis_type")
+                if mode_check[0] and mode_check[2] != {wanted_mode}:
+                    problems.append("mode is %s, expected %s"
+                                    % (",".join(sorted(mode_check[2])) or "blank",
+                                       wanted_mode))
 
     cross_parts = part_files(work) if os.path.isdir(work) else []
     for path in cross_parts:
