@@ -1,65 +1,68 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""0 - 코너별 리포트를 '나쁜 것 N개만' 남긴 리포트로 줄인다.  (1회차 -> 1_union)
+# -*- coding: ascii -*-
+# Keep this executable source ASCII-only. Some legacy EDA hosts transcode
+# non-ASCII Python files during transfer. Korean UI text uses Unicode escapes
+# below and is rendered normally when the script runs.
+"""0 - \ucf54\ub108\ubcc4 \ub9ac\ud3ec\ud2b8\ub97c '\ub098\uc05c \uac83 N\uac1c\ub9cc' \ub0a8\uae34 \ub9ac\ud3ec\ud2b8\ub85c \uc904\uc778\ub2e4.  (1\ud68c\ucc28 -> 1_union)
 
-    # setup: 입력 report가 -delay_type max인 경우
+    # setup: \uc785\ub825 report\uac00 -delay_type max\uc778 \uacbd\uc6b0
     python3 0_trim.py --dir round1/corners --keep 10000 --mode setup
 
-    # hold: 입력 report가 -delay_type min인 경우
+    # hold: \uc785\ub825 report\uac00 -delay_type min\uc778 \uacbd\uc6b0
     python3 0_trim.py --dir round1/corners --keep 10000 --mode hold
 
-    --mode를 생략하면 setup이 기본값이다. hold에서는 반드시 --mode hold를
-    넣는다. 작업이 끝나면 같은 --mode가 들어간 1_union.py 명령을 출력한다.
+    --mode\ub97c \uc0dd\ub7b5\ud558\uba74 setup\uc774 \uae30\ubcf8\uac12\uc774\ub2e4. hold\uc5d0\uc11c\ub294 \ubc18\ub4dc\uc2dc --mode hold\ub97c
+    \ub123\ub294\ub2e4. \uc791\uc5c5\uc774 \ub05d\ub098\uba74 \uac19\uc740 --mode\uac00 \ub4e4\uc5b4\uac04 1_union.py \uba85\ub839\uc744 \ucd9c\ub825\ud55c\ub2e4.
 
-무엇을 왜 하나
-    현업 리포트는 코너 하나에 경로가 8만 개씩 나온다. 그걸 그대로 1_union.py
-    에 넣으면 메모리가 감당이 안 된다. 그래서 **합치기 전에 파일 자체를**
-    코너마다 나쁜 것 N개만 남긴 리포트로 줄여 둔다.
+\ubb34\uc5c7\uc744 \uc65c \ud558\ub098
+    \ud604\uc5c5 \ub9ac\ud3ec\ud2b8\ub294 \ucf54\ub108 \ud558\ub098\uc5d0 \uacbd\ub85c\uac00 8\ub9cc \uac1c\uc529 \ub098\uc628\ub2e4. \uadf8\uac78 \uadf8\ub300\ub85c 1_union.py
+    \uc5d0 \ub123\uc73c\uba74 \uba54\ubaa8\ub9ac\uac00 \uac10\ub2f9\uc774 \uc548 \ub41c\ub2e4. \uadf8\ub798\uc11c **\ud569\uce58\uae30 \uc804\uc5d0 \ud30c\uc77c \uc790\uccb4\ub97c**
+    \ucf54\ub108\ub9c8\ub2e4 \ub098\uc05c \uac83 N\uac1c\ub9cc \ub0a8\uae34 \ub9ac\ud3ec\ud2b8\ub85c \uc904\uc5ec \ub454\ub2e4.
 
-    줄인 리포트는 진짜 report_timing 출력의 부분집합이다. 형식이 그대로라
-    1_union.py 든 vi 든 원본과 똑같이 쓸 수 있고, 한 번 만들어 두면 문턱값을
-    바꿔 가며 몇 번을 다시 돌려도 순식간이다.
+    \uc904\uc778 \ub9ac\ud3ec\ud2b8\ub294 \uc9c4\uc9dc report_timing \ucd9c\ub825\uc758 \ubd80\ubd84\uc9d1\ud569\uc774\ub2e4. \ud615\uc2dd\uc774 \uadf8\ub300\ub85c\ub77c
+    1_union.py \ub4e0 vi \ub4e0 \uc6d0\ubcf8\uacfc \ub611\uac19\uc774 \uc4f8 \uc218 \uc788\uace0, \ud55c \ubc88 \ub9cc\ub4e4\uc5b4 \ub450\uba74 \ubb38\ud131\uac12\uc744
+    \ubc14\uafd4 \uac00\uba70 \uba87 \ubc88\uc744 \ub2e4\uc2dc \ub3cc\ub824\ub3c4 \uc21c\uc2dd\uac04\uc774\ub2e4.
 
-코너별로 잘라도 합집합은 멀쩡한가
-    멀쩡하다. 코너 A 에서 위반인 경로는 A 자신의 상위 N 목록에 들어가므로,
-    다른 코너에서 안 잡히는 경로도 합집합에 그대로 들어온다. 빠지는 것은
-    **어느 코너에서도 상위 N 에 못 든 경로**뿐이고, 그건 애초에 볼 필요가 없다.
+\ucf54\ub108\ubcc4\ub85c \uc798\ub77c\ub3c4 \ud569\uc9d1\ud569\uc740 \uba40\uca61\ud55c\uac00
+    \uba40\uca61\ud558\ub2e4. \ucf54\ub108 A \uc5d0\uc11c \uc704\ubc18\uc778 \uacbd\ub85c\ub294 A \uc790\uc2e0\uc758 \uc0c1\uc704 N \ubaa9\ub85d\uc5d0 \ub4e4\uc5b4\uac00\ubbc0\ub85c,
+    \ub2e4\ub978 \ucf54\ub108\uc5d0\uc11c \uc548 \uc7a1\ud788\ub294 \uacbd\ub85c\ub3c4 \ud569\uc9d1\ud569\uc5d0 \uadf8\ub300\ub85c \ub4e4\uc5b4\uc628\ub2e4. \ube60\uc9c0\ub294 \uac83\uc740
+    **\uc5b4\ub290 \ucf54\ub108\uc5d0\uc11c\ub3c4 \uc0c1\uc704 N \uc5d0 \ubabb \ub4e0 \uacbd\ub85c**\ubfd0\uc774\uace0, \uadf8\uac74 \uc560\ucd08\uc5d0 \ubcfc \ud544\uc694\uac00 \uc5c6\ub2e4.
 
-    딱 하나 달라지는 것: 경로 P 가 코너 A 의 상위 N 에는 있고 코너 B 에서는
-    한참 밀려 잘렸다면, union_paths.tsv 의 slack__B 열이 빈칸이 된다.
-    경로 자체는 합집합에 들어가고 fixed_paths.tcl 도 정상이다. 어차피 2회차에
-    **모든 코너에서 다시 측정**하므로, 빈칸은 1회차 참고값이 비는 것뿐이다.
+    \ub531 \ud558\ub098 \ub2ec\ub77c\uc9c0\ub294 \uac83: \uacbd\ub85c P \uac00 \ucf54\ub108 A \uc758 \uc0c1\uc704 N \uc5d0\ub294 \uc788\uace0 \ucf54\ub108 B \uc5d0\uc11c\ub294
+    \ud55c\ucc38 \ubc00\ub824 \uc798\ub838\ub2e4\uba74, union_paths.tsv \uc758 slack__B \uc5f4\uc774 \ube48\uce78\uc774 \ub41c\ub2e4.
+    \uacbd\ub85c \uc790\uccb4\ub294 \ud569\uc9d1\ud569\uc5d0 \ub4e4\uc5b4\uac00\uace0 fixed_paths.tcl \ub3c4 \uc815\uc0c1\uc774\ub2e4. \uc5b4\ucc28\ud53c 2\ud68c\ucc28\uc5d0
+    **\ubaa8\ub4e0 \ucf54\ub108\uc5d0\uc11c \ub2e4\uc2dc \uce21\uc815**\ud558\ubbc0\ub85c, \ube48\uce78\uc740 1\ud68c\ucc28 \ucc38\uace0\uac12\uc774 \ube44\ub294 \uac83\ubfd0\uc774\ub2e4.
 
-메모리
-    파일을 두 번 흘려 읽는다. 경로를 쌓아 두지 않는다.
-      1번째 : slack 값만 읽어 '어디서 자를지' 정한다   (경로당 8바이트)
-      2번째 : 그 문턱을 넘는 경로 블록만 그대로 써낸다  (한 블록씩 흘려보냄)
-    그래서 리포트가 몇 GB 든 메모리는 수십 MB 를 안 넘는다.
+\uba54\ubaa8\ub9ac
+    \ud30c\uc77c\uc744 \ub450 \ubc88 \ud758\ub824 \uc77d\ub294\ub2e4. \uacbd\ub85c\ub97c \uc313\uc544 \ub450\uc9c0 \uc54a\ub294\ub2e4.
+      1\ubc88\uc9f8 : slack \uac12\ub9cc \uc77d\uc5b4 '\uc5b4\ub514\uc11c \uc790\ub97c\uc9c0' \uc815\ud55c\ub2e4   (\uacbd\ub85c\ub2f9 8\ubc14\uc774\ud2b8)
+      2\ubc88\uc9f8 : \uadf8 \ubb38\ud131\uc744 \ub118\ub294 \uacbd\ub85c \ube14\ub85d\ub9cc \uadf8\ub300\ub85c \uc368\ub0b8\ub2e4  (\ud55c \ube14\ub85d\uc529 \ud758\ub824\ubcf4\ub0c4)
+    \uadf8\ub798\uc11c \ub9ac\ud3ec\ud2b8\uac00 \uba87 GB \ub4e0 \uba54\ubaa8\ub9ac\ub294 \uc218\uc2ed MB \ub97c \uc548 \ub118\ub294\ub2e4.
 
-입력
-    <dir>/*.rpt      코너마다 하나. 파일 이름이 그대로 코너 이름이 된다.
+\uc785\ub825
+    <dir>/*.rpt      \ucf54\ub108\ub9c8\ub2e4 \ud558\ub098. \ud30c\uc77c \uc774\ub984\uc774 \uadf8\ub300\ub85c \ucf54\ub108 \uc774\ub984\uc774 \ub41c\ub2e4.
 
-출력
-    <out>/*.rpt      같은 이름, 같은 형식. 경로만 N개로 줄어 있다.
-                     그다음:  python3 1_union.py --dir <out> --mode setup|hold
+\ucd9c\ub825
+    <out>/*.rpt      \uac19\uc740 \uc774\ub984, \uac19\uc740 \ud615\uc2dd. \uacbd\ub85c\ub9cc N\uac1c\ub85c \uc904\uc5b4 \uc788\ub2e4.
+                     \uadf8\ub2e4\uc74c:  python3 1_union.py --dir <out> --mode setup|hold
 
-옵션
-    --dir <폴더>     원본 .rpt 가 있는 폴더                  (필수)
-    --keep N         코너마다 남길 경로 수. slack 이 나쁜 것부터. (기본 10000)
-    --out <폴더>     결과를 쓸 폴더. 생략하면 <dir>_top<N>
-    --mode setup|hold  setup 은 slack 이 작은 것이 나쁘다. hold 도 같다.
-                     기본은 setup. 분석 종류를 마지막 1_union.py 명령에 전달한다.
-    --verify         정렬돼 있는지 끝까지 확인한다. 리포트를 -sort_by slack
-                     없이 뽑았을 가능성이 있을 때만 쓴다. 기본은 확인하지 않고
-                     **앞에서 N개만 읽고 멈춘다**(그래서 '원래' 개수는 ? 로 뜬다).
+\uc635\uc158
+    --dir <\ud3f4\ub354>     \uc6d0\ubcf8 .rpt \uac00 \uc788\ub294 \ud3f4\ub354                  (\ud544\uc218)
+    --keep N         \ucf54\ub108\ub9c8\ub2e4 \ub0a8\uae38 \uacbd\ub85c \uc218. slack \uc774 \ub098\uc05c \uac83\ubd80\ud130. (\uae30\ubcf8 10000)
+    --out <\ud3f4\ub354>     \uacb0\uacfc\ub97c \uc4f8 \ud3f4\ub354. \uc0dd\ub7b5\ud558\uba74 <dir>_top<N>
+    --mode setup|hold  setup \uc740 slack \uc774 \uc791\uc740 \uac83\uc774 \ub098\uc058\ub2e4. hold \ub3c4 \uac19\ub2e4.
+                     \uae30\ubcf8\uc740 setup. \ubd84\uc11d \uc885\ub958\ub97c \ub9c8\uc9c0\ub9c9 1_union.py \uba85\ub839\uc5d0 \uc804\ub2ec\ud55c\ub2e4.
+    --verify         \uc815\ub82c\ub3fc \uc788\ub294\uc9c0 \ub05d\uae4c\uc9c0 \ud655\uc778\ud55c\ub2e4. \ub9ac\ud3ec\ud2b8\ub97c -sort_by slack
+                     \uc5c6\uc774 \ubf51\uc558\uc744 \uac00\ub2a5\uc131\uc774 \uc788\uc744 \ub54c\ub9cc \uc4f4\ub2e4. \uae30\ubcf8\uc740 \ud655\uc778\ud558\uc9c0 \uc54a\uace0
+                     **\uc55e\uc5d0\uc11c N\uac1c\ub9cc \uc77d\uace0 \uba48\ucd98\ub2e4**(\uadf8\ub798\uc11c '\uc6d0\ub798' \uac1c\uc218\ub294 ? \ub85c \ub72c\ub2e4).
 
-    --jobs N (-j N)  코너를 동시에 몇 개 처리할지. **기본 1(하나씩)**.
-                     이 단계는 경로를 쌓아 두지 않아 몇 개로 나눠도 메모리가
-                     거의 안 늘어난다(코너 12개 기준 34MB). 코너가 많으면
-                     -j 8 정도로 올리면 그만큼 빨라진다.
-    --force          결과 폴더에 이미 파일이 있어도 덮어쓴다
+    --jobs N (-j N)  \ucf54\ub108\ub97c \ub3d9\uc2dc\uc5d0 \uba87 \uac1c \ucc98\ub9ac\ud560\uc9c0. **\uae30\ubcf8 1(\ud558\ub098\uc529)**.
+                     \uc774 \ub2e8\uacc4\ub294 \uacbd\ub85c\ub97c \uc313\uc544 \ub450\uc9c0 \uc54a\uc544 \uba87 \uac1c\ub85c \ub098\ub220\ub3c4 \uba54\ubaa8\ub9ac\uac00
+                     \uac70\uc758 \uc548 \ub298\uc5b4\ub09c\ub2e4(\ucf54\ub108 12\uac1c \uae30\uc900 34MB). \ucf54\ub108\uac00 \ub9ce\uc73c\uba74
+                     -j 8 \uc815\ub3c4\ub85c \uc62c\ub9ac\uba74 \uadf8\ub9cc\ud07c \ube68\ub77c\uc9c4\ub2e4.
+    --force          \uacb0\uacfc \ud3f4\ub354\uc5d0 \uc774\ubbf8 \ud30c\uc77c\uc774 \uc788\uc5b4\ub3c4 \ub36e\uc5b4\uc4f4\ub2e4
 
-자주 쓰는 형태
+\uc790\uc8fc \uc4f0\ub294 \ud615\ud0dc
     python3 0_trim.py  --dir round1/corners --keep 10000 --mode setup
     python3 1_union.py --dir round1/corners_top10000 --mode setup --max-paths 2000
 
@@ -81,43 +84,43 @@ force_utf8()
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 SLACK_RE = re.compile(r"^\s*slack\s*\(([^)]+)\)\s+(-?[\d.]+)")
 
-# 바이트용 같은 정규식. 이 스크립트는 리포트에서 숫자만 꺼내고 나머지는
-# 그대로 복사하므로, 문자열로 디코딩했다가 다시 인코딩할 이유가 없다.
-# 디코딩을 안 하면 빠르기도 하고, 이상한 문자가 섞여 있어도 원본이 그대로 나온다.
+# \ubc14\uc774\ud2b8\uc6a9 \uac19\uc740 \uc815\uaddc\uc2dd. \uc774 \uc2a4\ud06c\ub9bd\ud2b8\ub294 \ub9ac\ud3ec\ud2b8\uc5d0\uc11c \uc22b\uc790\ub9cc \uaebc\ub0b4\uace0 \ub098\uba38\uc9c0\ub294
+# \uadf8\ub300\ub85c \ubcf5\uc0ac\ud558\ubbc0\ub85c, \ubb38\uc790\uc5f4\ub85c \ub514\ucf54\ub529\ud588\ub2e4\uac00 \ub2e4\uc2dc \uc778\ucf54\ub529\ud560 \uc774\uc720\uac00 \uc5c6\ub2e4.
+# \ub514\ucf54\ub529\uc744 \uc548 \ud558\uba74 \ube60\ub974\uae30\ub3c4 \ud558\uace0, \uc774\uc0c1\ud55c \ubb38\uc790\uac00 \uc11e\uc5ec \uc788\uc5b4\ub3c4 \uc6d0\ubcf8\uc774 \uadf8\ub300\ub85c \ub098\uc628\ub2e4.
 START_B_RE = re.compile(rb"^[ \t]*Startpoint:")
 SLACK_B_RE = re.compile(rb"^[ \t]*slack\s*\([^)]*\)\s+(-?[\d.]+)")
 
 
-# ---- 결과 코드 -------------------------------------------------------
+# ---- \uacb0\uacfc \ucf54\ub4dc -------------------------------------------------------
 # =====================================================================
-# 전압 열  --  경로가 코너 전압 하나로만 되어 있는지 본다
+# \uc804\uc555 \uc5f4  --  \uacbd\ub85c\uac00 \ucf54\ub108 \uc804\uc555 \ud558\ub098\ub85c\ub9cc \ub418\uc5b4 \uc788\ub294\uc9c0 \ubcf8\ub2e4
 # =====================================================================
-# 담당자분이 붙여 주시는 열 이름이 정해지면 **여기만** 고치면 된다.
-# 대소문자는 안 가린다. 머리말에서 이 이름을 찾아 글자 위치를 얻고,
-# 핀 줄의 그 위치에서 값을 읽는다(2c_merge.py 가 열을 맞추는 방식과 같다).
+# \ub2f4\ub2f9\uc790\ubd84\uc774 \ubd99\uc5ec \uc8fc\uc2dc\ub294 \uc5f4 \uc774\ub984\uc774 \uc815\ud574\uc9c0\uba74 **\uc5ec\uae30\ub9cc** \uace0\uce58\uba74 \ub41c\ub2e4.
+# \ub300\uc18c\ubb38\uc790\ub294 \uc548 \uac00\ub9b0\ub2e4. \uba38\ub9ac\ub9d0\uc5d0\uc11c \uc774 \uc774\ub984\uc744 \ucc3e\uc544 \uae00\uc790 \uc704\uce58\ub97c \uc5bb\uace0,
+# \ud540 \uc904\uc758 \uadf8 \uc704\uce58\uc5d0\uc11c \uac12\uc744 \uc77d\ub294\ub2e4(2c_merge.py \uac00 \uc5f4\uc744 \ub9de\ucd94\ub294 \ubc29\uc2dd\uacfc \uac19\ub2e4).
 VOLT_NAMES = ("Voltage", "Volt", "VDD")
-# 위에 어떻게 적으시든 대소문자를 안 가리게 여기서 소문자로 맞춰 둔다.
-# (예전에는 적힌 그대로 비교해서, "Voltage" 라고 넣으면 영영 안 맞았다)
+# \uc704\uc5d0 \uc5b4\ub5bb\uac8c \uc801\uc73c\uc2dc\ub4e0 \ub300\uc18c\ubb38\uc790\ub97c \uc548 \uac00\ub9ac\uac8c \uc5ec\uae30\uc11c \uc18c\ubb38\uc790\ub85c \ub9de\ucdb0 \ub454\ub2e4.
+# (\uc608\uc804\uc5d0\ub294 \uc801\ud78c \uadf8\ub300\ub85c \ube44\uad50\ud574\uc11c, "Voltage" \ub77c\uace0 \ub123\uc73c\uba74 \uc601\uc601 \uc548 \ub9de\uc558\ub2e4)
 _VOLT_LC = tuple(n.strip().lower() for n in VOLT_NAMES if n.strip())
 
-# 머리말 줄. report_timing 은 경로마다 이 줄을 다시 찍는다(실측: 경로 수와 같음).
+# \uba38\ub9ac\ub9d0 \uc904. report_timing \uc740 \uacbd\ub85c\ub9c8\ub2e4 \uc774 \uc904\uc744 \ub2e4\uc2dc \ucc0d\ub294\ub2e4(\uc2e4\uce21: \uacbd\ub85c \uc218\uc640 \uac19\uc74c).
 HDR_B_RE = re.compile(rb"^\s*Point\b")
 DIGIT_B_RE = re.compile(rb"[0-9]")
 NETLINE_B_RE = re.compile(rb"\(net\)")
-# 핀 줄 : "  <이름> (<셀>)" 꼴. 전압은 여기에만 붙는다.
+# \ud540 \uc904 : "  <\uc774\ub984> (<\uc140>)" \uaf34. \uc804\uc555\uc740 \uc5ec\uae30\uc5d0\ub9cc \ubd99\ub294\ub2e4.
 PINLINE_B_RE = re.compile(rb"^\s+\S+\s+\([^)]*\)")
 WORD_B_RE = re.compile(rb"[a-z_]+")
 NUM_B_RE = re.compile(rb"-?\d+(?:\.\d+)?")
 
-# 코너 이름에서 전압을 읽는다.  tt0p78v25c -> 0.78,  TT_0p7V_25C -> 0.7
+# \ucf54\ub108 \uc774\ub984\uc5d0\uc11c \uc804\uc555\uc744 \uc77d\ub294\ub2e4.  tt0p78v25c -> 0.78,  TT_0p7V_25C -> 0.7
 CORNER_V_RE = re.compile(r"(\d+)p(\d+)\s*v", re.I)
 
 
 def voltage_of_corner(name):
-    """코너(파일) 이름에서 전압을 뽑는다. 못 읽으면 None.
+    """\ucf54\ub108(\ud30c\uc77c) \uc774\ub984\uc5d0\uc11c \uc804\uc555\uc744 \ubf51\ub294\ub2e4. \ubabb \uc77d\uc73c\uba74 None.
 
-    0_trim 은 코너를 여러 개 한꺼번에 돌기 때문에, 목표 전압을 옵션 하나로
-    고정하면 안 된다. 코너마다 자기 이름의 전압을 쓴다.
+    0_trim \uc740 \ucf54\ub108\ub97c \uc5ec\ub7ec \uac1c \ud55c\uaebc\ubc88\uc5d0 \ub3cc\uae30 \ub54c\ubb38\uc5d0, \ubaa9\ud45c \uc804\uc555\uc744 \uc635\uc158 \ud558\ub098\ub85c
+    \uace0\uc815\ud558\uba74 \uc548 \ub41c\ub2e4. \ucf54\ub108\ub9c8\ub2e4 \uc790\uae30 \uc774\ub984\uc758 \uc804\uc555\uc744 \uc4f4\ub2e4.
     """
     m = CORNER_V_RE.search(name)
     if not m:
@@ -129,17 +132,17 @@ def voltage_of_corner(name):
 
 
 def volt_span(header):
-    """머리말에서 전압 열이 시작하는 글자 위치. 못 찾으면 None.
+    """\uba38\ub9ac\ub9d0\uc5d0\uc11c \uc804\uc555 \uc5f4\uc774 \uc2dc\uc791\ud558\ub294 \uae00\uc790 \uc704\uce58. \ubabb \ucc3e\uc73c\uba74 None.
 
-    전압은 **맨 오른쪽 열**이라, 이름이 여러 번 나오면 마지막 것을 쓴다.
+    \uc804\uc555\uc740 **\ub9e8 \uc624\ub978\ucabd \uc5f4**\uc774\ub77c, \uc774\ub984\uc774 \uc5ec\ub7ec \ubc88 \ub098\uc624\uba74 \ub9c8\uc9c0\ub9c9 \uac83\uc744 \uc4f4\ub2e4.
 
-    경계를 어떻게 잡나
-        **바로 앞 열 이름이 끝난 자리**부터가 전압 열이다. 거기서부터 줄 끝까지
-        본다. 이러면 옆 열(Path 등) 값에는 절대 손대지 않는다 -- 앞 열의 값은
-        그 열 이름 끝에 맞춰 정렬되므로 이 위치보다 앞에서 끝난다.
+    \uacbd\uacc4\ub97c \uc5b4\ub5bb\uac8c \uc7a1\ub098
+        **\ubc14\ub85c \uc55e \uc5f4 \uc774\ub984\uc774 \ub05d\ub09c \uc790\ub9ac**\ubd80\ud130\uac00 \uc804\uc555 \uc5f4\uc774\ub2e4. \uac70\uae30\uc11c\ubd80\ud130 \uc904 \ub05d\uae4c\uc9c0
+        \ubcf8\ub2e4. \uc774\ub7ec\uba74 \uc606 \uc5f4(Path \ub4f1) \uac12\uc5d0\ub294 \uc808\ub300 \uc190\ub300\uc9c0 \uc54a\ub294\ub2e4 -- \uc55e \uc5f4\uc758 \uac12\uc740
+        \uadf8 \uc5f4 \uc774\ub984 \ub05d\uc5d0 \ub9de\ucdb0 \uc815\ub82c\ub418\ubbc0\ub85c \uc774 \uc704\uce58\ubcf4\ub2e4 \uc55e\uc5d0\uc11c \ub05d\ub09c\ub2e4.
 
-        예전에는 이름 앞뒤로 여유를 두고 못 읽으면 더 넓혀서 찾았는데, 전압이
-        안 찍힌 줄에서 옆 열 숫자를 전압으로 집었다. 그래서 없앴다.
+        \uc608\uc804\uc5d0\ub294 \uc774\ub984 \uc55e\ub4a4\ub85c \uc5ec\uc720\ub97c \ub450\uace0 \ubabb \uc77d\uc73c\uba74 \ub354 \ub113\ud600\uc11c \ucc3e\uc558\ub294\ub370, \uc804\uc555\uc774
+        \uc548 \ucc0d\ud78c \uc904\uc5d0\uc11c \uc606 \uc5f4 \uc22b\uc790\ub97c \uc804\uc555\uc73c\ub85c \uc9d1\uc5c8\ub2e4. \uadf8\ub798\uc11c \uc5c6\uc574\ub2e4.
     """
     low = header.lower()
     hits = list(WORD_B_RE.finditer(low))
@@ -153,80 +156,80 @@ def volt_span(header):
             idx = i
     if idx is None:
         return None
-    # 값은 열 이름의 **오른쪽 끝**에 맞춰 정렬된다. 이름보다 길 수 있으니
-    # 왼쪽으로 조금 여유를 두되, **앞 열 이름이 끝난 자리보다는 왼쪽으로 안 간다.**
-    # 앞 열의 값도 그 이름 끝에 맞춰 정렬되므로, 이 선을 지키면 옆 열 값에
-    # 절대 닿지 않는다.
+    # \uac12\uc740 \uc5f4 \uc774\ub984\uc758 **\uc624\ub978\ucabd \ub05d**\uc5d0 \ub9de\ucdb0 \uc815\ub82c\ub41c\ub2e4. \uc774\ub984\ubcf4\ub2e4 \uae38 \uc218 \uc788\uc73c\ub2c8
+    # \uc67c\ucabd\uc73c\ub85c \uc870\uae08 \uc5ec\uc720\ub97c \ub450\ub418, **\uc55e \uc5f4 \uc774\ub984\uc774 \ub05d\ub09c \uc790\ub9ac\ubcf4\ub2e4\ub294 \uc67c\ucabd\uc73c\ub85c \uc548 \uac04\ub2e4.**
+    # \uc55e \uc5f4\uc758 \uac12\ub3c4 \uadf8 \uc774\ub984 \ub05d\uc5d0 \ub9de\ucdb0 \uc815\ub82c\ub418\ubbc0\ub85c, \uc774 \uc120\uc744 \uc9c0\ud0a4\uba74 \uc606 \uc5f4 \uac12\uc5d0
+    # \uc808\ub300 \ub2ff\uc9c0 \uc54a\ub294\ub2e4.
     lo = hits[idx].start() - 12
     if idx > 0 and lo < hits[idx - 1].end():
-        lo = hits[idx - 1].end()        # 앞 열 이름 끝보다 왼쪽으로는 안 간다
+        lo = hits[idx - 1].end()        # \uc55e \uc5f4 \uc774\ub984 \ub05d\ubcf4\ub2e4 \uc67c\ucabd\uc73c\ub85c\ub294 \uc548 \uac04\ub2e4
     if lo < 0:
         lo = 0
-    return lo                            # 여기서 **줄 끝까지**가 전압 열
+    return lo                            # \uc5ec\uae30\uc11c **\uc904 \ub05d\uae4c\uc9c0**\uac00 \uc804\uc555 \uc5f4
 
 
 def line_volt(line, lo):
-    """줄에서 전압 값을 읽는다. **전압 열에서만** 가져온다.
+    """\uc904\uc5d0\uc11c \uc804\uc555 \uac12\uc744 \uc77d\ub294\ub2e4. **\uc804\uc555 \uc5f4\uc5d0\uc11c\ub9cc** \uac00\uc838\uc628\ub2e4.
 
-    전압은 맨 오른쪽 열이므로 lo 부터 **줄 끝까지**가 전압 열이다. 그 안의
-    **마지막 낱말**을 숫자로 읽는다.
+    \uc804\uc555\uc740 \ub9e8 \uc624\ub978\ucabd \uc5f4\uc774\ubbc0\ub85c lo \ubd80\ud130 **\uc904 \ub05d\uae4c\uc9c0**\uac00 \uc804\uc555 \uc5f4\uc774\ub2e4. \uadf8 \uc548\uc758
+    **\ub9c8\uc9c0\ub9c9 \ub0b1\ub9d0**\uc744 \uc22b\uc790\ub85c \uc77d\ub294\ub2e4.
 
-    왜 '끝까지' 인가
-        값이 열 이름보다 길 수도(0.780000), 이름보다 오른쪽으로 더 나갈 수도
-        있다. 좁게 잡으면 값이 범위 밖으로 나가 **전부 빈칸으로 보인다.**
+    \uc65c '\ub05d\uae4c\uc9c0' \uc778\uac00
+        \uac12\uc774 \uc5f4 \uc774\ub984\ubcf4\ub2e4 \uae38 \uc218\ub3c4(0.780000), \uc774\ub984\ubcf4\ub2e4 \uc624\ub978\ucabd\uc73c\ub85c \ub354 \ub098\uac08 \uc218\ub3c4
+        \uc788\ub2e4. \uc881\uac8c \uc7a1\uc73c\uba74 \uac12\uc774 \ubc94\uc704 \ubc16\uc73c\ub85c \ub098\uac00 **\uc804\ubd80 \ube48\uce78\uc73c\ub85c \ubcf4\uc778\ub2e4.**
 
-    왜 옆 열이 안 걸리나
-        lo 는 앞 열 이름이 끝난 자리보다 왼쪽으로 안 간다. 앞 열의 값도 그
-        이름 끝에 맞춰 정렬되므로 lo 앞에서 끝난다. 그래서 lo 뒤에 남는 것은
-        rise/fall 표시(r/f)와 전압뿐이고, 마지막 낱말이 곧 전압이다.
+    \uc65c \uc606 \uc5f4\uc774 \uc548 \uac78\ub9ac\ub098
+        lo \ub294 \uc55e \uc5f4 \uc774\ub984\uc774 \ub05d\ub09c \uc790\ub9ac\ubcf4\ub2e4 \uc67c\ucabd\uc73c\ub85c \uc548 \uac04\ub2e4. \uc55e \uc5f4\uc758 \uac12\ub3c4 \uadf8
+        \uc774\ub984 \ub05d\uc5d0 \ub9de\ucdb0 \uc815\ub82c\ub418\ubbc0\ub85c lo \uc55e\uc5d0\uc11c \ub05d\ub09c\ub2e4. \uadf8\ub798\uc11c lo \ub4a4\uc5d0 \ub0a8\ub294 \uac83\uc740
+        rise/fall \ud45c\uc2dc(r/f)\uc640 \uc804\uc555\ubfd0\uc774\uace0, \ub9c8\uc9c0\ub9c9 \ub0b1\ub9d0\uc774 \uace7 \uc804\uc555\uc774\ub2e4.
 
-    빈칸
-        전압이 안 찍힌 줄은 마지막 낱말이 r/f 이거나 아무것도 없다. 둘 다
-        숫자가 아니므로 None 이고 그 줄은 그냥 넘어간다(클럭 제너레이터 등).
+    \ube48\uce78
+        \uc804\uc555\uc774 \uc548 \ucc0d\ud78c \uc904\uc740 \ub9c8\uc9c0\ub9c9 \ub0b1\ub9d0\uc774 r/f \uc774\uac70\ub098 \uc544\ubb34\uac83\ub3c4 \uc5c6\ub2e4. \ub458 \ub2e4
+        \uc22b\uc790\uac00 \uc544\ub2c8\ubbc0\ub85c None \uc774\uace0 \uadf8 \uc904\uc740 \uadf8\ub0e5 \ub118\uc5b4\uac04\ub2e4(\ud074\ub7ed \uc81c\ub108\ub808\uc774\ud130 \ub4f1).
     """
     if len(line) <= lo:
-        return None                     # 그 열까지 오지도 않는 짧은 줄
+        return None                     # \uadf8 \uc5f4\uae4c\uc9c0 \uc624\uc9c0\ub3c4 \uc54a\ub294 \uc9e7\uc740 \uc904
     parts = line[lo:].split()
     if not parts:
-        return None                     # 비어 있다
+        return None                     # \ube44\uc5b4 \uc788\ub2e4
     try:
         return float(parts[-1])
     except ValueError:
-        return None                     # r/f 만 있는 등
+        return None                     # r/f \ub9cc \uc788\ub294 \ub4f1
 
 
 class VoltCheck(object):
-    """경로 블록 하나를 훑어 '코너 전압 하나뿐인가' 를 판정한다.
+    """\uacbd\ub85c \ube14\ub85d \ud558\ub098\ub97c \ud6d1\uc5b4 '\ucf54\ub108 \uc804\uc555 \ud558\ub098\ubfd0\uc778\uac00' \ub97c \ud310\uc815\ud55c\ub2e4.
 
-    target 이 None 이면 아무것도 안 한다(옛 동작 그대로).
+    target \uc774 None \uc774\uba74 \uc544\ubb34\uac83\ub3c4 \uc548 \ud55c\ub2e4(\uc61b \ub3d9\uc791 \uadf8\ub300\ub85c).
     """
 
-    # 판정값
-    PASS = 0      # 목표 전압 하나뿐
-    MIXED = 1     # 두 개 이상 -- macro 등이 다른 전원
-    NOVOLT = 2    # 전압을 하나도 못 읽음 -- 열 이름이 다를 수 있다
-    OTHER = 3     # 전압은 하나인데 목표와 다름
+    # \ud310\uc815\uac12
+    PASS = 0      # \ubaa9\ud45c \uc804\uc555 \ud558\ub098\ubfd0
+    MIXED = 1     # \ub450 \uac1c \uc774\uc0c1 -- macro \ub4f1\uc774 \ub2e4\ub978 \uc804\uc6d0
+    NOVOLT = 2    # \uc804\uc555\uc744 \ud558\ub098\ub3c4 \ubabb \uc77d\uc74c -- \uc5f4 \uc774\ub984\uc774 \ub2e4\ub97c \uc218 \uc788\ub2e4
+    OTHER = 3     # \uc804\uc555\uc740 \ud558\ub098\uc778\ub370 \ubaa9\ud45c\uc640 \ub2e4\ub984
 
     def __init__(self, target):
         self.target = target
-        self.span = None          # 머리말에서 얻은 열 위치. 파일 내내 기억한다
+        self.span = None          # \uba38\ub9ac\ub9d0\uc5d0\uc11c \uc5bb\uc740 \uc5f4 \uc704\uce58. \ud30c\uc77c \ub0b4\ub0b4 \uae30\uc5b5\ud55c\ub2e4
         self.seen = set()
-        self.hdr = None           # 처음 만난 머리말 원문 (열 이름을 못 찾을 때 보여준다)
-        self.n_read = 0           # 전압 값을 실제로 몇 번 읽었나 (진단용)
-        self.first = None         # 처음 읽어낸 (값, 그 줄) -- 화면에 바로 보여준다
-        self.colname = None       # 머리말에서 실제로 맞은 열 이름
+        self.hdr = None           # \ucc98\uc74c \ub9cc\ub09c \uba38\ub9ac\ub9d0 \uc6d0\ubb38 (\uc5f4 \uc774\ub984\uc744 \ubabb \ucc3e\uc744 \ub54c \ubcf4\uc5ec\uc900\ub2e4)
+        self.n_read = 0           # \uc804\uc555 \uac12\uc744 \uc2e4\uc81c\ub85c \uba87 \ubc88 \uc77d\uc5c8\ub098 (\uc9c4\ub2e8\uc6a9)
+        self.first = None         # \ucc98\uc74c \uc77d\uc5b4\ub0b8 (\uac12, \uadf8 \uc904) -- \ud654\uba74\uc5d0 \ubc14\ub85c \ubcf4\uc5ec\uc900\ub2e4
+        self.colname = None       # \uba38\ub9ac\ub9d0\uc5d0\uc11c \uc2e4\uc81c\ub85c \ub9de\uc740 \uc5f4 \uc774\ub984
 
     def on(self):
         return self.target is not None
 
     @staticmethod
     def is_header(line):
-        """머리말 줄인가.
+        """\uba38\ub9ac\ub9d0 \uc904\uc778\uac00.
 
-        1) '  Point ...' 로 시작하면 머리말이다 (PT 기본 형식).
-        2) 아니어도, **숫자가 하나도 없고** 전압 열 이름이 낱말로 들어 있으면
-           머리말로 본다. 첫 열 이름이 Point 가 아닌 리포트도 있기 때문이다.
-           값 줄에는 반드시 숫자가 있으므로 값 줄이 잘못 걸리지 않는다.
+        1) '  Point ...' \ub85c \uc2dc\uc791\ud558\uba74 \uba38\ub9ac\ub9d0\uc774\ub2e4 (PT \uae30\ubcf8 \ud615\uc2dd).
+        2) \uc544\ub2c8\uc5b4\ub3c4, **\uc22b\uc790\uac00 \ud558\ub098\ub3c4 \uc5c6\uace0** \uc804\uc555 \uc5f4 \uc774\ub984\uc774 \ub0b1\ub9d0\ub85c \ub4e4\uc5b4 \uc788\uc73c\uba74
+           \uba38\ub9ac\ub9d0\ub85c \ubcf8\ub2e4. \uccab \uc5f4 \uc774\ub984\uc774 Point \uac00 \uc544\ub2cc \ub9ac\ud3ec\ud2b8\ub3c4 \uc788\uae30 \ub54c\ubb38\uc774\ub2e4.
+           \uac12 \uc904\uc5d0\ub294 \ubc18\ub4dc\uc2dc \uc22b\uc790\uac00 \uc788\uc73c\ubbc0\ub85c \uac12 \uc904\uc774 \uc798\ubabb \uac78\ub9ac\uc9c0 \uc54a\ub294\ub2e4.
         """
         if HDR_B_RE.match(line):
             return True
@@ -235,11 +238,11 @@ class VoltCheck(object):
         return volt_span(line) is not None
 
     def feed(self, line):
-        """블록 안의 줄을 하나 넣는다."""
+        """\ube14\ub85d \uc548\uc758 \uc904\uc744 \ud558\ub098 \ub123\ub294\ub2e4."""
         if self.target is None:
             return
-        # 머리말은 **언제나** 본다. 열 위치가 경로마다 바뀌므로, 여기서
-        # 건너뛰면 다음 블록을 앞 블록의 위치로 읽게 된다.
+        # \uba38\ub9ac\ub9d0\uc740 **\uc5b8\uc81c\ub098** \ubcf8\ub2e4. \uc5f4 \uc704\uce58\uac00 \uacbd\ub85c\ub9c8\ub2e4 \ubc14\ub00c\ubbc0\ub85c, \uc5ec\uae30\uc11c
+        # \uac74\ub108\ub6f0\uba74 \ub2e4\uc74c \ube14\ub85d\uc744 \uc55e \ube14\ub85d\uc758 \uc704\uce58\ub85c \uc77d\uac8c \ub41c\ub2e4.
         if VoltCheck.is_header(line):
             if self.hdr is None:
                 self.hdr = line.rstrip()
@@ -257,18 +260,18 @@ class VoltCheck(object):
             return
         if self.span is None:
             return
-        # 전압이 이미 두 종류면 판정은 MIXED 로 끝났다. 그 경로의 남은 줄을
-        # 더 읽어 봐야 결과가 안 바뀌므로 건너뛴다(경로가 길수록 이득이 크다).
+        # \uc804\uc555\uc774 \uc774\ubbf8 \ub450 \uc885\ub958\uba74 \ud310\uc815\uc740 MIXED \ub85c \ub05d\ub0ac\ub2e4. \uadf8 \uacbd\ub85c\uc758 \ub0a8\uc740 \uc904\uc744
+        # \ub354 \uc77d\uc5b4 \ubd10\uc57c \uacb0\uacfc\uac00 \uc548 \ubc14\ub00c\ubbc0\ub85c \uac74\ub108\ub6f4\ub2e4(\uacbd\ub85c\uac00 \uae38\uc218\ub85d \uc774\ub4dd\uc774 \ud06c\ub2e4).
         if len(self.seen) > 1:
             return
-        # **핀 줄만 본다.**
+        # **\ud540 \uc904\ub9cc \ubcf8\ub2e4.**
         #
-        # 요약 줄(data arrival time, slack, clock uncertainty ...)은 숫자가
-        # 열과 무관하게 맨 오른쪽에 찍힌다. 그걸 전압 열 위치에서 자르면
-        # 숫자 중간이 잘려 엉뚱한 값이 나온다. 실측: "-1.310492" 의 끝자리만
-        # 잘려 2.0 으로 읽혔고, 그 탓에 모든 경로가 mixed 가 됐다.
+        # \uc694\uc57d \uc904(data arrival time, slack, clock uncertainty ...)\uc740 \uc22b\uc790\uac00
+        # \uc5f4\uacfc \ubb34\uad00\ud558\uac8c \ub9e8 \uc624\ub978\ucabd\uc5d0 \ucc0d\ud78c\ub2e4. \uadf8\uac78 \uc804\uc555 \uc5f4 \uc704\uce58\uc5d0\uc11c \uc790\ub974\uba74
+        # \uc22b\uc790 \uc911\uac04\uc774 \uc798\ub824 \uc5c9\ub6b1\ud55c \uac12\uc774 \ub098\uc628\ub2e4. \uc2e4\uce21: "-1.310492" \uc758 \ub05d\uc790\ub9ac\ub9cc
+        # \uc798\ub824 2.0 \uc73c\ub85c \uc77d\ud614\uace0, \uadf8 \ud0d3\uc5d0 \ubaa8\ub4e0 \uacbd\ub85c\uac00 mixed \uac00 \ub410\ub2e4.
         #
-        # 넷 줄도 열 구성이 달라서(Fanout/Cap 뿐) 뺀다.
+        # \ub137 \uc904\ub3c4 \uc5f4 \uad6c\uc131\uc774 \ub2ec\ub77c\uc11c(Fanout/Cap \ubfd0) \ube80\ub2e4.
         if not PINLINE_B_RE.match(line):
             return
         if NETLINE_B_RE.search(line):
@@ -281,7 +284,7 @@ class VoltCheck(object):
             self.seen.add(round(v, 6))
 
     def verdict(self):
-        """블록이 끝났을 때 부른다. 판정을 주고 다음 블록을 위해 비운다."""
+        """\ube14\ub85d\uc774 \ub05d\ub0ac\uc744 \ub54c \ubd80\ub978\ub2e4. \ud310\uc815\uc744 \uc8fc\uace0 \ub2e4\uc74c \ube14\ub85d\uc744 \uc704\ud574 \ube44\uc6b4\ub2e4."""
         if self.target is None:
             return VoltCheck.PASS
         seen = self.seen
@@ -295,19 +298,19 @@ class VoltCheck(object):
 
 
 CODE_INFO = {
-    "E-VNAME":    ("코너 이름에서 전압을 못 읽었습니다",
-                   "--voltage auto 는 이름에 0p78v 같은 표기가 있어야 합니다. "
-                   "이름이 그렇지 않으면 --voltage 0.78 처럼 값을 직접 주세요."),
-    "E-NORPT":   ("리포트 파일(.rpt)을 못 찾았습니다",
-                  "--dir 로 준 폴더에 코너별 report_timing 결과를 넣어 주세요."),
-    "E-OUTSAME": ("결과 폴더가 원본 폴더와 같습니다",
-                  "--out 으로 다른 폴더를 주세요. 원본을 덮어쓰면 되돌릴 수 없습니다."),
-    "E-OUTFULL": ("결과 폴더에 이미 .rpt 가 있습니다",
-                  "다른 --out 을 주거나, 덮어쓸 생각이면 --force 를 붙이세요."),
-    "E-NOPATH":  ("리포트에서 경로를 하나도 못 읽었습니다",
-                  "report_timing 출력이 맞는지, 파일이 비지 않았는지 확인해 주세요."),
-    "W-NOCUT":   ("자를 것이 없었습니다 (원본이 이미 --keep 이하)",
-                  "그대로 복사만 했습니다. 1_union.py 를 원본으로 돌려도 같습니다."),
+    "E-VNAME":    ("\ucf54\ub108 \uc774\ub984\uc5d0\uc11c \uc804\uc555\uc744 \ubabb \uc77d\uc5c8\uc2b5\ub2c8\ub2e4",
+                   "--voltage auto \ub294 \uc774\ub984\uc5d0 0p78v \uac19\uc740 \ud45c\uae30\uac00 \uc788\uc5b4\uc57c \ud569\ub2c8\ub2e4. "
+                   "\uc774\ub984\uc774 \uadf8\ub807\uc9c0 \uc54a\uc73c\uba74 --voltage 0.78 \ucc98\ub7fc \uac12\uc744 \uc9c1\uc811 \uc8fc\uc138\uc694."),
+    "E-NORPT":   ("\ub9ac\ud3ec\ud2b8 \ud30c\uc77c(.rpt)\uc744 \ubabb \ucc3e\uc558\uc2b5\ub2c8\ub2e4",
+                  "--dir \ub85c \uc900 \ud3f4\ub354\uc5d0 \ucf54\ub108\ubcc4 report_timing \uacb0\uacfc\ub97c \ub123\uc5b4 \uc8fc\uc138\uc694."),
+    "E-OUTSAME": ("\uacb0\uacfc \ud3f4\ub354\uac00 \uc6d0\ubcf8 \ud3f4\ub354\uc640 \uac19\uc2b5\ub2c8\ub2e4",
+                  "--out \uc73c\ub85c \ub2e4\ub978 \ud3f4\ub354\ub97c \uc8fc\uc138\uc694. \uc6d0\ubcf8\uc744 \ub36e\uc5b4\uc4f0\uba74 \ub418\ub3cc\ub9b4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4."),
+    "E-OUTFULL": ("\uacb0\uacfc \ud3f4\ub354\uc5d0 \uc774\ubbf8 .rpt \uac00 \uc788\uc2b5\ub2c8\ub2e4",
+                  "\ub2e4\ub978 --out \uc744 \uc8fc\uac70\ub098, \ub36e\uc5b4\uc4f8 \uc0dd\uac01\uc774\uba74 --force \ub97c \ubd99\uc774\uc138\uc694."),
+    "E-NOPATH":  ("\ub9ac\ud3ec\ud2b8\uc5d0\uc11c \uacbd\ub85c\ub97c \ud558\ub098\ub3c4 \ubabb \uc77d\uc5c8\uc2b5\ub2c8\ub2e4",
+                  "report_timing \ucd9c\ub825\uc774 \ub9de\ub294\uc9c0, \ud30c\uc77c\uc774 \ube44\uc9c0 \uc54a\uc558\ub294\uc9c0 \ud655\uc778\ud574 \uc8fc\uc138\uc694."),
+    "W-NOCUT":   ("\uc790\ub97c \uac83\uc774 \uc5c6\uc5c8\uc2b5\ub2c8\ub2e4 (\uc6d0\ubcf8\uc774 \uc774\ubbf8 --keep \uc774\ud558)",
+                  "\uadf8\ub300\ub85c \ubcf5\uc0ac\ub9cc \ud588\uc2b5\ub2c8\ub2e4. 1_union.py \ub97c \uc6d0\ubcf8\uc73c\ub85c \ub3cc\ub824\ub3c4 \uac19\uc2b5\ub2c8\ub2e4."),
 }
 
 
@@ -317,36 +320,36 @@ def code(c, *msg):
     print("")
     print("=" * 66)
     if c.startswith("OK-"):
-        print("  정상 종료           [ %s ]" % c)
+        print("  \uc815\uc0c1 \uc885\ub8cc           [ %s ]" % c)
         print("=" * 66)
         return
     what, todo = CODE_INFO.get(c, ("", ""))
-    print("  %s" % ("문제 발생" if c.startswith("E-") else "확인 필요"))
+    print("  %s" % ("\ubb38\uc81c \ubc1c\uc0dd" if c.startswith("E-") else "\ud655\uc778 \ud544\uc694"))
     if what:
-        print("    무엇이   : %s" % what)
-        print("    하실 일  : %s" % todo)
+        print("    \ubb34\uc5c7\uc774   : %s" % what)
+        print("    \ud558\uc2e4 \uc77c  : %s" % todo)
     print("")
-    print("    에러 코드: %s" % c)
-    print("    (해결이 안 되면 이 코드를 알려주세요)")
+    print("    \uc5d0\ub7ec \ucf54\ub4dc: %s" % c)
+    print("    (\ud574\uacb0\uc774 \uc548 \ub418\uba74 \uc774 \ucf54\ub4dc\ub97c \uc54c\ub824\uc8fc\uc138\uc694)")
     print("=" * 66)
     sys.exit(1 if c.startswith("E-") else 0)
 
 
-# ---- 자르기 본체 -----------------------------------------------------
-# 파일을 두 번 읽는다. 한 번에 끝내려면 남길 블록 N개를 메모리에 들고 있어야
-# 하는데, 그러면 "메모리 때문에 줄이는 것"이 목적인 이 스크립트가 스스로
-# 메모리를 먹는다. 두 번 읽는 편이 훨씬 싸다(디스크는 순차 읽기라 빠르다).
+# ---- \uc790\ub974\uae30 \ubcf8\uccb4 -----------------------------------------------------
+# \ud30c\uc77c\uc744 \ub450 \ubc88 \uc77d\ub294\ub2e4. \ud55c \ubc88\uc5d0 \ub05d\ub0b4\ub824\uba74 \ub0a8\uae38 \ube14\ub85d N\uac1c\ub97c \uba54\ubaa8\ub9ac\uc5d0 \ub4e4\uace0 \uc788\uc5b4\uc57c
+# \ud558\ub294\ub370, \uadf8\ub7ec\uba74 "\uba54\ubaa8\ub9ac \ub54c\ubb38\uc5d0 \uc904\uc774\ub294 \uac83"\uc774 \ubaa9\uc801\uc778 \uc774 \uc2a4\ud06c\ub9bd\ud2b8\uac00 \uc2a4\uc2a4\ub85c
+# \uba54\ubaa8\ub9ac\ub97c \uba39\ub294\ub2e4. \ub450 \ubc88 \uc77d\ub294 \ud3b8\uc774 \ud6e8\uc52c \uc2f8\ub2e4(\ub514\uc2a4\ud06c\ub294 \uc21c\ucc28 \uc77d\uae30\ub77c \ube60\ub974\ub2e4).
 
 def scan_slacks(path, target=None):
-    """1번째 읽기 : slack 값만 모은다. -> (slack 목록, Startpoint 개수)
+    """1\ubc88\uc9f8 \uc77d\uae30 : slack \uac12\ub9cc \ubaa8\uc740\ub2e4. -> (slack \ubaa9\ub85d, Startpoint \uac1c\uc218)
 
-    줄 단위로 돈다. 리포트의 99% 는 핀 줄이고 그 줄들은 어차피 아무것도 안
-    걸리므로, 정규식을 걸기 전에 문자열 검사로 먼저 쳐낸다. `in` 은 정규식보다
-    훨씬 싸다.
+    \uc904 \ub2e8\uc704\ub85c \ub3c8\ub2e4. \ub9ac\ud3ec\ud2b8\uc758 99% \ub294 \ud540 \uc904\uc774\uace0 \uadf8 \uc904\ub4e4\uc740 \uc5b4\ucc28\ud53c \uc544\ubb34\uac83\ub3c4 \uc548
+    \uac78\ub9ac\ubbc0\ub85c, \uc815\uaddc\uc2dd\uc744 \uac78\uae30 \uc804\uc5d0 \ubb38\uc790\uc5f4 \uac80\uc0ac\ub85c \uba3c\uc800 \uccd0\ub0b8\ub2e4. `in` \uc740 \uc815\uaddc\uc2dd\ubcf4\ub2e4
+    \ud6e8\uc52c \uc2f8\ub2e4.
 
-    (덩어리로 읽어 한 번에 훑는 방법도 해 봤는데, 덩어리를 이어 붙이는 복사와
-     findall 이 만드는 목록 때문에 오히려 느리고 메모리도 7배였다. 파이썬의
-     줄 단위 읽기가 이미 C 로 최적화돼 있어 이 편이 낫다.)
+    (\ub369\uc5b4\ub9ac\ub85c \uc77d\uc5b4 \ud55c \ubc88\uc5d0 \ud6d1\ub294 \ubc29\ubc95\ub3c4 \ud574 \ubd24\ub294\ub370, \ub369\uc5b4\ub9ac\ub97c \uc774\uc5b4 \ubd99\uc774\ub294 \ubcf5\uc0ac\uc640
+     findall \uc774 \ub9cc\ub4dc\ub294 \ubaa9\ub85d \ub54c\ubb38\uc5d0 \uc624\ud788\ub824 \ub290\ub9ac\uace0 \uba54\ubaa8\ub9ac\ub3c4 7\ubc30\uc600\ub2e4. \ud30c\uc774\uc36c\uc758
+     \uc904 \ub2e8\uc704 \uc77d\uae30\uac00 \uc774\ubbf8 C \ub85c \ucd5c\uc801\ud654\ub3fc \uc788\uc5b4 \uc774 \ud3b8\uc774 \ub0ab\ub2e4.)
     """
     vals = []
     n_start = 0
@@ -355,7 +358,7 @@ def scan_slacks(path, target=None):
     with open(path, "rb") as f:
         for line in f:
             if vc.on():
-                vc.feed(line)             # 전압을 볼 때만 핀 줄까지 훑는다
+                vc.feed(line)             # \uc804\uc555\uc744 \ubcfc \ub54c\ub9cc \ud540 \uc904\uae4c\uc9c0 \ud6d1\ub294\ub2e4
             if b"slack" in line:
                 m = SLACK_B_RE.match(line)
                 if m:
@@ -379,33 +382,33 @@ def scan_slacks(path, target=None):
 
 
 def write_trimmed(src, dst, cut, n_keep, target=None):
-    """2번째 읽기 : slack 이 cut 이하인 경로 블록만 그대로 써낸다.
+    """2\ubc88\uc9f8 \uc77d\uae30 : slack \uc774 cut \uc774\ud558\uc778 \uacbd\ub85c \ube14\ub85d\ub9cc \uadf8\ub300\ub85c \uc368\ub0b8\ub2e4.
 
-    블록 하나를 buf 에 모았다가, slack 줄을 만나 남길 것으로 판정되면 쓴다.
-    같은 slack 이 여러 개라 cut 에서 개수가 넘칠 수 있으므로 n_keep 에서 멈춘다.
-    맨 앞 머리말(Report : timing ... 같은 줄)은 그대로 옮긴다.
+    \ube14\ub85d \ud558\ub098\ub97c buf \uc5d0 \ubaa8\uc558\ub2e4\uac00, slack \uc904\uc744 \ub9cc\ub098 \ub0a8\uae38 \uac83\uc73c\ub85c \ud310\uc815\ub418\uba74 \uc4f4\ub2e4.
+    \uac19\uc740 slack \uc774 \uc5ec\ub7ec \uac1c\ub77c cut \uc5d0\uc11c \uac1c\uc218\uac00 \ub118\uce60 \uc218 \uc788\uc73c\ubbc0\ub85c n_keep \uc5d0\uc11c \uba48\ucd98\ub2e4.
+    \ub9e8 \uc55e \uba38\ub9ac\ub9d0(Report : timing ... \uac19\uc740 \uc904)\uc740 \uadf8\ub300\ub85c \uc62e\uae34\ub2e4.
     """
     written = 0
     buf = []
     in_block = False
     vc = VoltCheck(target)
-    # 바이트 그대로 옮긴다. 원본 리포트를 한 글자도 안 바꾸기 위해서다
-    # (디코딩했다가 다시 인코딩하면 이상한 문자가 있을 때 내용이 달라진다).
+    # \ubc14\uc774\ud2b8 \uadf8\ub300\ub85c \uc62e\uae34\ub2e4. \uc6d0\ubcf8 \ub9ac\ud3ec\ud2b8\ub97c \ud55c \uae00\uc790\ub3c4 \uc548 \ubc14\uafb8\uae30 \uc704\ud574\uc11c\ub2e4
+    # (\ub514\ucf54\ub529\ud588\ub2e4\uac00 \ub2e4\uc2dc \uc778\ucf54\ub529\ud558\uba74 \uc774\uc0c1\ud55c \ubb38\uc790\uac00 \uc788\uc744 \ub54c \ub0b4\uc6a9\uc774 \ub2ec\ub77c\uc9c4\ub2e4).
     with open(src, "rb") as fi, open(dst, "wb") as fo:
         for line in fi:
             if vc.on():
                 vc.feed(line)
-            # 정규식은 후보 줄에만 건다. 리포트의 99% 는 핀 줄이라
-            # 아래 두 문자열 검사에서 바로 걸러진다.
+            # \uc815\uaddc\uc2dd\uc740 \ud6c4\ubcf4 \uc904\uc5d0\ub9cc \uac74\ub2e4. \ub9ac\ud3ec\ud2b8\uc758 99% \ub294 \ud540 \uc904\uc774\ub77c
+            # \uc544\ub798 \ub450 \ubb38\uc790\uc5f4 \uac80\uc0ac\uc5d0\uc11c \ubc14\ub85c \uac78\ub7ec\uc9c4\ub2e4.
             if b"Startpoint:" in line and START_B_RE.match(line):
                 if not in_block:
-                    fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
+                    fo.write(b"".join(buf))   # \uccab \ube14\ub85d \uc55e = \uba38\ub9ac\ub9d0
                 in_block = True
                 buf = [line]
                 continue
             buf.append(line)
             if not in_block:
-                continue                      # 아직 머리말 구간
+                continue                      # \uc544\uc9c1 \uba38\ub9ac\ub9d0 \uad6c\uac04
             if b"slack" not in line:
                 continue
             m = SLACK_B_RE.match(line)
@@ -413,27 +416,27 @@ def write_trimmed(src, dst, cut, n_keep, target=None):
                 ok = vc.verdict() == VoltCheck.PASS
                 if ok and written < n_keep and float(m.group(1)) <= cut:
                     fo.write(b"".join(buf))
-                    fo.write(b"\n\n")  # 블록 사이 빈 줄. 원본처럼 보이게 한다
+                    fo.write(b"\n\n")  # \ube14\ub85d \uc0ac\uc774 \ube48 \uc904. \uc6d0\ubcf8\ucc98\ub7fc \ubcf4\uc774\uac8c \ud55c\ub2e4
                     written += 1
                 buf = []
     return written
 
 
-VERIFY = [False]      # --verify 여부. 하위 프로세스에도 보이게 리스트로 둔다
+VERIFY = [False]      # --verify \uc5ec\ubd80. \ud558\uc704 \ud504\ub85c\uc138\uc2a4\uc5d0\ub3c4 \ubcf4\uc774\uac8c \ub9ac\uc2a4\ud2b8\ub85c \ub454\ub2e4
 
 
 def trim_head(src, dst, n_keep, target=None):
-    """맨 앞 N개만 쓰고 **거기서 읽기를 멈춘다.** -> (전체 개수 or None, 남긴 개수)
+    """\ub9e8 \uc55e N\uac1c\ub9cc \uc4f0\uace0 **\uac70\uae30\uc11c \uc77d\uae30\ub97c \uba48\ucd98\ub2e4.** -> (\uc804\uccb4 \uac1c\uc218 or None, \ub0a8\uae34 \uac1c\uc218)
 
-    report_timing 은 -sort_by slack 이 기본이라 리포트가 이미 나쁜 것부터
-    정렬돼 있다. 그러면 앞에서 N개가 곧 최악 N개다.
+    report_timing \uc740 -sort_by slack \uc774 \uae30\ubcf8\uc774\ub77c \ub9ac\ud3ec\ud2b8\uac00 \uc774\ubbf8 \ub098\uc05c \uac83\ubd80\ud130
+    \uc815\ub82c\ub3fc \uc788\ub2e4. \uadf8\ub7ec\uba74 \uc55e\uc5d0\uc11c N\uac1c\uac00 \uace7 \ucd5c\uc545 N\uac1c\ub2e4.
 
-    N개를 채우면 **파일 나머지는 아예 읽지 않는다.** 수 GB 짜리에서 앞부분만
-    읽고 끝나므로 크기와 상관없이 빠르다. 대신 전체 경로가 몇 개인지는
-    알 수 없어 None 으로 돌려준다(화면에 '?' 로 표시된다).
+    N\uac1c\ub97c \ucc44\uc6b0\uba74 **\ud30c\uc77c \ub098\uba38\uc9c0\ub294 \uc544\uc608 \uc77d\uc9c0 \uc54a\ub294\ub2e4.** \uc218 GB \uc9dc\ub9ac\uc5d0\uc11c \uc55e\ubd80\ubd84\ub9cc
+    \uc77d\uace0 \ub05d\ub098\ubbc0\ub85c \ud06c\uae30\uc640 \uc0c1\uad00\uc5c6\uc774 \ube60\ub974\ub2e4. \ub300\uc2e0 \uc804\uccb4 \uacbd\ub85c\uac00 \uba87 \uac1c\uc778\uc9c0\ub294
+    \uc54c \uc218 \uc5c6\uc5b4 None \uc73c\ub85c \ub3cc\ub824\uc900\ub2e4(\ud654\uba74\uc5d0 '?' \ub85c \ud45c\uc2dc\ub41c\ub2e4).
 
-    정렬을 못 믿겠으면 --verify 를 준다. 그러면 trim_verify() 가 끝까지
-    훑어 확인하고, 정렬이 아니면 두 번 읽기로 되돌아간다.
+    \uc815\ub82c\uc744 \ubabb \ubbff\uaca0\uc73c\uba74 --verify \ub97c \uc900\ub2e4. \uadf8\ub7ec\uba74 trim_verify() \uac00 \ub05d\uae4c\uc9c0
+    \ud6d1\uc5b4 \ud655\uc778\ud558\uace0, \uc815\ub82c\uc774 \uc544\ub2c8\uba74 \ub450 \ubc88 \uc77d\uae30\ub85c \ub418\ub3cc\uc544\uac04\ub2e4.
     """
     written = 0
     buf = []
@@ -446,7 +449,7 @@ def trim_head(src, dst, n_keep, target=None):
                 vc.feed(line)
             if b"Startpoint:" in line and START_B_RE.match(line):
                 if not in_block:
-                    fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
+                    fo.write(b"".join(buf))   # \uccab \ube14\ub85d \uc55e = \uba38\ub9ac\ub9d0
                 in_block = True
                 buf = [line]
                 continue
@@ -457,8 +460,8 @@ def trim_head(src, dst, n_keep, target=None):
                 continue
             if not SLACK_B_RE.match(line):
                 continue
-            # 전압이 어긋난 경로는 **세지 않고 버린다.** 그래야 n_keep 이
-            # "쓸 수 있는 경로 N개" 를 뜻한다. 세고 나서 거르면 N개보다 적게 남는다.
+            # \uc804\uc555\uc774 \uc5b4\uae0b\ub09c \uacbd\ub85c\ub294 **\uc138\uc9c0 \uc54a\uace0 \ubc84\ub9b0\ub2e4.** \uadf8\ub798\uc57c n_keep \uc774
+            # "\uc4f8 \uc218 \uc788\ub294 \uacbd\ub85c N\uac1c" \ub97c \ub73b\ud55c\ub2e4. \uc138\uace0 \ub098\uc11c \uac70\ub974\uba74 N\uac1c\ubcf4\ub2e4 \uc801\uac8c \ub0a8\ub294\ub2e4.
             v = vc.verdict()
             if v != VoltCheck.PASS:
                 if v == VoltCheck.MIXED:
@@ -474,7 +477,7 @@ def trim_head(src, dst, n_keep, target=None):
             written += 1
             buf = []
             if written >= n_keep:
-                break                      # 나머지는 읽지 않는다
+                break                      # \ub098\uba38\uc9c0\ub294 \uc77d\uc9c0 \uc54a\ub294\ub2e4
     stat["hdr"] = vc.hdr
     stat["read"] = vc.n_read
     stat["first"] = vc.first
@@ -483,28 +486,28 @@ def trim_head(src, dst, n_keep, target=None):
 
 
 def trim_verify(src, dst, n_keep, target=None):
-    """한 번만 읽고 자르되, 정렬이 맞는지 끝까지 확인한다. (--verify)
+    """\ud55c \ubc88\ub9cc \uc77d\uace0 \uc790\ub974\ub418, \uc815\ub82c\uc774 \ub9de\ub294\uc9c0 \ub05d\uae4c\uc9c0 \ud655\uc778\ud55c\ub2e4. (--verify)
 
-    -> (전체 개수, 남긴 개수)  또는 정렬이 아니면 None.
+    -> (\uc804\uccb4 \uac1c\uc218, \ub0a8\uae34 \uac1c\uc218)  \ub610\ub294 \uc815\ub82c\uc774 \uc544\ub2c8\uba74 None.
 
-    report_timing 을 -sort_by slack 으로 뽑으면 리포트가 **이미 나쁜 것부터**
-    정렬돼 있다. 그러면 앞에서 N개를 그대로 쓰면 끝이고, slack 을 모아 정렬할
-    필요도 파일을 두 번 읽을 필요도 없다.
+    report_timing \uc744 -sort_by slack \uc73c\ub85c \ubf51\uc73c\uba74 \ub9ac\ud3ec\ud2b8\uac00 **\uc774\ubbf8 \ub098\uc05c \uac83\ubd80\ud130**
+    \uc815\ub82c\ub3fc \uc788\ub2e4. \uadf8\ub7ec\uba74 \uc55e\uc5d0\uc11c N\uac1c\ub97c \uadf8\ub300\ub85c \uc4f0\uba74 \ub05d\uc774\uace0, slack \uc744 \ubaa8\uc544 \uc815\ub82c\ud560
+    \ud544\uc694\ub3c4 \ud30c\uc77c\uc744 \ub450 \ubc88 \uc77d\uc744 \ud544\uc694\ub3c4 \uc5c6\ub2e4.
 
-    다만 정렬돼 있다고 믿어 버리면 안 된다. -sort_by 를 안 준 리포트도 있고,
-    path group 별로 따로 정렬돼 붙은 리포트도 있다. 그런 파일에서 앞 N개만
-    집으면 뒤에 있는 더 나쁜 경로를 놓친다.
+    \ub2e4\ub9cc \uc815\ub82c\ub3fc \uc788\ub2e4\uace0 \ubbff\uc5b4 \ubc84\ub9ac\uba74 \uc548 \ub41c\ub2e4. -sort_by \ub97c \uc548 \uc900 \ub9ac\ud3ec\ud2b8\ub3c4 \uc788\uace0,
+    path group \ubcc4\ub85c \ub530\ub85c \uc815\ub82c\ub3fc \ubd99\uc740 \ub9ac\ud3ec\ud2b8\ub3c4 \uc788\ub2e4. \uadf8\ub7f0 \ud30c\uc77c\uc5d0\uc11c \uc55e N\uac1c\ub9cc
+    \uc9d1\uc73c\uba74 \ub4a4\uc5d0 \uc788\ub294 \ub354 \ub098\uc05c \uacbd\ub85c\ub97c \ub193\uce5c\ub2e4.
 
-    그래서 N개를 쓴 뒤에도 **끝까지 slack 만 훑어보며** 확인한다.
-      - 뒤에 더 나쁜(작은) slack 이 하나도 없다  -> 앞 N개가 정말 최악 N개다
-      - 하나라도 있다                           -> None. 부르는 쪽이 두 번
-                                                   읽기 방식으로 다시 한다
-    뒤쪽 훑기는 블록을 모으지 않고 문자열 검사만 하므로 거의 공짜다.
-    덤으로 전체 경로 개수도 정확히 세어진다.
+    \uadf8\ub798\uc11c N\uac1c\ub97c \uc4f4 \ub4a4\uc5d0\ub3c4 **\ub05d\uae4c\uc9c0 slack \ub9cc \ud6d1\uc5b4\ubcf4\uba70** \ud655\uc778\ud55c\ub2e4.
+      - \ub4a4\uc5d0 \ub354 \ub098\uc05c(\uc791\uc740) slack \uc774 \ud558\ub098\ub3c4 \uc5c6\ub2e4  -> \uc55e N\uac1c\uac00 \uc815\ub9d0 \ucd5c\uc545 N\uac1c\ub2e4
+      - \ud558\ub098\ub77c\ub3c4 \uc788\ub2e4                           -> None. \ubd80\ub974\ub294 \ucabd\uc774 \ub450 \ubc88
+                                                   \uc77d\uae30 \ubc29\uc2dd\uc73c\ub85c \ub2e4\uc2dc \ud55c\ub2e4
+    \ub4a4\ucabd \ud6d1\uae30\ub294 \ube14\ub85d\uc744 \ubaa8\uc73c\uc9c0 \uc54a\uace0 \ubb38\uc790\uc5f4 \uac80\uc0ac\ub9cc \ud558\ubbc0\ub85c \uac70\uc758 \uacf5\uc9dc\ub2e4.
+    \ub364\uc73c\ub85c \uc804\uccb4 \uacbd\ub85c \uac1c\uc218\ub3c4 \uc815\ud655\ud788 \uc138\uc5b4\uc9c4\ub2e4.
     """
     written = 0
     n_total = 0
-    worst_kept = None      # 남긴 것 중 가장 나쁘지 않은(가장 큰) slack
+    worst_kept = None      # \ub0a8\uae34 \uac83 \uc911 \uac00\uc7a5 \ub098\uc058\uc9c0 \uc54a\uc740(\uac00\uc7a5 \ud070) slack
     buf = []
     in_block = False
     vc = VoltCheck(target)
@@ -516,7 +519,7 @@ def trim_verify(src, dst, n_keep, target=None):
             if written < n_keep:
                 if b"Startpoint:" in line and START_B_RE.match(line):
                     if not in_block:
-                        fo.write(b"".join(buf))   # 첫 블록 앞 = 머리말
+                        fo.write(b"".join(buf))   # \uccab \ube14\ub85d \uc55e = \uba38\ub9ac\ub9d0
                     in_block = True
                     buf = [line]
                     continue
@@ -532,7 +535,7 @@ def trim_verify(src, dst, n_keep, target=None):
             n_total += 1
             v = vc.verdict()
             if v != VoltCheck.PASS:
-                # 전압이 어긋난 경로. 남기지도, 정렬 판정에 쓰지도 않는다.
+                # \uc804\uc555\uc774 \uc5b4\uae0b\ub09c \uacbd\ub85c. \ub0a8\uae30\uc9c0\ub3c4, \uc815\ub82c \ud310\uc815\uc5d0 \uc4f0\uc9c0\ub3c4 \uc54a\ub294\ub2e4.
                 if v == VoltCheck.MIXED:
                     stat["mixed"] += 1
                 elif v == VoltCheck.NOVOLT:
@@ -549,7 +552,7 @@ def trim_verify(src, dst, n_keep, target=None):
                 written += 1
                 buf = []
             elif sl < worst_kept:
-                return None            # 뒤에 더 나쁜 것이 있다. 정렬 아님
+                return None            # \ub4a4\uc5d0 \ub354 \ub098\uc05c \uac83\uc774 \uc788\ub2e4. \uc815\ub82c \uc544\ub2d8
     stat["hdr"] = vc.hdr
     stat["read"] = vc.n_read
     stat["first"] = vc.first
@@ -558,7 +561,7 @@ def trim_verify(src, dst, n_keep, target=None):
 
 
 def _trim_one(job):
-    """코너 하나를 줄인다. -> (코너, 원래 개수, 남긴 개수, 파일 크기, 비고)"""
+    """\ucf54\ub108 \ud558\ub098\ub97c \uc904\uc778\ub2e4. -> (\ucf54\ub108, \uc6d0\ub798 \uac1c\uc218, \ub0a8\uae34 \uac1c\uc218, \ud30c\uc77c \ud06c\uae30, \ube44\uace0)"""
     src, dst, n_keep, target = job
     corner = os.path.splitext(os.path.basename(src))[0]
 
@@ -569,19 +572,19 @@ def _trim_one(job):
     if r is not None:
         n_total, written, stat = r
         if not written:
-            return corner, 0, 0, 0, "경로 없음", stat, target
+            return corner, 0, 0, 0, "\uacbd\ub85c \uc5c6\uc74c", stat, target
         return corner, n_total, written, os.path.getsize(dst), "", stat, target
 
-    # 정렬돼 있지 않았다. slack 을 다 모아 문턱값을 구한 뒤 다시 쓴다.
+    # \uc815\ub82c\ub3fc \uc788\uc9c0 \uc54a\uc558\ub2e4. slack \uc744 \ub2e4 \ubaa8\uc544 \ubb38\ud131\uac12\uc744 \uad6c\ud55c \ub4a4 \ub2e4\uc2dc \uc4f4\ub2e4.
     vals, n_start, stat = scan_slacks(src, target)
     if not vals:
-        return corner, n_start, 0, 0, "경로 없음", stat, target
+        return corner, n_start, 0, 0, "\uacbd\ub85c \uc5c6\uc74c", stat, target
     if len(vals) <= n_keep:
-        cut = max(vals)                     # 전부 남긴다
+        cut = max(vals)                     # \uc804\ubd80 \ub0a8\uae34\ub2e4
     else:
         cut = sorted(vals)[n_keep - 1]
     written = write_trimmed(src, dst, cut, n_keep, target)
-    return corner, len(vals), written, os.path.getsize(dst), "정렬 안 됨", stat, target
+    return corner, len(vals), written, os.path.getsize(dst), "\uc815\ub82c \uc548 \ub428", stat, target
 
 
 def resolve_jobs(want, n_files):
@@ -597,7 +600,7 @@ def resolve_jobs(want, n_files):
 
 
 def run_jobs(jobs_list, jobs):
-    """파일 순서를 지키며 처리한다. 프로세스를 못 띄우면 1개로 되돌아간다."""
+    """\ud30c\uc77c \uc21c\uc11c\ub97c \uc9c0\ud0a4\uba70 \ucc98\ub9ac\ud55c\ub2e4. \ud504\ub85c\uc138\uc2a4\ub97c \ubabb \ub744\uc6b0\uba74 1\uac1c\ub85c \ub418\ub3cc\uc544\uac04\ub2e4."""
     if jobs <= 1:
         for j in jobs_list:
             yield _trim_one(j)
@@ -605,7 +608,7 @@ def run_jobs(jobs_list, jobs):
     try:
         pool = multiprocessing.Pool(processes=jobs)
     except Exception as e:
-        print("  [ 알림 ] 프로세스를 못 띄워 1개로 돌립니다 (%s)" % e)
+        print("  [ \uc54c\ub9bc ] \ud504\ub85c\uc138\uc2a4\ub97c \ubabb \ub744\uc6cc 1\uac1c\ub85c \ub3cc\ub9bd\ub2c8\ub2e4 (%s)" % e)
         for j in jobs_list:
             yield _trim_one(j)
         return
@@ -619,14 +622,14 @@ def run_jobs(jobs_list, jobs):
 
 
 def probe(path, target):
-    """전압 열을 어떻게 인식하는지 보여 준다. (--probe)
+    """\uc804\uc555 \uc5f4\uc744 \uc5b4\ub5bb\uac8c \uc778\uc2dd\ud558\ub294\uc9c0 \ubcf4\uc5ec \uc900\ub2e4. (--probe)
 
-    "열 이름을 맞췄는데도 남김이 0" 같은 상황에서, 무엇이 안 맞는지는 리포트를
-    직접 봐야 안다. 그런데 리포트는 현장에만 있다. 그래서 도구가 대신 보고한다.
+    "\uc5f4 \uc774\ub984\uc744 \ub9de\ucdc4\ub294\ub370\ub3c4 \ub0a8\uae40\uc774 0" \uac19\uc740 \uc0c1\ud669\uc5d0\uc11c, \ubb34\uc5c7\uc774 \uc548 \ub9de\ub294\uc9c0\ub294 \ub9ac\ud3ec\ud2b8\ub97c
+    \uc9c1\uc811 \ubd10\uc57c \uc548\ub2e4. \uadf8\ub7f0\ub370 \ub9ac\ud3ec\ud2b8\ub294 \ud604\uc7a5\uc5d0\ub9cc \uc788\ub2e4. \uadf8\ub798\uc11c \ub3c4\uad6c\uac00 \ub300\uc2e0 \ubcf4\uace0\ud55c\ub2e4.
     """
     print("")
-    print("  파일 : %s" % path)
-    print("  목표 전압 : %s" % target)
+    print("  \ud30c\uc77c : %s" % path)
+    print("  \ubaa9\ud45c \uc804\uc555 : %s" % target)
     hdr = None
     hdr_no = 0
     n = 0
@@ -640,22 +643,22 @@ def probe(path, target):
                 hdr_no = n
                 span = volt_span(hdr)
                 print("")
-                print("  머리말 (%d번째 줄):" % hdr_no)
+                print("  \uba38\ub9ac\ub9d0 (%d\ubc88\uc9f8 \uc904):" % hdr_no)
                 print("    |%s|" % hdr.decode("utf-8", "replace"))
-                # 머리말에서 알아본 낱말들을 전부 보여 준다 -> 이름을 여기서 고른다
+                # \uba38\ub9ac\ub9d0\uc5d0\uc11c \uc54c\uc544\ubcf8 \ub0b1\ub9d0\ub4e4\uc744 \uc804\ubd80 \ubcf4\uc5ec \uc900\ub2e4 -> \uc774\ub984\uc744 \uc5ec\uae30\uc11c \uace0\ub978\ub2e4
                 words = []
                 for m in WORD_B_RE.finditer(hdr.lower()):
                     try:
                         words.append(m.group(0).decode("ascii"))
                     except UnicodeDecodeError:
                         pass
-                print("  머리말에서 읽은 열 이름 : %s" % ", ".join(words))
+                print("  \uba38\ub9ac\ub9d0\uc5d0\uc11c \uc77d\uc740 \uc5f4 \uc774\ub984 : %s" % ", ".join(words))
                 print("  VOLT_NAMES              : %s" % ", ".join(VOLT_NAMES))
                 if span is None:
-                    print("  -> 겹치는 이름이 없습니다. 위 목록에서 전압 열을 골라")
-                    print("     0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
+                    print("  -> \uacb9\uce58\ub294 \uc774\ub984\uc774 \uc5c6\uc2b5\ub2c8\ub2e4. \uc704 \ubaa9\ub85d\uc5d0\uc11c \uc804\uc555 \uc5f4\uc744 \uace8\ub77c")
+                    print("     0_trim.py \ub9e8 \uc704 VOLT_NAMES \uc5d0 \ub123\uc5b4 \uc8fc\uc138\uc694.")
                     return
-                print("  -> 전압 열을 찾았습니다. %d번째 글자부터 줄 끝까지" % span)
+                print("  -> \uc804\uc555 \uc5f4\uc744 \ucc3e\uc558\uc2b5\ub2c8\ub2e4. %d\ubc88\uc9f8 \uae00\uc790\ubd80\ud130 \uc904 \ub05d\uae4c\uc9c0" % span)
                 continue
             if span is None:
                 continue
@@ -666,44 +669,44 @@ def probe(path, target):
                 print("    %-70s -> %s" % (txt[-70:], v))
     if hdr is None:
         print("")
-        print("  머리말('  Point ...' 로 시작하는 줄)을 못 찾았습니다.")
-        print("  이 리포트는 -nosplit 없이 뽑혔거나 형식이 다를 수 있습니다.")
+        print("  \uba38\ub9ac\ub9d0('  Point ...' \ub85c \uc2dc\uc791\ud558\ub294 \uc904)\uc744 \ubabb \ucc3e\uc558\uc2b5\ub2c8\ub2e4.")
+        print("  \uc774 \ub9ac\ud3ec\ud2b8\ub294 -nosplit \uc5c6\uc774 \ubf51\ud614\uac70\ub098 \ud615\uc2dd\uc774 \ub2e4\ub97c \uc218 \uc788\uc2b5\ub2c8\ub2e4.")
         return
     if shown == 0:
         print("")
-        print("  열은 찾았는데 그 자리에서 숫자를 하나도 못 읽었습니다.")
-        print("  값이 다른 열에 있거나, 정렬이 머리말과 어긋난 것입니다.")
+        print("  \uc5f4\uc740 \ucc3e\uc558\ub294\ub370 \uadf8 \uc790\ub9ac\uc5d0\uc11c \uc22b\uc790\ub97c \ud558\ub098\ub3c4 \ubabb \uc77d\uc5c8\uc2b5\ub2c8\ub2e4.")
+        print("  \uac12\uc774 \ub2e4\ub978 \uc5f4\uc5d0 \uc788\uac70\ub098, \uc815\ub82c\uc774 \uba38\ub9ac\ub9d0\uacfc \uc5b4\uae0b\ub09c \uac83\uc785\ub2c8\ub2e4.")
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="코너별 리포트를 나쁜 것 N개만 남긴 리포트로 줄인다.")
+        description="\ucf54\ub108\ubcc4 \ub9ac\ud3ec\ud2b8\ub97c \ub098\uc05c \uac83 N\uac1c\ub9cc \ub0a8\uae34 \ub9ac\ud3ec\ud2b8\ub85c \uc904\uc778\ub2e4.")
     ap.add_argument("--dir", required=True,
-                    help="원본 .rpt 가 들어 있는 폴더")
+                    help="\uc6d0\ubcf8 .rpt \uac00 \ub4e4\uc5b4 \uc788\ub294 \ud3f4\ub354")
     ap.add_argument("--keep", type=int, default=10000, metavar="N",
-                    help="코너마다 남길 경로 수. slack 이 나쁜 것부터. (기본 10000)")
+                    help="\ucf54\ub108\ub9c8\ub2e4 \ub0a8\uae38 \uacbd\ub85c \uc218. slack \uc774 \ub098\uc05c \uac83\ubd80\ud130. (\uae30\ubcf8 10000)")
     ap.add_argument("--out", default=None,
-                    help="결과 폴더. 생략하면 <dir>_top<N>")
+                    help="\uacb0\uacfc \ud3f4\ub354. \uc0dd\ub7b5\ud558\uba74 <dir>_top<N>")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
-                    help="setup/hold 분석 종류. 기본 setup. 자르는 기준은 같고, "
-                         "완료 후 출력하는 1_union.py 명령에 그대로 전달한다")
+                    help="setup/hold \ubd84\uc11d \uc885\ub958. \uae30\ubcf8 setup. \uc790\ub974\ub294 \uae30\uc900\uc740 \uac19\uace0, "
+                         "\uc644\ub8cc \ud6c4 \ucd9c\ub825\ud558\ub294 1_union.py \uba85\ub839\uc5d0 \uadf8\ub300\ub85c \uc804\ub2ec\ud55c\ub2e4")
     ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
-                    help="코너를 동시에 몇 개 처리할지. **기본 1(하나씩)**. "
-                         "0 을 주면 자동(코어 수와 코너 수 중 작은 쪽, 최대 8)")
+                    help="\ucf54\ub108\ub97c \ub3d9\uc2dc\uc5d0 \uba87 \uac1c \ucc98\ub9ac\ud560\uc9c0. **\uae30\ubcf8 1(\ud558\ub098\uc529)**. "
+                         "0 \uc744 \uc8fc\uba74 \uc790\ub3d9(\ucf54\uc5b4 \uc218\uc640 \ucf54\ub108 \uc218 \uc911 \uc791\uc740 \ucabd, \ucd5c\ub300 8)")
     ap.add_argument("--verify", action="store_true",
-                    help="정렬돼 있는지 끝까지 확인한다. 리포트를 -sort_by slack "
-                         "없이 뽑았을 가능성이 있을 때만. 기본은 확인 안 함 "
-                         "(정렬을 믿고 앞에서 N개만 읽고 멈춘다)")
+                    help="\uc815\ub82c\ub3fc \uc788\ub294\uc9c0 \ub05d\uae4c\uc9c0 \ud655\uc778\ud55c\ub2e4. \ub9ac\ud3ec\ud2b8\ub97c -sort_by slack "
+                         "\uc5c6\uc774 \ubf51\uc558\uc744 \uac00\ub2a5\uc131\uc774 \uc788\uc744 \ub54c\ub9cc. \uae30\ubcf8\uc740 \ud655\uc778 \uc548 \ud568 "
+                         "(\uc815\ub82c\uc744 \ubbff\uace0 \uc55e\uc5d0\uc11c N\uac1c\ub9cc \uc77d\uace0 \uba48\ucd98\ub2e4)")
     ap.add_argument("--voltage", default=None, metavar="V",
-                    help="전압이 다른 셀(macro 등)을 지나는 경로를 버린다. "
-                         "값을 주면 모든 코너에 그 전압을 쓰고, 'auto' 를 주면 "
-                         "**코너 이름에서 코너마다 따로** 읽는다(tt0p78v25c -> 0.78). "
-                         "생략하면 전압을 아예 안 본다(예전 동작)")
+                    help="\uc804\uc555\uc774 \ub2e4\ub978 \uc140(macro \ub4f1)\uc744 \uc9c0\ub098\ub294 \uacbd\ub85c\ub97c \ubc84\ub9b0\ub2e4. "
+                         "\uac12\uc744 \uc8fc\uba74 \ubaa8\ub4e0 \ucf54\ub108\uc5d0 \uadf8 \uc804\uc555\uc744 \uc4f0\uace0, 'auto' \ub97c \uc8fc\uba74 "
+                         "**\ucf54\ub108 \uc774\ub984\uc5d0\uc11c \ucf54\ub108\ub9c8\ub2e4 \ub530\ub85c** \uc77d\ub294\ub2e4(tt0p78v25c -> 0.78). "
+                         "\uc0dd\ub7b5\ud558\uba74 \uc804\uc555\uc744 \uc544\uc608 \uc548 \ubcf8\ub2e4(\uc608\uc804 \ub3d9\uc791)")
     ap.add_argument("--probe", action="store_true",
-                    help="자르지 않고, 전압 열을 어떻게 인식하는지만 보여준다. "
-                         "'열 이름을 맞췄는데 남김이 0' 일 때 이걸로 확인한다")
+                    help="\uc790\ub974\uc9c0 \uc54a\uace0, \uc804\uc555 \uc5f4\uc744 \uc5b4\ub5bb\uac8c \uc778\uc2dd\ud558\ub294\uc9c0\ub9cc \ubcf4\uc5ec\uc900\ub2e4. "
+                         "'\uc5f4 \uc774\ub984\uc744 \ub9de\ucdc4\ub294\ub370 \ub0a8\uae40\uc774 0' \uc77c \ub54c \uc774\uac78\ub85c \ud655\uc778\ud55c\ub2e4")
     ap.add_argument("--force", action="store_true",
-                    help="결과 폴더에 이미 .rpt 가 있어도 덮어쓴다")
+                    help="\uacb0\uacfc \ud3f4\ub354\uc5d0 \uc774\ubbf8 .rpt \uac00 \uc788\uc5b4\ub3c4 \ub36e\uc5b4\uc4f4\ub2e4")
     args = ap.parse_args()
     VERIFY[0] = args.verify
 
@@ -711,20 +714,20 @@ def main():
     out = args.out or ("%s_top%d" % (d, args.keep))
 
     print("=" * 68)
-    print("0 - 리포트 줄이기  (코너마다 나쁜 것 %d개만)" % args.keep)
+    print("0 - \ub9ac\ud3ec\ud2b8 \uc904\uc774\uae30  (\ucf54\ub108\ub9c8\ub2e4 \ub098\uc05c \uac83 %d\uac1c\ub9cc)" % args.keep)
     print("=" * 68)
 
     files = sorted(glob.glob(os.path.join(d, "*.rpt")))
     if not files:
         print("")
         code("E-NORPT",
-             "[ 실패 ] %s 안에 .rpt 파일이 없습니다." % d)
+             "[ \uc2e4\ud328 ] %s \uc548\uc5d0 .rpt \ud30c\uc77c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4." % d)
 
-    # --probe 는 자르지 않고 확인만 한다. 출력 폴더 검사보다 **먼저** 둔다
-    # -- 결과 폴더가 이미 차 있어도 진단은 되어야 하기 때문이다.
+    # --probe \ub294 \uc790\ub974\uc9c0 \uc54a\uace0 \ud655\uc778\ub9cc \ud55c\ub2e4. \ucd9c\ub825 \ud3f4\ub354 \uac80\uc0ac\ubcf4\ub2e4 **\uba3c\uc800** \ub454\ub2e4
+    # -- \uacb0\uacfc \ud3f4\ub354\uac00 \uc774\ubbf8 \ucc28 \uc788\uc5b4\ub3c4 \uc9c4\ub2e8\uc740 \ub418\uc5b4\uc57c \ud558\uae30 \ub54c\ubb38\uc774\ub2e4.
     if args.probe:
         print("=" * 68)
-        print("  --probe : 자르지 않고 전압 열 인식만 확인합니다")
+        print("  --probe : \uc790\ub974\uc9c0 \uc54a\uace0 \uc804\uc555 \uc5f4 \uc778\uc2dd\ub9cc \ud655\uc778\ud569\ub2c8\ub2e4")
         print("=" * 68)
         for f in files:
             nm = os.path.splitext(os.path.basename(f))[0]
@@ -737,19 +740,19 @@ def main():
             probe(f, tv)
         print("")
         print("-" * 68)
-        print("  확인이 끝나면 --probe 를 빼고 다시 돌리세요.")
+        print("  \ud655\uc778\uc774 \ub05d\ub098\uba74 --probe \ub97c \ube7c\uace0 \ub2e4\uc2dc \ub3cc\ub9ac\uc138\uc694.")
         return
 
     if os.path.abspath(out) == os.path.abspath(d):
         print("")
         code("E-OUTSAME",
-             "[ 실패 ] --out 이 원본 폴더와 같습니다: %s" % out)
+             "[ \uc2e4\ud328 ] --out \uc774 \uc6d0\ubcf8 \ud3f4\ub354\uc640 \uac19\uc2b5\ub2c8\ub2e4: %s" % out)
 
     if os.path.isdir(out) and glob.glob(os.path.join(out, "*.rpt")) \
             and not args.force:
         print("")
         code("E-OUTFULL",
-             "[ 실패 ] %s 에 이미 .rpt 가 있습니다." % out)
+             "[ \uc2e4\ud328 ] %s \uc5d0 \uc774\ubbf8 .rpt \uac00 \uc788\uc2b5\ub2c8\ub2e4." % out)
 
     if not os.path.isdir(out):
         os.makedirs(out)
@@ -757,17 +760,17 @@ def main():
     jobs = resolve_jobs(args.jobs, len(files))
     src_mb = sum(os.path.getsize(f) for f in files) / 1048576.0
 
-    print("  원본   : %s   (%d코너, 합계 %.0f MB)" % (d, len(files), src_mb))
-    print("  결과   : %s" % out)
-    print("  남길 것: 코너마다 %d개  (slack 이 나쁜 것부터)" % args.keep)
+    print("  \uc6d0\ubcf8   : %s   (%d\ucf54\ub108, \ud569\uacc4 %.0f MB)" % (d, len(files), src_mb))
+    print("  \uacb0\uacfc   : %s" % out)
+    print("  \ub0a8\uae38 \uac83: \ucf54\ub108\ub9c8\ub2e4 %d\uac1c  (slack \uc774 \ub098\uc05c \uac83\ubd80\ud130)" % args.keep)
     if jobs > 1:
-        print("  동시   : %d개씩  (--jobs %d)" % (jobs, jobs))
+        print("  \ub3d9\uc2dc   : %d\uac1c\uc529  (--jobs %d)" % (jobs, jobs))
     elif len(files) > 1:
-        print("  동시   : 1개씩 (기본).  -j 8 을 주면 코너를 나눠 처리합니다")
+        print("  \ub3d9\uc2dc   : 1\uac1c\uc529 (\uae30\ubcf8).  -j 8 \uc744 \uc8fc\uba74 \ucf54\ub108\ub97c \ub098\ub220 \ucc98\ub9ac\ud569\ub2c8\ub2e4")
     print("")
 
-    # 코너마다 목표 전압을 정한다. 0_trim 은 코너를 여러 개 한꺼번에 돌므로
-    # 값 하나로 고정하면 안 된다 -- 코너가 곧 전압이다.
+    # \ucf54\ub108\ub9c8\ub2e4 \ubaa9\ud45c \uc804\uc555\uc744 \uc815\ud55c\ub2e4. 0_trim \uc740 \ucf54\ub108\ub97c \uc5ec\ub7ec \uac1c \ud55c\uaebc\ubc88\uc5d0 \ub3cc\ubbc0\ub85c
+    # \uac12 \ud558\ub098\ub85c \uace0\uc815\ud558\uba74 \uc548 \ub41c\ub2e4 -- \ucf54\ub108\uac00 \uace7 \uc804\uc555\uc774\ub2e4.
     targets = {}
     novolt_name = []
     for f in files:
@@ -785,16 +788,16 @@ def main():
     if novolt_name:
         print("")
         code("E-VNAME",
-             "[ 실패 ] 코너 이름에서 전압을 못 읽었습니다:",
+             "[ \uc2e4\ud328 ] \ucf54\ub108 \uc774\ub984\uc5d0\uc11c \uc804\uc555\uc744 \ubabb \uc77d\uc5c8\uc2b5\ub2c8\ub2e4:",
              *["      %s" % n for n in novolt_name[:10]],
              )
 
     if args.voltage is not None:
-        print("  전압   : %s" % ("코너 이름에서 (auto)"
+        print("  \uc804\uc555   : %s" % ("\ucf54\ub108 \uc774\ub984\uc5d0\uc11c (auto)"
                                  if str(args.voltage).lower() == "auto"
-                                 else "%s V 고정" % args.voltage))
-        print("           전압이 섞인 경로(macro 등)는 **세기 전에** 버립니다.")
-        print("           그래서 --keep %d 는 '단일 전압 %d개' 를 뜻합니다."
+                                 else "%s V \uace0\uc815" % args.voltage))
+        print("           \uc804\uc555\uc774 \uc11e\uc778 \uacbd\ub85c(macro \ub4f1)\ub294 **\uc138\uae30 \uc804\uc5d0** \ubc84\ub9bd\ub2c8\ub2e4.")
+        print("           \uadf8\ub798\uc11c --keep %d \ub294 '\ub2e8\uc77c \uc804\uc555 %d\uac1c' \ub97c \ub73b\ud569\ub2c8\ub2e4."
               % (args.keep, args.keep))
         print("")
 
@@ -804,18 +807,18 @@ def main():
     volt_on = args.voltage is not None
     if volt_on:
         print("  %-24s %6s %8s %8s %7s %8s %8s"
-              % ("코너", "전압", "원래", "남김", "mixed", "전압없음", "다른전압"))
+              % ("\ucf54\ub108", "\uc804\uc555", "\uc6d0\ub798", "\ub0a8\uae40", "mixed", "\uc804\uc555\uc5c6\uc74c", "\ub2e4\ub978\uc804\uc555"))
         print("  " + "-" * 76)
     else:
-        print("  %-30s %10s %10s %10s" % ("코너", "원래", "남김", "파일"))
+        print("  %-30s %10s %10s %10s" % ("\ucf54\ub108", "\uc6d0\ub798", "\ub0a8\uae40", "\ud30c\uc77c"))
         print("  " + "-" * 64)
     tot_before = tot_after = tot_bytes = 0
     n_uncut = 0
     tot_mixed = tot_novolt = tot_other = 0
     tot_read = 0
     diag_hdr = None
-    # n_before 가 None 이면 '원래 몇 개인지 안 셌다'는 뜻이다(기본 동작).
-    # 앞에서 N개만 읽고 멈추므로 전체 개수를 알 수가 없다. --verify 를 주면 센다.
+    # n_before \uac00 None \uc774\uba74 '\uc6d0\ub798 \uba87 \uac1c\uc778\uc9c0 \uc548 \uc14c\ub2e4'\ub294 \ub73b\uc774\ub2e4(\uae30\ubcf8 \ub3d9\uc791).
+    # \uc55e\uc5d0\uc11c N\uac1c\ub9cc \uc77d\uace0 \uba48\ucd94\ubbc0\ub85c \uc804\uccb4 \uac1c\uc218\ub97c \uc54c \uc218\uac00 \uc5c6\ub2e4. --verify \ub97c \uc8fc\uba74 \uc13c\ub2e4.
     unknown_total = False
     for corner, n_before, n_after, nbytes, note, stat, tgt in run_jobs(jobs_list, jobs):
         if n_before is None:
@@ -837,17 +840,17 @@ def main():
                   % (corner[:24], tgt if tgt is not None else "?",
                      "?" if n_before is None else n_before,
                      n_after, stat["mixed"], stat["novolt"], stat["other"]))
-            # 전압 열을 실제로 맞췄는지 **바로** 보여 준다. 표 숫자만으로는
-            # "이름이 안 맞았나 값이 이상한가" 를 알 수 없다.
+            # \uc804\uc555 \uc5f4\uc744 \uc2e4\uc81c\ub85c \ub9de\ucdc4\ub294\uc9c0 **\ubc14\ub85c** \ubcf4\uc5ec \uc900\ub2e4. \ud45c \uc22b\uc790\ub9cc\uc73c\ub85c\ub294
+            # "\uc774\ub984\uc774 \uc548 \ub9de\uc558\ub098 \uac12\uc774 \uc774\uc0c1\ud55c\uac00" \ub97c \uc54c \uc218 \uc5c6\ub2e4.
             fst = stat.get("first")
             if fst is not None:
-                print("      열 '%s' 맞음 -> 첫 값 %s   |%s|"
+                print("      \uc5f4 '%s' \ub9de\uc74c -> \uccab \uac12 %s   |%s|"
                       % (stat.get("colname") or "?", fst[0],
                          fst[1].decode("utf-8", "replace")))
             elif stat.get("hdr") is None:
-                print("      머리말을 못 찾음")
+                print("      \uba38\ub9ac\ub9d0\uc744 \ubabb \ucc3e\uc74c")
             else:
-                print("      열을 못 맞춤 (아래 진단 참고)")
+                print("      \uc5f4\uc744 \ubabb \ub9de\ucda4 (\uc544\ub798 \uc9c4\ub2e8 \ucc38\uace0)")
         else:
             print("  %-30s %10s %10d %9.0fMB %s"
                   % (corner, "?" if n_before is None else n_before,
@@ -855,18 +858,18 @@ def main():
     if volt_on:
         print("  " + "-" * 76)
         print("  %-24s %6s %8s %8d %7d %8d %8d"
-              % ("합계", "", "?" if unknown_total else tot_before,
+              % ("\ud569\uacc4", "", "?" if unknown_total else tot_before,
                  tot_after, tot_mixed, tot_novolt, tot_other))
         print("")
-        # 전압을 하나도 못 읽었으면 그냥 넘어가지 않는다. 무엇을 봤고 무엇을
-        # 찾고 있었는지 여기서 바로 보여 준다. 리포트는 현장에만 있으므로,
-        # 이 출력이 없으면 원인을 알 방법이 없다.
+        # \uc804\uc555\uc744 \ud558\ub098\ub3c4 \ubabb \uc77d\uc5c8\uc73c\uba74 \uadf8\ub0e5 \ub118\uc5b4\uac00\uc9c0 \uc54a\ub294\ub2e4. \ubb34\uc5c7\uc744 \ubd24\uace0 \ubb34\uc5c7\uc744
+        # \ucc3e\uace0 \uc788\uc5c8\ub294\uc9c0 \uc5ec\uae30\uc11c \ubc14\ub85c \ubcf4\uc5ec \uc900\ub2e4. \ub9ac\ud3ec\ud2b8\ub294 \ud604\uc7a5\uc5d0\ub9cc \uc788\uc73c\ubbc0\ub85c,
+        # \uc774 \ucd9c\ub825\uc774 \uc5c6\uc73c\uba74 \uc6d0\uc778\uc744 \uc54c \ubc29\ubc95\uc774 \uc5c6\ub2e4.
         if tot_read == 0 and diag_hdr is not None:
             print("")
             print("  " + "!" * 66)
-            print("  전압 값을 한 줄도 못 읽었습니다. 아래를 확인해 주세요.")
+            print("  \uc804\uc555 \uac12\uc744 \ud55c \uc904\ub3c4 \ubabb \uc77d\uc5c8\uc2b5\ub2c8\ub2e4. \uc544\ub798\ub97c \ud655\uc778\ud574 \uc8fc\uc138\uc694.")
             print("")
-            print("  리포트 머리말:")
+            print("  \ub9ac\ud3ec\ud2b8 \uba38\ub9ac\ub9d0:")
             print("    |%s|" % diag_hdr.decode("utf-8", "replace"))
             words = []
             for m in WORD_B_RE.finditer(diag_hdr.lower()):
@@ -875,24 +878,24 @@ def main():
                 except UnicodeDecodeError:
                     pass
             print("")
-            print("  리포트에 있는 열 이름 : %s" % ", ".join(words))
-            print("  찾고 있는 이름        : %s" % ", ".join(VOLT_NAMES))
+            print("  \ub9ac\ud3ec\ud2b8\uc5d0 \uc788\ub294 \uc5f4 \uc774\ub984 : %s" % ", ".join(words))
+            print("  \ucc3e\uace0 \uc788\ub294 \uc774\ub984        : %s" % ", ".join(VOLT_NAMES))
             hit = [w for w in words if w in _VOLT_LC]
             if hit:
-                print("  -> 이름은 '%s' 로 맞았는데 그 자리에 숫자가 없습니다."
+                print("  -> \uc774\ub984\uc740 '%s' \ub85c \ub9de\uc558\ub294\ub370 \uadf8 \uc790\ub9ac\uc5d0 \uc22b\uc790\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."
                       % ", ".join(hit))
-                print("     값이 다른 열에 있거나 정렬이 머리말과 어긋난 것입니다.")
+                print("     \uac12\uc774 \ub2e4\ub978 \uc5f4\uc5d0 \uc788\uac70\ub098 \uc815\ub82c\uc774 \uba38\ub9ac\ub9d0\uacfc \uc5b4\uae0b\ub09c \uac83\uc785\ub2c8\ub2e4.")
             else:
-                print("  -> 겹치는 이름이 없습니다. 위 목록에서 전압 열을 골라")
-                print("     0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
+                print("  -> \uacb9\uce58\ub294 \uc774\ub984\uc774 \uc5c6\uc2b5\ub2c8\ub2e4. \uc704 \ubaa9\ub85d\uc5d0\uc11c \uc804\uc555 \uc5f4\uc744 \uace8\ub77c")
+                print("     0_trim.py \ub9e8 \uc704 VOLT_NAMES \uc5d0 \ub123\uc5b4 \uc8fc\uc138\uc694.")
             print("  " + "!" * 66)
         elif tot_read == 0:
             print("")
             print("  " + "!" * 66)
-            print("  전압 값을 한 줄도 못 읽었고, **머리말도 못 찾았습니다.**")
-            print("  이 리포트는 형식이 다를 수 있습니다.")
+            print("  \uc804\uc555 \uac12\uc744 \ud55c \uc904\ub3c4 \ubabb \uc77d\uc5c8\uace0, **\uba38\ub9ac\ub9d0\ub3c4 \ubabb \ucc3e\uc558\uc2b5\ub2c8\ub2e4.**")
+            print("  \uc774 \ub9ac\ud3ec\ud2b8\ub294 \ud615\uc2dd\uc774 \ub2e4\ub97c \uc218 \uc788\uc2b5\ub2c8\ub2e4.")
             print("")
-            print("  리포트 앞부분에서 머리말처럼 보이는 줄들 (숫자 없는 줄):")
+            print("  \ub9ac\ud3ec\ud2b8 \uc55e\ubd80\ubd84\uc5d0\uc11c \uba38\ub9ac\ub9d0\ucc98\ub7fc \ubcf4\uc774\ub294 \uc904\ub4e4 (\uc22b\uc790 \uc5c6\ub294 \uc904):")
             shown = 0
             try:
                 with open(files[0], "rb") as _f:
@@ -908,55 +911,55 @@ def main():
                         print("    %3d| %s" % (_i + 1,
                               _t[:180].decode("utf-8", "replace")))
             except Exception as _e:                    # noqa: BLE001
-                print("    (읽지 못했습니다: %s)" % _e)
+                print("    (\uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4: %s)" % _e)
             if shown == 0:
-                print("    (그런 줄이 없습니다)")
+                print("    (\uadf8\ub7f0 \uc904\uc774 \uc5c6\uc2b5\ub2c8\ub2e4)")
             print("")
-            print("  찾고 있는 이름 : %s" % ", ".join(VOLT_NAMES))
-            print("  위 줄들 중 전압 열이 있는 줄을 보고, 그 이름을")
-            print("  0_trim.py 맨 위 VOLT_NAMES 에 넣어 주세요.")
+            print("  \ucc3e\uace0 \uc788\ub294 \uc774\ub984 : %s" % ", ".join(VOLT_NAMES))
+            print("  \uc704 \uc904\ub4e4 \uc911 \uc804\uc555 \uc5f4\uc774 \uc788\ub294 \uc904\uc744 \ubcf4\uace0, \uadf8 \uc774\ub984\uc744")
+            print("  0_trim.py \ub9e8 \uc704 VOLT_NAMES \uc5d0 \ub123\uc5b4 \uc8fc\uc138\uc694.")
             print("  " + "!" * 66)
 
-        print("  mixed    = 전압이 두 개 이상 섞인 경로. macro 등 다른 전원을 지나감")
-        print("  전압없음 = 그 경로에서 전압 값을 하나도 못 읽음")
-        print("             (전부 이 칸이면 VOLT_NAMES 의 열 이름이 실제와 다른 것)")
-        print("  다른전압 = 전압은 하나인데 코너 전압이 아님")
-        print("  위 셋은 **세기 전에** 버렸습니다. 남김 = 단일 전압 경로 수입니다.")
+        print("  mixed    = \uc804\uc555\uc774 \ub450 \uac1c \uc774\uc0c1 \uc11e\uc778 \uacbd\ub85c. macro \ub4f1 \ub2e4\ub978 \uc804\uc6d0\uc744 \uc9c0\ub098\uac10")
+        print("  \uc804\uc555\uc5c6\uc74c = \uadf8 \uacbd\ub85c\uc5d0\uc11c \uc804\uc555 \uac12\uc744 \ud558\ub098\ub3c4 \ubabb \uc77d\uc74c")
+        print("             (\uc804\ubd80 \uc774 \uce78\uc774\uba74 VOLT_NAMES \uc758 \uc5f4 \uc774\ub984\uc774 \uc2e4\uc81c\uc640 \ub2e4\ub978 \uac83)")
+        print("  \ub2e4\ub978\uc804\uc555 = \uc804\uc555\uc740 \ud558\ub098\uc778\ub370 \ucf54\ub108 \uc804\uc555\uc774 \uc544\ub2d8")
+        print("  \uc704 \uc14b\uc740 **\uc138\uae30 \uc804\uc5d0** \ubc84\ub838\uc2b5\ub2c8\ub2e4. \ub0a8\uae40 = \ub2e8\uc77c \uc804\uc555 \uacbd\ub85c \uc218\uc785\ub2c8\ub2e4.")
     else:
         print("  " + "-" * 64)
         print("  %-30s %10s %10d %9.0fMB"
-              % ("합계", "?" if unknown_total else tot_before,
+              % ("\ud569\uacc4", "?" if unknown_total else tot_before,
                  tot_after, tot_bytes / 1048576.0))
     if unknown_total:
         print("")
-        print("  '원래' 가 ? 인 이유: 앞에서 N개만 읽고 멈추기 때문입니다.")
-        print("  리포트가 -sort_by slack 으로 정렬돼 있다고 보고 나머지는 안 읽습니다.")
-        print("  전체 개수까지 세고 정렬도 확인하려면 --verify 를 주세요.")
+        print("  '\uc6d0\ub798' \uac00 ? \uc778 \uc774\uc720: \uc55e\uc5d0\uc11c N\uac1c\ub9cc \uc77d\uace0 \uba48\ucd94\uae30 \ub54c\ubb38\uc785\ub2c8\ub2e4.")
+        print("  \ub9ac\ud3ec\ud2b8\uac00 -sort_by slack \uc73c\ub85c \uc815\ub82c\ub3fc \uc788\ub2e4\uace0 \ubcf4\uace0 \ub098\uba38\uc9c0\ub294 \uc548 \uc77d\uc2b5\ub2c8\ub2e4.")
+        print("  \uc804\uccb4 \uac1c\uc218\uae4c\uc9c0 \uc138\uace0 \uc815\ub82c\ub3c4 \ud655\uc778\ud558\ub824\uba74 --verify \ub97c \uc8fc\uc138\uc694.")
     print("")
 
     if tot_after == 0:
         code("E-NOPATH",
-             "[ 실패 ] 리포트에서 경로를 하나도 못 읽었습니다.")
+             "[ \uc2e4\ud328 ] \ub9ac\ud3ec\ud2b8\uc5d0\uc11c \uacbd\ub85c\ub97c \ud558\ub098\ub3c4 \ubabb \uc77d\uc5c8\uc2b5\ub2c8\ub2e4.")
 
     shrink = (1.0 - tot_bytes / (src_mb * 1048576.0)) * 100.0
     print("-" * 68)
-    print("  경로 %s -> %d개,  용량 %.0f MB -> %.0f MB  (%.0f%% 줄었습니다)"
-          % ("?" if unknown_total else "%d개" % tot_before,
+    print("  \uacbd\ub85c %s -> %d\uac1c,  \uc6a9\ub7c9 %.0f MB -> %.0f MB  (%.0f%% \uc904\uc5c8\uc2b5\ub2c8\ub2e4)"
+          % ("?" if unknown_total else "%d\uac1c" % tot_before,
              tot_after, src_mb, tot_bytes / 1048576.0, shrink))
     print("")
-    print("  다음:")
+    print("  \ub2e4\uc74c:")
     print("      python3 1_union.py --dir %s --mode %s" % (out, args.mode))
     print("")
-    print("  더 줄이고 싶으면 --keep 을 낮춰 다시 돌리세요.")
-    print("  원본은 그대로 있으니 몇 번이든 다시 만들 수 있습니다.")
+    print("  \ub354 \uc904\uc774\uace0 \uc2f6\uc73c\uba74 --keep \uc744 \ub0ae\ucdb0 \ub2e4\uc2dc \ub3cc\ub9ac\uc138\uc694.")
+    print("  \uc6d0\ubcf8\uc740 \uadf8\ub300\ub85c \uc788\uc73c\ub2c8 \uba87 \ubc88\uc774\ub4e0 \ub2e4\uc2dc \ub9cc\ub4e4 \uc218 \uc788\uc2b5\ub2c8\ub2e4.")
     print("-" * 68)
 
     if n_uncut == len(files):
         code("W-NOCUT",
-             "[ 주의 ] 모든 코너가 이미 %d개 이하라 자를 것이 없었습니다."
+             "[ \uc8fc\uc758 ] \ubaa8\ub4e0 \ucf54\ub108\uac00 \uc774\ubbf8 %d\uac1c \uc774\ud558\ub77c \uc790\ub97c \uac83\uc774 \uc5c6\uc5c8\uc2b5\ub2c8\ub2e4."
              % args.keep)
     code("OK-TRIM",
-         "[ 정상 ] %d개 코너를 줄였습니다." % len(files))
+         "[ \uc815\uc0c1 ] %d\uac1c \ucf54\ub108\ub97c \uc904\uc600\uc2b5\ub2c8\ub2e4." % len(files))
 
 
 if __name__ == "__main__":
