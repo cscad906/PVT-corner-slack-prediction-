@@ -5,6 +5,7 @@ PrimeTime에서 `source`하는 Tcl 파일은 `pt/` 디렉토리에 있습니다.
 
 - `compare_scaling_mae.py`: PT scaling report와 target-corner ground truth의 path별 오차 및 MAE 계산
 - `plot_ground_truth_slack.py`: 여러 ground-truth report의 slack 통계, CSV, SVG 및 터미널 histogram 생성
+- `recover_fixed_paths_from_ground_truth.py`: 남아 있는 ground-truth report에서 scaling용 fixed path 목록 복원
 
 ```bash
 python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt \
@@ -13,6 +14,17 @@ python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt \
 python3 analysis/plot_ground_truth_slack.py ground_truth/*.rpt \
     --output-dir results/ground_truth_slack
 ```
+
+원본 `fixed_paths.tcl`을 잃어버렸지만 ground-truth report가 남아 있으면 다음처럼
+복원합니다.
+
+```bash
+python3 analysis/recover_fixed_paths_from_ground_truth.py ground_truth.rpt
+```
+
+출력된 `fixed_paths_<ground-truth-name>.tcl`의 절대경로를
+`pt/run_scaling_after_restore.tcl`의 `FIXED_PATH_FILE`에 넣습니다. timing table이
+없는 실패 block은 복원할 수 없으며, 스크립트가 제외 개수와 사유를 출력합니다.
 
 `--output-dir`을 생략하면 ground-truth report의 파일명을 target corner 이름으로
 사용해 `pt_scaling_comparison/<target-corner>/` 아래에 `path_errors.csv`와

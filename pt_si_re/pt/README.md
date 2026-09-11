@@ -271,6 +271,29 @@ grep -c 'Startpoint:' /path/to/ground_truth.rpt
 
 ## 9. MAE 계산
 
+### 원본 fixed_paths.tcl을 잃어버린 경우
+
+ground-truth fixed-path report가 남아 있으면 Linux shell에서 다음을 실행합니다.
+
+```bash
+python3 /path/to/repository/analysis/recover_fixed_paths_from_ground_truth.py \
+    /path/to/SSPG_0p57V_25C_RCMAX_setup.rpt
+```
+
+스크립트가 report의 기존 path key, 전체 data-pin chain과 rise/fall 방향을 읽어
+`fixed_paths_SSPG_0p57V_25C_RCMAX_setup.tcl`을 만듭니다. 기존 출력은 덮어쓰지
+않으며 반복 실행하면 `_run2`, `_run3`가 붙습니다. 출력 마지막에 표시되는
+절대경로를 `run_scaling_after_restore.tcl` 위쪽에 넣습니다.
+
+```tcl
+set FIXED_PATH_FILE "/absolute/path/to/fixed_paths_SSPG_0p57V_25C_RCMAX_setup.tcl"
+```
+
+복원 결과가 `DTYPE=max`이면 `ANALYSIS "setup"`, `DTYPE=min`이면
+`ANALYSIS "hold"`로 설정한 뒤 restore session에서 scaling Tcl을 source합니다.
+timing table이 없던 ground-truth block은 핀 경로를 복원할 수 없으므로 제외되며,
+복원 스크립트가 그 개수와 이유를 출력합니다.
+
 Linux shell에서 Python 버전을 확인합니다.
 
 ```bash
