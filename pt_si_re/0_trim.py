@@ -2,7 +2,14 @@
 # -*- coding: utf-8 -*-
 """0 - 코너별 리포트를 '나쁜 것 N개만' 남긴 리포트로 줄인다.  (1회차 -> 1_union)
 
-    python3 0_trim.py --dir round1/corners --keep 10000
+    # setup: 입력 report가 -delay_type max인 경우
+    python3 0_trim.py --dir round1/corners --keep 10000 --mode setup
+
+    # hold: 입력 report가 -delay_type min인 경우
+    python3 0_trim.py --dir round1/corners --keep 10000 --mode hold
+
+    --mode를 생략하면 setup이 기본값이다. hold에서는 반드시 --mode hold를
+    넣는다. 작업이 끝나면 같은 --mode가 들어간 1_union.py 명령을 출력한다.
 
 무엇을 왜 하나
     현업 리포트는 코너 하나에 경로가 8만 개씩 나온다. 그걸 그대로 1_union.py
@@ -34,14 +41,14 @@
 
 출력
     <out>/*.rpt      같은 이름, 같은 형식. 경로만 N개로 줄어 있다.
-                     그다음:  python3 1_union.py --dir <out>
+                     그다음:  python3 1_union.py --dir <out> --mode setup|hold
 
 옵션
     --dir <폴더>     원본 .rpt 가 있는 폴더                  (필수)
     --keep N         코너마다 남길 경로 수. slack 이 나쁜 것부터. (기본 10000)
     --out <폴더>     결과를 쓸 폴더. 생략하면 <dir>_top<N>
     --mode setup|hold  setup 은 slack 이 작은 것이 나쁘다. hold 도 같다.
-                     (지금은 둘 다 '작은 것부터'. 표시용으로만 쓴다)
+                     기본은 setup. 분석 종류를 마지막 1_union.py 명령에 전달한다.
     --verify         정렬돼 있는지 끝까지 확인한다. 리포트를 -sort_by slack
                      없이 뽑았을 가능성이 있을 때만 쓴다. 기본은 확인하지 않고
                      **앞에서 N개만 읽고 멈춘다**(그래서 '원래' 개수는 ? 로 뜬다).
@@ -53,8 +60,11 @@
     --force          결과 폴더에 이미 파일이 있어도 덮어쓴다
 
 자주 쓰는 형태
-    python3 0_trim.py  --dir round1/corners --keep 10000
-    python3 1_union.py --dir round1/corners_top10000 --max-paths 2000
+    python3 0_trim.py  --dir round1/corners --keep 10000 --mode setup
+    python3 1_union.py --dir round1/corners_top10000 --mode setup --max-paths 2000
+
+    python3 0_trim.py  --dir hold_round1/corners --keep 10000 --mode hold
+    python3 1_union.py --dir hold_round1/corners_top10000 --mode hold --max-paths 2000
 """
 import argparse
 import glob
@@ -675,7 +685,8 @@ def main():
     ap.add_argument("--out", default=None,
                     help="결과 폴더. 생략하면 <dir>_top<N>")
     ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
-                    help="표시용. 어느 쪽이든 slack 이 작은 것부터 남긴다")
+                    help="setup/hold 분석 종류. 기본 setup. 자르는 기준은 같고, "
+                         "완료 후 출력하는 1_union.py 명령에 그대로 전달한다")
     ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
                     help="코너를 동시에 몇 개 처리할지. **기본 1(하나씩)**. "
                          "0 을 주면 자동(코어 수와 코너 수 중 작은 쪽, 최대 8)")
@@ -934,7 +945,7 @@ def main():
              tot_after, src_mb, tot_bytes / 1048576.0, shrink))
     print("")
     print("  다음:")
-    print("      python3 1_union.py --dir %s" % out)
+    print("      python3 1_union.py --dir %s --mode %s" % (out, args.mode))
     print("")
     print("  더 줄이고 싶으면 --keep 을 낮춰 다시 돌리세요.")
     print("  원본은 그대로 있으니 몇 번이든 다시 만들 수 있습니다.")
