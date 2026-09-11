@@ -2,6 +2,14 @@
 # -*- coding: ascii -*-
 """Read-only completion check for every corner under a round2 directory.
 
+PHASE DEFINITIONS
+    --phase 1  annotation only  (2a cpin, 2b distres, 2c merge)
+    --phase 2  crosstalk only   (5a contexts, 5b pairs, 5c report)
+    --phase 3  both phase 1 and phase 2; use this for a full result check
+
+    Phase selects which result group to check.  It does not select setup or
+    hold.  Use --mode setup or --mode hold for that distinction.
+
 This is deliberately separate from 4_all_corners.py.  It never runs a stage,
 creates a file, removes a file, or changes a timestamp.
 
