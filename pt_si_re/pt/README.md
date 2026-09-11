@@ -285,13 +285,16 @@ python3 /path/to/repository/analysis/compare_scaling_mae.py \
     /path/to/restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt \
     /path/to/SSPG_0p57V_25C_RCMAX_setup.rpt \
     --input-unit ns \
-    --output-prefix /company/work/pt_scaling_eval/analysis_output/SSPG_0p57_rcmax
+    --output-dir /company/work/pt_scaling_eval/analysis_output/SSPG_0p57_rcmax
 ```
 
 생성 파일은 다음과 같습니다.
 
-- `<prefix>.csv`: path별 ground truth, scaling slack, signed error, absolute error
-- `<prefix>.json`: compared/excluded path 수, MAE, RMSE, bias, worst error
+- `path_errors.csv`: path별 ground truth, scaling slack, signed error, absolute error
+- `summary.json`: compared/excluded path 수, MAE, RMSE, bias, worst error
+
+`--output-dir`을 생략하면 실행 위치의 `pt_scaling_comparison/`에 두 파일이
+생성됩니다.
 
 `scaled_blocks`, `ground_truth_blocks`, `compared_paths`, `excluded_paths`를 반드시
 확인합니다. known-invalid path 외에 새로 제외된 path가 있으면 MAE를 승인하지

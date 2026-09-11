@@ -6,8 +6,7 @@ QUICK START (run from the pt_si_re directory)
     python3 analysis/compare_scaling_mae.py \
         auto_scaling_output/scaled_TARGET.rpt \
         ground_truth/TARGET.rpt \
-        --input-unit ns \
-        --output-prefix results/pt_scaling_vs_groundtruth
+        --input-unit ns
 
 INPUT ORDER
     1) scaled_rpt       : scaled_*.rpt from run_scaling_after_restore.tcl
@@ -40,16 +39,18 @@ METRICS
     MAE, RMSE, and bias.
 
 OUTPUT
-    --output-prefix results/pt_scaling_vs_groundtruth creates:
-      results/pt_scaling_vs_groundtruth.csv   per-path values and errors
-      results/pt_scaling_vs_groundtruth.json  counts and summary metrics
+    By default, the script creates:
+      pt_scaling_comparison/path_errors.csv  per-path values and errors
+      pt_scaling_comparison/summary.json     counts and summary metrics
 
-    The parent directory is created automatically. Give a prefix without an
-    extension so the .csv and .json output names are clear.
+    To select another result directory, add:
+      --output-dir results/TARGET
+
+    The output directory is created automatically.
 
 VIEW WITHOUT VS CODE
-    cat results/pt_scaling_vs_groundtruth.json
-    column -s, -t results/pt_scaling_vs_groundtruth.csv | less -S
+    cat pt_scaling_comparison/summary.json
+    column -s, -t pt_scaling_comparison/path_errors.csv | less -S
 
 RUNTIME
     Python 3.6 or newer. No external Python package is required.
@@ -196,8 +197,8 @@ def main():
     parser.add_argument("ground_truth_rpt", type=Path, help="\uc2e4\uc81c target library\ub85c \uce21\uc815\ud55c fixed-path .rpt")
     parser.add_argument("--input-unit", choices=TO_PS, default="ns",
                         help="\ub450 report\uc758 slack \uc2dc\uac04 \ub2e8\uc704 (\uae30\ubcf8\uac12: ns)")
-    parser.add_argument("--output-prefix", type=Path, default=Path("pt_scaling_vs_groundtruth"),
-                        help="\ucd9c\ub825 \ud30c\uc77c \uc55e\ubd80\ubd84 (\uae30\ubcf8\uac12: pt_scaling_vs_groundtruth)")
+    parser.add_argument("--output-dir", type=Path, default=Path("pt_scaling_comparison"),
+                        help="\uacb0\uacfc \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
     args = parser.parse_args()
 
     for path in (args.scaled_rpt, args.ground_truth_rpt):
@@ -213,9 +214,9 @@ def main():
         "ground_truth_report": str(args.ground_truth_rpt.resolve()),
     })
 
-    csv_path = args.output_prefix.with_suffix(".csv")
-    json_path = args.output_prefix.with_suffix(".json")
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = args.output_dir / "path_errors.csv"
+    json_path = args.output_dir / "summary.json"
     write_csv(csv_path, rows)
     with json_path.open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
