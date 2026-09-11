@@ -1,5 +1,75 @@
 #!/usr/bin/env python3
-"""Summarize and plot fixed-path ground-truth slack reports without extra packages."""
+# -*- coding: utf-8 -*-
+"""Ground-truth fixed-path slack의 통계와 분포 그림을 만든다.
+
+가장 자주 쓰는 명령
+    pt_si_re 디렉터리에서 ground truth report 여러 개를 한꺼번에 지정한다.
+
+    python3 analysis/plot_ground_truth_slack.py \
+        ground_truth/*.rpt \
+        --input-unit ns \
+        --output-dir results/ground_truth_slack
+
+    report 하나만 볼 때도 사용법은 같다.
+
+    python3 analysis/plot_ground_truth_slack.py \
+        ground_truth/SSPG_0p5V_25C_rcmax_hold.rpt \
+        --output-dir results/one_corner
+
+입력
+    fixed_paths.tcl로 측정한 ground-truth .rpt 파일을 하나 이상 준다. 각 경로
+    앞에 다음 마커가 있어야 한다.
+
+        ### FIXED_PATH idx=... key=...
+
+    여러 report가 완전히 같은 path 집합일 필요는 없다. 이 스크립트는 각
+    report의 분포를 독립적으로 계산한다. 다만 코너끼리 공정하게 비교하려면
+    같은 fixed_paths.tcl로 만든 report를 넣는 것이 좋다.
+
+시간 단위와 포함 기준
+    --input-unit은 report slack 숫자의 단위이며 기본값은 ns다. 모든 CSV,
+    터미널 표와 SVG의 값은 ps로 변환된다. slack을 읽지 못한 path block은
+    unresolved로 세지만 평균과 분포 계산에서는 제외한다.
+
+통계 의미
+    mean    평균 slack
+    median  정렬했을 때 중앙값
+    stddev  모집단 표준편차
+    min/max 최솟값/최댓값
+    p05/p95 하위 5%/95% 위치
+    q1/q3   하위 25%/75% 위치
+    violated_paths  slack < 0인 path 수
+
+출력
+    --output-dir results/ground_truth_slack을 주면 아래 다섯 파일을 만든다.
+    폴더가 없으면 자동 생성하며, 같은 이름의 기존 파일은 덮어쓴다.
+
+    ground_truth_slack_summary.csv
+        report별 평균, median, 표준편차, min/q1/q3/max, 위반 path 수
+
+    ground_truth_path_slacks.csv
+        report와 path별 slack(ps), resolved/unresolved 상태
+
+    ground_truth_slack_distribution.svg
+        모든 report에 동일한 slack 구간을 적용한 histogram
+
+    ground_truth_slack_boxplot.svg
+        min, Q1, median, Q3, max와 평균을 비교하는 box plot
+
+    ground_truth_slack_terminal.txt
+        GUI나 VS Code 없이 less로 확인할 수 있는 텍스트 histogram
+
+결과 확인
+    column -s, -t results/ground_truth_slack/ground_truth_slack_summary.csv | less -S
+    less -S results/ground_truth_slack/ground_truth_slack_terminal.txt
+
+histogram 막대가 너무 거칠거나 촘촘하면 --bins를 바꾼다. 기본값은 30이며
+2 이상이어야 한다.
+
+필요 환경
+    Python 3.6 이상. matplotlib 등 외부 패키지는 필요 없다. SVG 파일도
+    Python 표준 라이브러리만으로 생성한다.
+"""
 
 import argparse
 import csv
