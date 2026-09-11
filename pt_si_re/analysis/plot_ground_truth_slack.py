@@ -5,7 +5,6 @@
 QUICK START (run from the pt_si_re directory)
     python3 analysis/plot_ground_truth_slack.py \
         ground_truth/*.rpt \
-        --input-unit ns \
         --output-dir results/ground_truth_slack
 
     One-report example:
@@ -23,9 +22,9 @@ INPUT
     For a fair corner comparison, use reports made from the same fixed_paths.tcl.
 
 TIME UNIT AND INCLUDED PATHS
-    --input-unit is the report slack unit and defaults to ns. CSV, terminal,
-    and SVG values are converted to ps. A block without readable slack is
-    counted as unresolved and excluded from statistics and distributions.
+    Input report slack is always interpreted as ns. CSV, terminal, and SVG
+    values are converted to ps (1 ns = 1000 ps). A block without readable
+    slack is counted as unresolved and excluded from statistics and plots.
 
 STATISTICS
     mean/median    average and middle slack
@@ -64,7 +63,7 @@ import math
 import statistics
 from pathlib import Path
 
-from compare_scaling_mae import TO_PS, parse_report
+from compare_scaling_mae import NS_TO_PS, parse_report
 
 
 class ReportData(object):
@@ -397,8 +396,6 @@ def main():
         description="Ground-truth fixed-path report\ubcc4 slack \ud1b5\uacc4\uc640 \ubd84\ud3ec \uadf8\ub798\ud504\ub97c \uc0dd\uc131\ud569\ub2c8\ub2e4.")
     parser.add_argument("reports", type=Path, nargs="+",
                         help="fixed_paths.tcl\ub85c \uc0dd\uc131\ud55c ground-truth .rpt \ud30c\uc77c\ub4e4")
-    parser.add_argument("--input-unit", choices=TO_PS, default="ns",
-                        help="report slack \ub2e8\uc704 (\uae30\ubcf8\uac12: ns; \ucd9c\ub825\uc740 ps)")
     parser.add_argument("--output-dir", type=Path, default=Path("ground_truth_slack_stats"),
                         help="\uacb0\uacfc \ud3f4\ub354 (\uae30\ubcf8\uac12: ground_truth_slack_stats)")
     parser.add_argument("--bins", type=int, default=30,
@@ -411,7 +408,7 @@ def main():
         if not report.is_file():
             parser.error(f"file not found: {report}")
 
-    reports, path_rows = load_reports(args.reports, TO_PS[args.input_unit])
+    reports, path_rows = load_reports(args.reports, NS_TO_PS)
     summaries = [summary_row(report) for report in reports]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.output_dir / "ground_truth_slack_summary.csv"

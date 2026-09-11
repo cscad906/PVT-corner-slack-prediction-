@@ -8,14 +8,16 @@ PrimeTime에서 `source`하는 Tcl 파일은 `pt/` 디렉토리에 있습니다.
 
 ```bash
 python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt \
-    --input-unit ns --output-dir results/pt_scaling_comparison
+    --output-dir results/pt_scaling_comparison
 
 python3 analysis/plot_ground_truth_slack.py ground_truth/*.rpt \
-    --input-unit ns --output-dir results/ground_truth_slack
+    --output-dir results/ground_truth_slack
 ```
 
 `--output-dir`을 생략하면 `pt_scaling_comparison/` 폴더에
 `path_errors.csv`와 `summary.json`이 생성됩니다.
+
+두 스크립트 모두 입력 `.rpt`의 slack을 항상 ns로 읽고 결과를 ps로 저장합니다.
 
 터미널 histogram은 다음 명령으로 확인합니다.
 

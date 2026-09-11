@@ -5,8 +5,7 @@
 QUICK START (run from the pt_si_re directory)
     python3 analysis/compare_scaling_mae.py \
         auto_scaling_output/scaled_TARGET.rpt \
-        ground_truth/TARGET.rpt \
-        --input-unit ns
+        ground_truth/TARGET.rpt
 
 INPUT ORDER
     1) scaled_rpt       : scaled_*.rpt from run_scaling_after_restore.tcl
@@ -24,8 +23,8 @@ REQUIRED REPORT FORMAT
     hold, using the same constraints and report time unit.
 
 TIME UNIT
-    --input-unit is the slack unit in both reports and defaults to ns. All
-    reported slack and error values are converted to ps.
+    Both input reports are always interpreted as ns. All reported slack and
+    error values are converted to ps (1 ns = 1000 ps).
 
 METRICS
     error = PT scaling slack - ground-truth slack
@@ -69,8 +68,7 @@ SLACK_RE = re.compile(
     r"^\s*slack\s+\((?:MET|VIOLATED)[^)]*\)\s*"
     r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
 )
-TO_PS = {"s": 1.0e12, "ms": 1.0e9, "us": 1.0e6,
-         "ns": 1.0e3, "ps": 1.0, "fs": 1.0e-3}
+NS_TO_PS = 1000.0
 
 
 class PathResult(object):
@@ -195,8 +193,6 @@ def main():
         description="PrimeTime scaling slack\uc640 \uc2e4\uc81c target-corner slack\uc758 path\ubcc4 MAE\ub97c \uacc4\uc0b0\ud569\ub2c8\ub2e4.")
     parser.add_argument("scaled_rpt", type=Path, help="run_scaling_after_restore.tcl \uacb0\uacfc .rpt")
     parser.add_argument("ground_truth_rpt", type=Path, help="\uc2e4\uc81c target library\ub85c \uce21\uc815\ud55c fixed-path .rpt")
-    parser.add_argument("--input-unit", choices=TO_PS, default="ns",
-                        help="\ub450 report\uc758 slack \uc2dc\uac04 \ub2e8\uc704 (\uae30\ubcf8\uac12: ns)")
     parser.add_argument("--output-dir", type=Path, default=Path("pt_scaling_comparison"),
                         help="\uacb0\uacfc \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
     args = parser.parse_args()
@@ -207,9 +203,10 @@ def main():
 
     scaled = parse_report(args.scaled_rpt)
     truth = parse_report(args.ground_truth_rpt)
-    rows, summary = evaluate(scaled, truth, TO_PS[args.input_unit])
+    rows, summary = evaluate(scaled, truth, NS_TO_PS)
     summary.update({
-        "input_unit": args.input_unit,
+        "input_unit": "ns",
+        "output_unit": "ps",
         "scaled_report": str(args.scaled_rpt.resolve()),
         "ground_truth_report": str(args.ground_truth_rpt.resolve()),
     })

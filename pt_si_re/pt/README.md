@@ -277,14 +277,13 @@ Linux shell에서 Python 버전을 확인합니다.
 python3 --version
 ```
 
-Python 3.6 이상이면 다음처럼 실행합니다. 입력 report의 slack 단위가 ns이면
-`--input-unit ns`를 사용하며 결과는 ps로 저장됩니다.
+Python 3.6 이상이면 다음처럼 실행합니다. 입력 report의 slack은 항상 ns로
+읽으며 결과는 ps로 저장됩니다.
 
 ```bash
 python3 /path/to/repository/analysis/compare_scaling_mae.py \
     /path/to/restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt \
     /path/to/SSPG_0p57V_25C_RCMAX_setup.rpt \
-    --input-unit ns \
     --output-dir /company/work/pt_scaling_eval/analysis_output/SSPG_0p57_rcmax
 ```
 
@@ -307,7 +306,6 @@ python3 /path/to/repository/analysis/compare_scaling_mae.py \
 ```bash
 python3 /path/to/repository/analysis/plot_ground_truth_slack.py \
     /company/work/pt_scaling_eval/ground_truth/*/*.rpt \
-    --input-unit ns \
     --bins 20 \
     --output-dir /company/work/pt_scaling_eval/analysis_output/slack_distribution
 ```
