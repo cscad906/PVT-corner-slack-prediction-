@@ -16,6 +16,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="${PY:-python3}"
+# Python 3.6 on legacy EDA hosts may inherit an ASCII/EUC-KR stdout locale.
+# Keep Korean status messages and non-ASCII corner symbols printable.
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8:backslashreplace}"
 
 if [[ "${1:-list}" == "recon" ]]; then
   shift

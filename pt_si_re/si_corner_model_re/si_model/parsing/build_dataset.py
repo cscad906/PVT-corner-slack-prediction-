@@ -5,8 +5,8 @@ setup/hold check. Those are *split* dimensions, fixed here; the corner grid this
 builds spans only the two continuous axes, voltage x BEOL level. ``si_model.run``
 expands ``config.yaml`` into one call of ``build()`` per instance:
 
-    bash scripts/run.sh build            # 정상 경로 (config.yaml 이 모델을 펼친다)
-    python -m si_model.parsing.build_dataset --config <engine-schema.yaml>   # 탈출구
+    bash scripts/run.sh build            # \uc815\uc0c1 \uacbd\ub85c (config.yaml \uc774 \ubaa8\ub378\uc744 \ud3bc\uce5c\ub2e4)
+    python -m si_model.parsing.build_dataset --config <engine-schema.yaml>   # \ud0c8\ucd9c\uad6c
 
 Report discovery (both directory layouts) lives in ``parsing/discovery.py``.
 Crosstalk is OPTIONAL: with no ``data.crosstalk_dir`` the dataset is built
@@ -181,9 +181,9 @@ def choose_key_mode(ann: dict, cfg: dict) -> bool:
     stripped = {norm_path_key(p.key) for p in ann.values()}
     if len(stripped) == len(ann):
         return True
-    print(f"[KEYS] '#idx' 를 떼면 경로 {len(ann)}개가 {len(stripped)}개로 합쳐진다 "
-          f"-> 같은 FF 쌍의 서로 다른 경로를 구분하는 식별자로 보고 keep. "
-          f"(고정경로 재측정 리포트의 정상 동작. 강제하려면 data.strip_path_idx)",
+    print(f"[KEYS] '#idx' \ub97c \ub5bc\uba74 \uacbd\ub85c {len(ann)}\uac1c\uac00 {len(stripped)}\uac1c\ub85c \ud569\uccd0\uc9c4\ub2e4 "
+          f"-> \uac19\uc740 FF \uc30d\uc758 \uc11c\ub85c \ub2e4\ub978 \uacbd\ub85c\ub97c \uad6c\ubd84\ud558\ub294 \uc2dd\ubcc4\uc790\ub85c \ubcf4\uace0 keep. "
+          f"(\uace0\uc815\uacbd\ub85c \uc7ac\uce21\uc815 \ub9ac\ud3ec\ud2b8\uc758 \uc815\uc0c1 \ub3d9\uc791. \uac15\uc81c\ud558\ub824\uba74 data.strip_path_idx)",
           flush=True)
     return False
 
@@ -201,15 +201,15 @@ def _assert_parsed(ann: dict, fp: str) -> None:
     except OSError:
         pass
     raise AssertionError(
-        f"파싱된 경로가 0개: {fp}\n"
-        f"  파일은 찾았지만 본문이 파서 형식과 다르다. 파서는 각 경로가\n"
-        f"  '### FIXED_PATH idx=<i> key=<start>-><end>' 헤더로 시작한다고 가정한다.\n"
-        f"  - 헤더가 없다면: 코너마다 경로 집합이 같은지부터 확인 (README '주의' ①).\n"
-        f"    같으면 파서에 헤더 없는 모드를 추가하면 되고, 다르면 고정경로\n"
-        f"    재-annotate 가 필요하다 -- 파서로 우회할 수 있는 문제가 아니다.\n"
-        f"  - 헤더는 있는데 slack/열 형식이 다르면: si_model/parsing/annotated.py\n"
-        f"    상단 정규식 (docs/PARSING.md §4).\n"
-        f"  파일 앞부분:\n    " + head.replace("\n", "\n    "))
+        f"\ud30c\uc2f1\ub41c \uacbd\ub85c\uac00 0\uac1c: {fp}\n"
+        f"  \ud30c\uc77c\uc740 \ucc3e\uc558\uc9c0\ub9cc \ubcf8\ubb38\uc774 \ud30c\uc11c \ud615\uc2dd\uacfc \ub2e4\ub974\ub2e4. \ud30c\uc11c\ub294 \uac01 \uacbd\ub85c\uac00\n"
+        f"  '### FIXED_PATH idx=<i> key=<start>-><end>' \ud5e4\ub354\ub85c \uc2dc\uc791\ud55c\ub2e4\uace0 \uac00\uc815\ud55c\ub2e4.\n"
+        f"  - \ud5e4\ub354\uac00 \uc5c6\ub2e4\uba74: \ucf54\ub108\ub9c8\ub2e4 \uacbd\ub85c \uc9d1\ud569\uc774 \uac19\uc740\uc9c0\ubd80\ud130 \ud655\uc778 (README '\uc8fc\uc758' \u2460).\n"
+        f"    \uac19\uc73c\uba74 \ud30c\uc11c\uc5d0 \ud5e4\ub354 \uc5c6\ub294 \ubaa8\ub4dc\ub97c \ucd94\uac00\ud558\uba74 \ub418\uace0, \ub2e4\ub974\uba74 \uace0\uc815\uacbd\ub85c\n"
+        f"    \uc7ac-annotate \uac00 \ud544\uc694\ud558\ub2e4 -- \ud30c\uc11c\ub85c \uc6b0\ud68c\ud560 \uc218 \uc788\ub294 \ubb38\uc81c\uac00 \uc544\ub2c8\ub2e4.\n"
+        f"  - \ud5e4\ub354\ub294 \uc788\ub294\ub370 slack/\uc5f4 \ud615\uc2dd\uc774 \ub2e4\ub974\uba74: si_model/parsing/annotated.py\n"
+        f"    \uc0c1\ub2e8 \uc815\uaddc\uc2dd (docs/PARSING.md \u00a74).\n"
+        f"  \ud30c\uc77c \uc55e\ubd80\ubd84:\n    " + head.replace("\n", "\n    "))
 
 
 # per-segment aggregate path signature (ref corner) --------------------------
@@ -288,8 +288,8 @@ def stage_sequence(stages):
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
-    configure_cell_taxonomy(cfg)   # 비-SAED 셀 이름 규칙 (data.cell_taxonomy)
-    configure_pins(cfg)            # FF 클럭/출력 핀 이름 (data.clock_pins 등)
+    configure_cell_taxonomy(cfg)   # \ube44-SAED \uc140 \uc774\ub984 \uaddc\uce59 (data.cell_taxonomy)
+    configure_pins(cfg)            # FF \ud074\ub7ed/\ucd9c\ub825 \ud540 \uc774\ub984 (data.clock_pins \ub4f1)
 
     corners, ann_by_corner, xt_by_corner = discover(cfg)
     if xt_by_corner is None:
@@ -436,14 +436,14 @@ def build(cfg: dict) -> str:
         per_corner = np.isnan(slack).sum(axis=0)
         worst = int(np.argmax(per_corner))
         examples = [ref_keys[idx_order[r]] for r in np.where(~resolved)[0][:3]]
-        print(f"[PATHS] 전 코너에서 측정된 경로만 남긴다: "
-              f"{n_before} -> {len(keep)} (제외 {n_before - len(keep)}). "
-              f"코너별 미해결 최대 = {corners[worst]} {int(per_corner[worst])}개. "
-              f"예: {examples}", flush=True)
+        print(f"[PATHS] \uc804 \ucf54\ub108\uc5d0\uc11c \uce21\uc815\ub41c \uacbd\ub85c\ub9cc \ub0a8\uae34\ub2e4: "
+              f"{n_before} -> {len(keep)} (\uc81c\uc678 {n_before - len(keep)}). "
+              f"\ucf54\ub108\ubcc4 \ubbf8\ud574\uacb0 \ucd5c\ub300 = {corners[worst]} {int(per_corner[worst])}\uac1c. "
+              f"\uc608: {examples}", flush=True)
         assert len(keep) > 0, (
-            "모든 코너에서 측정된 경로가 하나도 없다.\n"
-            "  고정경로 목록이 코너마다 다르게 풀렸다는 뜻이다 -- 2회차 재측정이\n"
-            "  같은 fixed_paths 목록으로 모든 코너에 대해 돌았는지 확인할 것.")
+            "\ubaa8\ub4e0 \ucf54\ub108\uc5d0\uc11c \uce21\uc815\ub41c \uacbd\ub85c\uac00 \ud558\ub098\ub3c4 \uc5c6\ub2e4.\n"
+            "  \uace0\uc815\uacbd\ub85c \ubaa9\ub85d\uc774 \ucf54\ub108\ub9c8\ub2e4 \ub2e4\ub974\uac8c \ud480\ub838\ub2e4\ub294 \ub73b\uc774\ub2e4 -- 2\ud68c\ucc28 \uc7ac\uce21\uc815\uc774\n"
+            "  \uac19\uc740 fixed_paths \ubaa9\ub85d\uc73c\ub85c \ubaa8\ub4e0 \ucf54\ub108\uc5d0 \ub300\ud574 \ub3cc\uc558\ub294\uc9c0 \ud655\uc778\ud560 \uac83.")
 
         old2new = np.full(len(idx_order), -1, np.int64)
         old2new[keep] = np.arange(len(keep))

@@ -19,9 +19,9 @@ Stages
   train    cache          -> runs/<design>/<temp>/best.pt + summary.json
   bundle   per-temp best.pt -> runs/<design>/model.pt  (ONE file per circuit)
   predict  model.pt       -> runs/<design>/<temp>/predictions_<corners>.csv
-  sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack 전용, 비교용)
+  sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack \uc804\uc6a9, \ube44\uad50\uc6a9)
   merge    all members    -> runs/_all/predictions_<corners>.csv + summary.json
-  all      build, base, train, bundle, predict, merge  (sweep 은 명시할 때만)
+  all      build, base, train, bundle, predict, merge  (sweep \uc740 \uba85\uc2dc\ud560 \ub54c\ub9cc)
 
 A failing member does not silently vanish: it is recorded, reported at the end,
 and makes the run exit non-zero -- a merged file that looks complete but is
@@ -34,7 +34,7 @@ import os
 import sys
 import traceback
 
-import yaml
+from .yaml_io import load_yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PROJECT = os.path.join(REPO_ROOT, "config.yaml")
@@ -43,57 +43,56 @@ STAGES = ("help", "recon", "check", "list", "build", "base", "train", "sweep",
 _ALL_STAGES = ("build", "base", "train", "bundle", "predict", "merge")
 
 HELP = """\
-si_corner_model — 명령은 `bash scripts/run.sh <단계>` 하나뿐이다.
-설정은 config.yaml 하나뿐이다. 처음이면 docs/START.md 를 위에서 아래로.
+si_corner_model \u2014 \uba85\ub839\uc740 `bash scripts/run.sh <\ub2e8\uacc4>` \ud558\ub098\ubfd0\uc774\ub2e4.
+\uc124\uc815\uc740 config.yaml \ud558\ub098\ubfd0\uc774\ub2e4. \ucc98\uc74c\uc774\uba74 docs/START.md \ub97c \uc704\uc5d0\uc11c \uc544\ub798\ub85c.
 
-  단계 (보통 이 순서)
-    recon      데이터 정찰. 폴더/파일명/본문을 훑어 recon_out.txt 로 저장
-               -> 여기 값을 config.yaml 에 옮겨 적는다
-    check      리포트 한 개를 파서에 통과시켜 어느 줄이 잡히고 안 잡히는지 보고
-               -> 본문 형식이 다를 때(SSTA 로 열/행이 늘었을 때) 여기부터
-    list       config 를 펼쳐 "뭐가 어떤 설정으로 돌지" 출력. 파일 안 건드림
-               -> 코너 수, seen/hidden, 다항식 파라미터 수까지 검산해줌
-    build      리포트 -> cache/<회로>/<온도>/dataset.npz          (numpy만 필요)
-    base       OLS base 오차만 출력. base 수치는 여기서만 나온다  (numpy만, 수 초)
-               -> 학습 전에 데이터가 제대로 파싱됐는지 확인하는 단계
-    train      학습 -> runs/<회로>/<온도>/best.pt + summary.json   (torch/GPU)
-    bundle     온도별 가중치를 회로당 한 파일로 -> runs/<회로>/model.pt
-    predict    저장된 가중치로 예측만 -> predictions_<corners>.csv
-    merge      전 회로·전 온도 예측을 runs/_all/ 로 합침
+  \ub2e8\uacc4 (\ubcf4\ud1b5 \uc774 \uc21c\uc11c)
+    recon      \ub370\uc774\ud130 \uc815\ucc30. \ud3f4\ub354/\ud30c\uc77c\uba85/\ubcf8\ubb38\uc744 \ud6d1\uc5b4 recon_out.txt \ub85c \uc800\uc7a5
+               -> \uc5ec\uae30 \uac12\uc744 config.yaml \uc5d0 \uc62e\uaca8 \uc801\ub294\ub2e4
+    check      \ub9ac\ud3ec\ud2b8 \ud55c \uac1c\ub97c \ud30c\uc11c\uc5d0 \ud1b5\uacfc\uc2dc\ucf1c \uc5b4\ub290 \uc904\uc774 \uc7a1\ud788\uace0 \uc548 \uc7a1\ud788\ub294\uc9c0 \ubcf4\uace0
+               -> \ubcf8\ubb38 \ud615\uc2dd\uc774 \ub2e4\ub97c \ub54c(SSTA \ub85c \uc5f4/\ud589\uc774 \ub298\uc5c8\uc744 \ub54c) \uc5ec\uae30\ubd80\ud130
+    list       config \ub97c \ud3bc\uccd0 "\ubb50\uac00 \uc5b4\ub5a4 \uc124\uc815\uc73c\ub85c \ub3cc\uc9c0" \ucd9c\ub825. \ud30c\uc77c \uc548 \uac74\ub4dc\ub9bc
+               -> \ucf54\ub108 \uc218, seen/hidden, \ub2e4\ud56d\uc2dd \ud30c\ub77c\ubbf8\ud130 \uc218\uae4c\uc9c0 \uac80\uc0b0\ud574\uc90c
+    build      \ub9ac\ud3ec\ud2b8 -> cache/<\ud68c\ub85c>/<\uc628\ub3c4>/dataset.npz          (numpy\ub9cc \ud544\uc694)
+    base       OLS base \uc624\ucc28\ub9cc \ucd9c\ub825. base \uc218\uce58\ub294 \uc5ec\uae30\uc11c\ub9cc \ub098\uc628\ub2e4  (numpy\ub9cc, \uc218 \ucd08)
+               -> \ud559\uc2b5 \uc804\uc5d0 \ub370\uc774\ud130\uac00 \uc81c\ub300\ub85c \ud30c\uc2f1\ub410\ub294\uc9c0 \ud655\uc778\ud558\ub294 \ub2e8\uacc4
+    train      \ud559\uc2b5 -> runs/<\ud68c\ub85c>/<\uc628\ub3c4>/best.pt + summary.json   (torch/GPU)
+    bundle     \uc628\ub3c4\ubcc4 \uac00\uc911\uce58\ub97c \ud68c\ub85c\ub2f9 \ud55c \ud30c\uc77c\ub85c -> runs/<\ud68c\ub85c>/model.pt
+    predict    \uc800\uc7a5\ub41c \uac00\uc911\uce58\ub85c \uc608\uce21\ub9cc -> predictions_<corners>.csv
+    merge      \uc804 \ud68c\ub85c\u00b7\uc804 \uc628\ub3c4 \uc608\uce21\uc744 runs/_all/ \ub85c \ud569\uce68
     all        build -> base -> train -> bundle -> predict -> merge
-    sweep      lambda_si {0, 0.1, 1, 10} 비교 -> runs/_sweep/ (slack 전용)
+    sweep      lambda_si {0, 0.1, 1, 10} \ube44\uad50 -> runs/_sweep/ (slack \uc804\uc6a9)
 
-  옵션
-    --design <회로>          그 회로만
-    --temp <온도tag>         그 온도만
-    --corners hidden|seen|all   predict/merge 대상 코너 (기본 hidden)
-    --config <파일>          다른 프로젝트 config (기본 config.yaml)
+  \uc635\uc158
+    --design <\ud68c\ub85c>          \uadf8 \ud68c\ub85c\ub9cc
+    --temp <\uc628\ub3c4tag>         \uadf8 \uc628\ub3c4\ub9cc
+    --corners hidden|seen|all   predict/merge \ub300\uc0c1 \ucf54\ub108 (\uae30\ubcf8 hidden)
+    --config <\ud30c\uc77c>          \ub2e4\ub978 \ud504\ub85c\uc81d\ud2b8 config (\uae30\ubcf8 config.yaml)
 
-  예시
+  \uc608\uc2dc
     bash scripts/run.sh recon
-    bash scripts/run.sh check                  # 형식이 의심스러우면 build 전에
-    bash scripts/run.sh check --file <리포트>
+    bash scripts/run.sh check                  # \ud615\uc2dd\uc774 \uc758\uc2ec\uc2a4\ub7ec\uc6b0\uba74 build \uc804\uc5d0
+    bash scripts/run.sh check --file <\ub9ac\ud3ec\ud2b8>
     bash scripts/run.sh list
     bash scripts/run.sh all
     bash scripts/run.sh base --design cpu
     bash scripts/run.sh train --design cpu --temp 125
     bash scripts/run.sh predict --corners all
 
-  파일 고치지 않고 경로만 바꾸기
+  \ud30c\uc77c \uace0\uce58\uc9c0 \uc54a\uace0 \uacbd\ub85c\ub9cc \ubc14\uafb8\uae30
     env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
 
-  문서
-    docs/START.md    도착해서 처음부터 (폴더 구조 케이스별)
-    docs/CONFIG.md   config.yaml 키 전부 + 코너 선정 + 에러표
-    docs/OLS.md      base 튜닝
-    docs/PARSING.md  리포트 파싱 / FIXED_PATH 문제 / npz 직접 만들기
+  \ubb38\uc11c
+    docs/START.md    \ub3c4\ucc29\ud574\uc11c \ucc98\uc74c\ubd80\ud130 (\ud3f4\ub354 \uad6c\uc870 \ucf00\uc774\uc2a4\ubcc4)
+    docs/CONFIG.md   config.yaml \ud0a4 \uc804\ubd80 + \ucf54\ub108 \uc120\uc815 + \uc5d0\ub7ec\ud45c
+    docs/OLS.md      base \ud29c\ub2dd
+    docs/PARSING.md  \ub9ac\ud3ec\ud2b8 \ud30c\uc2f1 / FIXED_PATH \ubb38\uc81c / npz \uc9c1\uc811 \ub9cc\ub4e4\uae30
 """
 
 
 # ------------------------------------------------------------------ expansion
 def load_project(fp: str) -> dict:
-    with open(fp) as f:
-        p = yaml.safe_load(f) or {}
+    p = load_yaml(fp) or {}
     root = os.environ.get("SI_ROOT") or p.get("root") or "auto"
     if str(root) == "auto":
         # The same model can live beside the design reports or one directory
@@ -136,11 +135,11 @@ def project_for(p: dict, design: str) -> dict:
     still ONE config file rather than a copy per circuit::
 
         designs:
-          chipA: {}                                  # 전역 그대로
+          chipA: {}                                  # \uc804\uc5ed \uadf8\ub300\ub85c
           chipB:
-            files: {subdir: reports}                 # 이 회로만 리포트 위치가 다름
+            files: {subdir: reports}                 # \uc774 \ud68c\ub85c\ub9cc \ub9ac\ud3ec\ud2b8 \uc704\uce58\uac00 \ub2e4\ub984
           chipC:
-            corners: {voltages: [0.5, 0.6, 0.685]}   # 이 회로만 전압이 3개
+            corners: {voltages: [0.5, 0.6, 0.685]}   # \uc774 \ud68c\ub85c\ub9cc \uc804\uc555\uc774 3\uac1c
             temps:
               - {tag: "125", token: 125, levels: [rcmax, cmax],
                  hidden_corners: [[0.5, rcmax]]}
@@ -201,8 +200,8 @@ def spread_hidden(volts, levels, n, ref_v, ref_lv) -> list:
     The reference corner is never selected -- it must stay seen.
     """
     assert 0 < n < len(levels), (
-        f"corners.hidden_per_voltage={n} 는 1 이상, 레벨 수({len(levels)}) 미만이어야 한다 "
-        f"-- 그 전압의 모든 레벨을 숨기면 앵커가 남지 않는다")
+        f"corners.hidden_per_voltage={n} \ub294 1 \uc774\uc0c1, \ub808\ubca8 \uc218({len(levels)}) \ubbf8\ub9cc\uc774\uc5b4\uc57c \ud55c\ub2e4 "
+        f"-- \uadf8 \uc804\uc555\uc758 \ubaa8\ub4e0 \ub808\ubca8\uc744 \uc228\uae30\uba74 \uc575\ucee4\uac00 \ub0a8\uc9c0 \uc54a\ub294\ub2e4")
     out = []
     for i, v in enumerate(sorted(float(x) for x in volts)):
         picked, j = [], 0
@@ -212,7 +211,7 @@ def spread_hidden(volts, levels, n, ref_v, ref_lv) -> list:
             if lv in picked:
                 continue
             if abs(v - ref_v) < 1e-9 and lv == ref_lv:
-                continue                       # 앵커 코너는 숨기지 않는다
+                continue                       # \uc575\ucee4 \ucf54\ub108\ub294 \uc228\uae30\uc9c0 \uc54a\ub294\ub2e4
             picked.append(lv)
         out += [[v, lv] for lv in picked]
     return out
@@ -272,7 +271,7 @@ def select_basis(y, sp, coords, cfg, verbose=True):
             c["base"]["cross_max_degree"] = cmd
             exps, names, _ = expand_terms(c, [nv, nlv])
             phi = design_matrix(coords, exps)
-            if len(S) - phi.shape[1] < 1:            # 자유도 0 -> seen-LOO 가 무의미
+            if len(S) - phi.shape[1] < 1:            # \uc790\uc720\ub3c4 0 -> seen-LOO \uac00 \ubb34\uc758\ubbf8
                 continue
             loo, _ = fit_field(y, phi, sp, coords, c)
             err = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
@@ -280,15 +279,15 @@ def select_basis(y, sp, coords, cfg, verbose=True):
             if best is None or err < best[0]:
                 best = (err, vo, cross, cmd, names)
     assert best is not None, (
-        "쓸 수 있는 기저가 없다 -- seen 코너가 너무 적다. 홀드아웃을 줄이거나 "
-        "코너를 늘릴 것")
+        "\uc4f8 \uc218 \uc788\ub294 \uae30\uc800\uac00 \uc5c6\ub2e4 -- seen \ucf54\ub108\uac00 \ub108\ubb34 \uc801\ub2e4. \ud640\ub4dc\uc544\uc6c3\uc744 \uc904\uc774\uac70\ub098 "
+        "\ucf54\ub108\ub97c \ub298\ub9b4 \uac83")
     err, vo, cross, cmd, names = best
     if verbose:
-        print(f"[BASIS] seen-LOO 로 선택: v^{vo} cross={cross}"
+        print(f"[BASIS] seen-LOO \ub85c \uc120\ud0dd: v^{vo} cross={cross}"
               + (f"(deg{cmd})" if cross else "")
-              + f" -> {len(names) + 1} 파라미터, seen-LOO {err * 1000:.2f} ps", flush=True)
+              + f" -> {len(names) + 1} \ud30c\ub77c\ubbf8\ud130, seen-LOO {err * 1000:.2f} ps", flush=True)
         for e, v, cr, cd, k in sorted(tried):
-            print(f"          v^{v} cross={str(cr):5s} {k}파라미터  {e * 1000:8.2f} ps", flush=True)
+            print(f"          v^{v} cross={str(cr):5s} {k}\ud30c\ub77c\ubbf8\ud130  {e * 1000:8.2f} ps", flush=True)
     cfg["base"]["axes"][0]["order"] = vo
     cfg["base"]["cross_terms"] = cross
     cfg["base"]["cross_max_degree"] = cmd
@@ -316,10 +315,10 @@ def expand(p: dict) -> "list[dict]":
     """
     from si_model.parsing.keys import corner_label
 
-    # setup 과 hold 는 리포트 위치도 출력 위치도 갈라져야 한다. 예전에는 그 네
-    # 군데(files.subdir / files.crosstalk_subdir / out.cache / out.runs)를 각각
-    # 손으로 고쳐야 했고, subdir 만 바꾸고 out 을 잊으면 hold 결과가 setup 캐시와
-    # run 을 조용히 덮어썼다. 이제 `mode` 한 줄이 넷 다 정한다.
+    # setup \uacfc hold \ub294 \ub9ac\ud3ec\ud2b8 \uc704\uce58\ub3c4 \ucd9c\ub825 \uc704\uce58\ub3c4 \uac08\ub77c\uc838\uc57c \ud55c\ub2e4. \uc608\uc804\uc5d0\ub294 \uadf8 \ub124
+    # \uad70\ub370(files.subdir / files.crosstalk_subdir / out.cache / out.runs)\ub97c \uac01\uac01
+    # \uc190\uc73c\ub85c \uace0\uccd0\uc57c \ud588\uace0, subdir \ub9cc \ubc14\uafb8\uace0 out \uc744 \uc78a\uc73c\uba74 hold \uacb0\uacfc\uac00 setup \uce90\uc2dc\uc640
+    # run \uc744 \uc870\uc6a9\ud788 \ub36e\uc5b4\uc37c\ub2e4. \uc774\uc81c `mode` \ud55c \uc904\uc774 \ub137 \ub2e4 \uc815\ud55c\ub2e4.
     mode = str(p.get("mode") or "setup")
     out_cache = _auto(p.get("out", {}).get("cache"), f"cache/{mode}")
     out_runs = _auto(p.get("out", {}).get("runs"), f"runs/{mode}")
@@ -345,26 +344,26 @@ def expand(p: dict) -> "list[dict]":
                 assert lv in lvals, \
                     f"temp {tag}: level {lv!r} missing from corners.level_values {sorted(lvals)}"
             assert ref_lv in levels, (
-                f"temp {tag}: corners.ref_level {ref_lv!r} 가 이 온도의 levels {levels} 에 없다 "
-                f"-- 모든 온도에 존재하는 레벨을 앵커로 쓸 것")
+                f"temp {tag}: corners.ref_level {ref_lv!r} \uac00 \uc774 \uc628\ub3c4\uc758 levels {levels} \uc5d0 \uc5c6\ub2e4 "
+                f"-- \ubaa8\ub4e0 \uc628\ub3c4\uc5d0 \uc874\uc7ac\ud558\ub294 \ub808\ubca8\uc744 \uc575\ucee4\ub85c \uc4f8 \uac83")
 
             # ---- holdout, resolved PER TEMPERATURE ----------------------
             ho = holdout_for(co, t)
             seen_decl = [float(v) for v in ho.get("seen_voltages") or []]
             hidden_v = [float(v) for v in ho.get("hidden_voltages") or []]
             assert not (seen_decl and hidden_v), (
-                f"temp {tag}: seen_voltages 와 hidden_voltages 중 하나만 쓸 것")
+                f"temp {tag}: seen_voltages \uc640 hidden_voltages \uc911 \ud558\ub098\ub9cc \uc4f8 \uac83")
             seen_v = seen_decl or [v for v in volts
                                    if not any(abs(v - h) < 1e-9 for h in hidden_v)]
             assert any(abs(ref_v - v) < 1e-9 for v in seen_v), (
-                f"temp {tag}: corners.ref_voltage {ref_v} 가 숨겨졌다 (seen = {seen_v}). "
-                f"앵커 전압은 항상 seen 이어야 한다")
+                f"temp {tag}: corners.ref_voltage {ref_v} \uac00 \uc228\uaca8\uc84c\ub2e4 (seen = {seen_v}). "
+                f"\uc575\ucee4 \uc804\uc555\uc740 \ud56d\uc0c1 seen \uc774\uc5b4\uc57c \ud55c\ub2e4")
             hidden_lv = [str(x) for x in ho.get("hidden_levels") or []]
             assert ref_lv not in hidden_lv, (
-                f"temp {tag}: ref_level {ref_lv!r} 는 hidden_levels 에 넣을 수 없다")
+                f"temp {tag}: ref_level {ref_lv!r} \ub294 hidden_levels \uc5d0 \ub123\uc744 \uc218 \uc5c6\ub2e4")
             for lv in hidden_lv:
                 assert lv in levels, (
-                    f"temp {tag}: hidden_levels 의 {lv!r} 가 이 온도의 levels {levels} 에 없다")
+                    f"temp {tag}: hidden_levels \uc758 {lv!r} \uac00 \uc774 \uc628\ub3c4\uc758 levels {levels} \uc5d0 \uc5c6\ub2e4")
             hidden_corners = [list(x) for x in ho.get("hidden_corners") or []]
             seen_corners = [list(x) for x in ho.get("seen_corners") or []]
             if seen_corners:
@@ -372,36 +371,36 @@ def expand(p: dict) -> "list[dict]":
                                             "hidden_levels", "hidden_per_voltage")
                                 if ho.get(k)]
                 assert not incompatible, (
-                    f"temp {tag}: seen_corners 와 {incompatible} 는 같이 쓸 수 없다. "
-                    "평가 대상은 hidden_corners 에만 적을 것")
+                    f"temp {tag}: seen_corners \uc640 {incompatible} \ub294 \uac19\uc774 \uc4f8 \uc218 \uc5c6\ub2e4. "
+                    "\ud3c9\uac00 \ub300\uc0c1\uc740 hidden_corners \uc5d0\ub9cc \uc801\uc744 \uac83")
                 allowed = {(v, lv) for v in volts for lv in levels}
                 for key, pairs in (("seen_corners", seen_corners),
                                    ("hidden_corners", hidden_corners)):
                     for pair in pairs:
                         assert len(pair) == 2 and (float(pair[0]), str(pair[1])) in allowed, (
-                            f"temp {tag}: {key} 의 {pair!r} 가 voltages x levels 에 없다")
+                            f"temp {tag}: {key} \uc758 {pair!r} \uac00 voltages x levels \uc5d0 \uc5c6\ub2e4")
                     assert len({(float(v), str(lv)) for v, lv in pairs}) == len(pairs), (
-                        f"temp {tag}: {key} 에 중복 코너가 있다")
+                        f"temp {tag}: {key} \uc5d0 \uc911\ubcf5 \ucf54\ub108\uac00 \uc788\ub2e4")
                 seen_set = {(float(v), str(lv)) for v, lv in seen_corners}
                 hidden_set = {(float(v), str(lv)) for v, lv in hidden_corners}
                 assert not (seen_set & hidden_set), (
-                    f"temp {tag}: seen_corners 와 hidden_corners 가 겹친다: "
+                    f"temp {tag}: seen_corners \uc640 hidden_corners \uac00 \uacb9\uce5c\ub2e4: "
                     f"{sorted(seen_set & hidden_set)}")
                 assert (ref_v, ref_lv) in seen_set, (
-                    f"temp {tag}: 앵커 ({ref_v}, {ref_lv}) 는 seen_corners 에 있어야 한다")
+                    f"temp {tag}: \uc575\ucee4 ({ref_v}, {ref_lv}) \ub294 seen_corners \uc5d0 \uc788\uc5b4\uc57c \ud55c\ub2e4")
             if ho.get("hidden_per_voltage"):
                 assert not hidden_corners, (
-                    f"temp {tag}: hidden_per_voltage 와 hidden_corners 는 같이 쓰지 않는다")
+                    f"temp {tag}: hidden_per_voltage \uc640 hidden_corners \ub294 \uac19\uc774 \uc4f0\uc9c0 \uc54a\ub294\ub2e4")
                 hidden_corners = spread_hidden(seen_v if seen_decl else volts,
                                                levels, int(ho["hidden_per_voltage"]),
                                                ref_v, ref_lv)
             for hv, hl in hidden_corners:
                 assert str(hl) in levels, (
-                    f"temp {tag}: hidden_corners 의 레벨 {hl!r} 가 이 온도의 "
-                    f"levels {levels} 에 없다 -- 온도마다 레벨이 다르므로 "
-                    f"holdout 도 temps[] 안에서 따로 적어야 한다")
+                    f"temp {tag}: hidden_corners \uc758 \ub808\ubca8 {hl!r} \uac00 \uc774 \uc628\ub3c4\uc758 "
+                    f"levels {levels} \uc5d0 \uc5c6\ub2e4 -- \uc628\ub3c4\ub9c8\ub2e4 \ub808\ubca8\uc774 \ub2e4\ub974\ubbc0\ub85c "
+                    f"holdout \ub3c4 temps[] \uc548\uc5d0\uc11c \ub530\ub85c \uc801\uc5b4\uc57c \ud55c\ub2e4")
                 assert not (abs(float(hv) - ref_v) < 1e-9 and str(hl) == ref_lv), (
-                    f"temp {tag}: 앵커 코너 ({ref_v}, {ref_lv}) 는 숨길 수 없다")
+                    f"temp {tag}: \uc575\ucee4 \ucf54\ub108 ({ref_v}, {ref_lv}) \ub294 \uc228\uae38 \uc218 \uc5c6\ub2e4")
 
             # ---- file discovery / parsing -------------------------------
             layout = fi.get("layout", "flat")
@@ -501,10 +500,10 @@ def expand(p: dict) -> "list[dict]":
             if b.get("adaptive_grid"):
                 base["adaptive_grid"] = b["adaptive_grid"]
             if b.get("weighting") == "local":
-                assert b.get("bandwidth"), "base.weighting: local 이면 base.bandwidth 필요"
-            # bandwidth 는 weighting 과 무관하게 넘긴다 -- run.sh base 의 weighting
-            # 비교표가 local 도 재려면 대역폭이 있어야 하는데, local 일 때만 넘기면
-            # local 은 영영 표에서 빠진다.
+                assert b.get("bandwidth"), "base.weighting: local \uc774\uba74 base.bandwidth \ud544\uc694"
+            # bandwidth \ub294 weighting \uacfc \ubb34\uad00\ud558\uac8c \ub118\uae34\ub2e4 -- run.sh base \uc758 weighting
+            # \ube44\uad50\ud45c\uac00 local \ub3c4 \uc7ac\ub824\uba74 \ub300\uc5ed\ud3ed\uc774 \uc788\uc5b4\uc57c \ud558\ub294\ub370, local \uc77c \ub54c\ub9cc \ub118\uae30\uba74
+            # local \uc740 \uc601\uc601 \ud45c\uc5d0\uc11c \ube60\uc9c4\ub2e4.
             if b.get("bandwidth"):
                 base["bandwidth"] = b["bandwidth"]
 
@@ -528,28 +527,28 @@ def select(models: list, design=None, temp=None) -> list:
 
 # --------------------------------------------------------------------- stages
 def stage_list(models: list, p: dict) -> None:
-    """무엇이 어떤 설정으로 돌지 전부 찍는다 -- 실행 전 검산용 (파일은 안 건드림).
+    """\ubb34\uc5c7\uc774 \uc5b4\ub5a4 \uc124\uc815\uc73c\ub85c \ub3cc\uc9c0 \uc804\ubd80 \ucc0d\ub294\ub2e4 -- \uc2e4\ud589 \uc804 \uac80\uc0b0\uc6a9 (\ud30c\uc77c\uc740 \uc548 \uac74\ub4dc\ub9bc).
 
-    특히 seen/hidden 코너를 실제로 세어 보여준다: 코너 선정이 config 의도대로
-    되었는지, 다항식 파라미터 수보다 seen 이 충분한지가 여기서 바로 보인다.
+    \ud2b9\ud788 seen/hidden \ucf54\ub108\ub97c \uc2e4\uc81c\ub85c \uc138\uc5b4 \ubcf4\uc5ec\uc900\ub2e4: \ucf54\ub108 \uc120\uc815\uc774 config \uc758\ub3c4\ub300\ub85c
+    \ub418\uc5c8\ub294\uc9c0, \ub2e4\ud56d\uc2dd \ud30c\ub77c\ubbf8\ud130 \uc218\ubcf4\ub2e4 seen \uc774 \ucda9\ubd84\ud55c\uc9c0\uac00 \uc5ec\uae30\uc11c \ubc14\ub85c \ubcf4\uc778\ub2e4.
     """
     m0 = models[0]
     co = project_for(p, m0["design"])["corners"]
     print(f"root    : {p['root']}")
     print(f"task    : {m0['task']}    models: {len(models)}    process: {co['process']}")
     print(f"voltages: {co['voltages']}    levels: {co['level_values']}")
-    print(f"anchor  : {co['ref_voltage']}V x {co['ref_level']}  (항상 seen)")
+    print(f"anchor  : {co['ref_voltage']}V x {co['ref_level']}  (\ud56d\uc0c1 seen)")
     if isinstance(p.get("designs"), dict):
-        print("(designs 가 회로별 override 로 선언됨 -- 아래 값은 회로마다 다를 수 있다)")
+        print("(designs \uac00 \ud68c\ub85c\ubcc4 override \ub85c \uc120\uc5b8\ub428 -- \uc544\ub798 \uac12\uc740 \ud68c\ub85c\ub9c8\ub2e4 \ub2e4\ub97c \uc218 \uc788\ub2e4)")
     for m in models:
         d, s, ax = m["cfg"]["data"], m["cfg"]["split"], m["cfg"]["base"]["axes"]
         si = "SI:on " if d.get("crosstalk_dir") else "SI:off"
-        print(f"\n  ── {m['name']}  [{si}]")
+        print(f"\n  \u2500\u2500 {m['name']}  [{si}]")
         print(f"     reports : {d['annotated_dir']}")
         print(f"     levels  : {d['rc_corners']}   ref: {d['ref_corner']}   temp token: {d['temp']!r}")
         print(f"     out     : {d['cache']}  |  {m['cfg']['train']['out_dir']}")
 
-        # 예상 코너 수 / 다항식 크기 -- 실제 파싱 전에 산수로 미리 검산
+        # \uc608\uc0c1 \ucf54\ub108 \uc218 / \ub2e4\ud56d\uc2dd \ud06c\uae30 -- \uc2e4\uc81c \ud30c\uc2f1 \uc804\uc5d0 \uc0b0\uc218\ub85c \ubbf8\ub9ac \uac80\uc0b0
         from si_model.parsing.keys import corner_label as _lab
         dco = project_for(p, m["design"])["corners"]
         vs = [float(v) for v in dco["voltages"]]
@@ -569,50 +568,50 @@ def stage_list(models: list, p: dict) -> None:
             hid = [(float(v), str(lv)) for v, lv in s["hidden_corners"]]
             grid = seen + hid
             ignored = len(full_grid) - len(grid)
-            print(f"     selected: seen {len(seen)} + 평가 target {len(hid)}; "
-                  f"제외 {ignored}개 (리포트 불필요)")
+            print(f"     selected: seen {len(seen)} + \ud3c9\uac00 target {len(hid)}; "
+                  f"\uc81c\uc678 {ignored}\uac1c (\ub9ac\ud3ec\ud2b8 \ubd88\ud544\uc694)")
         else:
             grid = full_grid
             seen = [c for c in grid if not _is_hidden(*c)]
             hid = [c for c in grid if _is_hidden(*c)]
         total = len(grid)
         if hid:
-            print(f"     hidden  : {len(hid)}개 "
+            print(f"     hidden  : {len(hid)}\uac1c "
                   + ", ".join(_lab(v, lv, dco["process"]) for v, lv in hid[:6])
                   + (" ..." if len(hid) > 6 else ""))
         else:
-            print("     hidden  : 없음 (query_corners 만 예측 대상)")
+            print("     hidden  : \uc5c6\uc74c (query_corners \ub9cc \uc608\uce21 \ub300\uc0c1)")
         if d.get("query_corners"):
-            print(f"     query   : {len(d['query_corners'])}개 (정답 없이 예측만)")
+            print(f"     query   : {len(d['query_corners'])}\uac1c (\uc815\ub2f5 \uc5c6\uc774 \uc608\uce21\ub9cc)")
         from si_model.config import expand_terms
         n_lv = len({lv for _, lv in seen})
         n_v = len({v for v, _ in seen})
         exps, names, dropped = expand_terms(m["cfg"], [n_v, n_lv])
         npar = len(exps) + 1
-        flag = "  ⚠ seen 이 파라미터 수 이하 -- 차수를 낮추거나 홀드아웃을 줄일 것" \
+        flag = "  \u26a0 seen \uc774 \ud30c\ub77c\ubbf8\ud130 \uc218 \uc774\ud558 -- \ucc28\uc218\ub97c \ub0ae\ucd94\uac70\ub098 \ud640\ub4dc\uc544\uc6c3\uc744 \uc904\uc77c \uac83" \
             if len(seen) <= npar else ""
-        print(f"     corners : 전체 {total} = seen {len(seen)} + hidden {total - len(seen)}"
-              f"   (min_seen 가드 {s['min_seen']})")
-        print(f"     basis   : v^{ax[0]['order']} x level^{ax[1]['order']} 까지 "
-              f"-> 최대 {npar} 파라미터 {names}{flag}")
-        print("               (최종 기저는 build 때 seen-LOO 로 선택된다 -- run.sh base 로 확인)")
+        print(f"     corners : \uc804\uccb4 {total} = seen {len(seen)} + hidden {total - len(seen)}"
+              f"   (min_seen \uac00\ub4dc {s['min_seen']})")
+        print(f"     basis   : v^{ax[0]['order']} x level^{ax[1]['order']} \uae4c\uc9c0 "
+              f"-> \ucd5c\ub300 {npar} \ud30c\ub77c\ubbf8\ud130 {names}{flag}")
+        print("               (\ucd5c\uc885 \uae30\uc800\ub294 build \ub54c seen-LOO \ub85c \uc120\ud0dd\ub41c\ub2e4 -- run.sh base \ub85c \ud655\uc778)")
         if dropped:
-            print(f"               (레벨 부족으로 자동 제거: {dropped})")
+            print(f"               (\ub808\ubca8 \ubd80\uc871\uc73c\ub85c \uc790\ub3d9 \uc81c\uac70: {dropped})")
         print(f"     base    : weighting={m['cfg']['base']['weighting']}"
               f"  cross_max_degree={m['cfg']['base']['cross_max_degree']}")
         if os.path.isdir(d["annotated_dir"]):
             n = sum(len(f) for _, _, f in os.walk(d["annotated_dir"]))
-            print(f"     files   : 디렉토리 존재, 파일 {n}개")
+            print(f"     files   : \ub514\ub809\ud1a0\ub9ac \uc874\uc7ac, \ud30c\uc77c {n}\uac1c")
         else:
-            print("     files   : (!) 디렉토리 없음 — root / designs / files.subdir 확인")
+            print("     files   : (!) \ub514\ub809\ud1a0\ub9ac \uc5c6\uc74c \u2014 root / designs / files.subdir \ud655\uc778")
 
 
 def stage_check(models: list, fp: "str | None" = None) -> int:
-    """리포트 파일 하나를 파서에 통과시켜 '어느 정규식이 몇 줄을 잡았는지' 보고한다.
+    """\ub9ac\ud3ec\ud2b8 \ud30c\uc77c \ud558\ub098\ub97c \ud30c\uc11c\uc5d0 \ud1b5\uacfc\uc2dc\ucf1c '\uc5b4\ub290 \uc815\uaddc\uc2dd\uc774 \uba87 \uc904\uc744 \uc7a1\uc558\ub294\uc9c0' \ubcf4\uace0\ud55c\ub2e4.
 
-    본문 형식이 다를 때(SSTA 로 열이 늘었다든지) 무엇을 고쳐야 하는지 추측하지
-    않아도 되게 하는 것이 목적이다. 못 잡은 정규식에 대해서는 그 키워드가 들어간
-    실제 줄을 같이 찍어주므로, 기대 형식과 실제 형식을 나란히 놓고 볼 수 있다.
+    \ubcf8\ubb38 \ud615\uc2dd\uc774 \ub2e4\ub97c \ub54c(SSTA \ub85c \uc5f4\uc774 \ub298\uc5c8\ub2e4\ub4e0\uc9c0) \ubb34\uc5c7\uc744 \uace0\uccd0\uc57c \ud558\ub294\uc9c0 \ucd94\uce21\ud558\uc9c0
+    \uc54a\uc544\ub3c4 \ub418\uac8c \ud558\ub294 \uac83\uc774 \ubaa9\uc801\uc774\ub2e4. \ubabb \uc7a1\uc740 \uc815\uaddc\uc2dd\uc5d0 \ub300\ud574\uc11c\ub294 \uadf8 \ud0a4\uc6cc\ub4dc\uac00 \ub4e4\uc5b4\uac04
+    \uc2e4\uc81c \uc904\uc744 \uac19\uc774 \ucc0d\uc5b4\uc8fc\ubbc0\ub85c, \uae30\ub300 \ud615\uc2dd\uacfc \uc2e4\uc81c \ud615\uc2dd\uc744 \ub098\ub780\ud788 \ub193\uace0 \ubcfc \uc218 \uc788\ub2e4.
     """
     from si_model.parsing import annotated as A
     from si_model.parsing.discovery import discover_annotated
@@ -622,18 +621,18 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
             try:
                 found = discover_annotated(m["cfg"])
             except Exception as e:
-                print(f"  ({m['name']}: 탐색 실패 {e})")
+                print(f"  ({m['name']}: \ud0d0\uc0c9 \uc2e4\ud328 {e})")
                 continue
             if found:
                 fp = sorted(found.values())[0]
                 break
-    assert fp, "검사할 리포트를 찾지 못했다 -- 파일 경로를 직접 주거나 config 를 고칠 것"
+    assert fp, "\uac80\uc0ac\ud560 \ub9ac\ud3ec\ud2b8\ub97c \ucc3e\uc9c0 \ubabb\ud588\ub2e4 -- \ud30c\uc77c \uacbd\ub85c\ub97c \uc9c1\uc811 \uc8fc\uac70\ub098 config \ub97c \uace0\uce60 \uac83"
     print(f"file : {fp}")
     with open(fp, errors="ignore") as f:
         lines = f.readlines()
     print(f"lines: {len(lines)}\n")
 
-    # (이름, 정규식, 못 잡았을 때 보여줄 후보 줄을 고르는 키워드)
+    # (\uc774\ub984, \uc815\uaddc\uc2dd, \ubabb \uc7a1\uc558\uc744 \ub54c \ubcf4\uc5ec\uc904 \ud6c4\ubcf4 \uc904\uc744 \uace0\ub974\ub294 \ud0a4\uc6cc\ub4dc)
     checks = [
         ("FIXED_PATH", A.FIXED_PATH_RE, "FIXED_PATH"),
         ("Startpoint", A.STARTPOINT_RE, "Startpoint"),
@@ -650,25 +649,25 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
     for name, rx, kw in checks:
         hit = [l.rstrip("\n") for l in lines if rx.match(l)]
         if hit:
-            print(f"  {name:14s} {len(hit):6d} 줄 ✓   예: {hit[0].strip()[:90]}")
+            print(f"  {name:14s} {len(hit):6d} \uc904 \u2713   \uc608: {hit[0].strip()[:90]}")
         else:
             cand = [l.rstrip("\n") for l in lines if kw in l][:3]
-            print(f"  {name:14s} {0:6d} 줄 ✗")
+            print(f"  {name:14s} {0:6d} \uc904 \u2717")
             for c in cand:
-                print(f"                        실제: {c[:100]}")
+                print(f"                        \uc2e4\uc81c: {c[:100]}")
             if not cand:
-                print(f"                        ('{kw}' 가 들어간 줄 자체가 없음)")
+                print(f"                        ('{kw}' \uac00 \ub4e4\uc5b4\uac04 \uc904 \uc790\uccb4\uac00 \uc5c6\uc74c)")
             bad.append(name)
 
     blocks = A.parse_annotated(fp, with_stages=True)
     ok = A.resolved(blocks)
-    print(f"\n  블록 {len(blocks)}개 중 slack 이 읽힌 경로 {len(ok)}개")
+    print(f"\n  \ube14\ub85d {len(blocks)}\uac1c \uc911 slack \uc774 \uc77d\ud78c \uacbd\ub85c {len(ok)}\uac1c")
     if ok:
         p = next(iter(ok.values()))
         segs = {}
         for s in p.stages:
             segs[s.segment] = segs.get(s.segment, 0) + 1
-        print(f"  예시 경로 idx={p.idx} key={p.key}")
+        print(f"  \uc608\uc2dc \uacbd\ub85c idx={p.idx} key={p.key}")
         print(f"    slack={p.slack} arrival={p.arrival} required={p.required}")
         print(f"    launch_clk={p.launch_clk} capture_clk={p.capture_clk} "
               f"lib_check={p.lib_check_time}")
@@ -678,34 +677,34 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
                                   ("capture_clk", p.capture_clk),
                                   ("lib_check_time", p.lib_check_time)) if v != v]
         if missing:
-            print(f"    (!) NaN 인 필드: {missing} -- 학습은 되지만 토큰 정보가 빈다")
+            print(f"    (!) NaN \uc778 \ud544\ub4dc: {missing} -- \ud559\uc2b5\uc740 \ub418\uc9c0\ub9cc \ud1a0\ud070 \uc815\ubcf4\uac00 \ube48\ub2e4")
         if not p.stages:
-            print("    (!) stage 가 0개 -- 경로 인코더 입력이 비어 학습이 무의미해진다")
+            print("    (!) stage \uac00 0\uac1c -- \uacbd\ub85c \uc778\ucf54\ub354 \uc785\ub825\uc774 \ube44\uc5b4 \ud559\uc2b5\uc774 \ubb34\uc758\ubbf8\ud574\uc9c4\ub2e4")
 
     print()
     if not ok:
-        print("  판정: ✗ 경로를 하나도 못 읽었다.")
-        print("        위에서 ✗ 인 정규식의 '실제' 줄을 보고")
-        print("        si_model/parsing/annotated.py 상단을 그 형식에 맞춘다 (docs/PARSING.md §4).")
+        print("  \ud310\uc815: \u2717 \uacbd\ub85c\ub97c \ud558\ub098\ub3c4 \ubabb \uc77d\uc5c8\ub2e4.")
+        print("        \uc704\uc5d0\uc11c \u2717 \uc778 \uc815\uaddc\uc2dd\uc758 '\uc2e4\uc81c' \uc904\uc744 \ubcf4\uace0")
+        print("        si_model/parsing/annotated.py \uc0c1\ub2e8\uc744 \uadf8 \ud615\uc2dd\uc5d0 \ub9de\ucd98\ub2e4 (docs/PARSING.md \u00a74).")
         return 1
     if bad:
-        print(f"  판정: △ 경로는 읽히지만 못 잡은 항목이 있다: {bad}")
+        print(f"  \ud310\uc815: \u25b3 \uacbd\ub85c\ub294 \uc77d\ud788\uc9c0\ub9cc \ubabb \uc7a1\uc740 \ud56d\ubaa9\uc774 \uc788\ub2e4: {bad}")
         return 0
-    print("  판정: ✓ 전부 정상. build 로 진행해도 된다.")
+    print("  \ud310\uc815: \u2713 \uc804\ubd80 \uc815\uc0c1. build \ub85c \uc9c4\ud589\ud574\ub3c4 \ub41c\ub2e4.")
     return 0
 
 
 def stage_sweep(m: dict, lambdas=(0.0, 0.1, 1.0, 10.0)) -> None:
-    """SI 보조손실 가중치 lambda_si 스윕 (slack 전용, 옛 sweep.sh).
+    """SI \ubcf4\uc870\uc190\uc2e4 \uac00\uc911\uce58 lambda_si \uc2a4\uc715 (slack \uc804\uc6a9, \uc61b sweep.sh).
 
-    SI branch 를 얼마나 믿을지는 데이터마다 다르다. 같은 설정으로 lambda 만
-    바꿔 학습해 hidden MAE 를 비교한다. 결과는 runs/_sweep/<모델>/lam_<v>/ 로
-    따로 나가므로 본 run 을 덮어쓰지 않는다."""
+    SI branch \ub97c \uc5bc\ub9c8\ub098 \ubbff\uc744\uc9c0\ub294 \ub370\uc774\ud130\ub9c8\ub2e4 \ub2e4\ub974\ub2e4. \uac19\uc740 \uc124\uc815\uc73c\ub85c lambda \ub9cc
+    \ubc14\uafd4 \ud559\uc2b5\ud574 hidden MAE \ub97c \ube44\uad50\ud55c\ub2e4. \uacb0\uacfc\ub294 runs/_sweep/<\ubaa8\ub378>/lam_<v>/ \ub85c
+    \ub530\ub85c \ub098\uac00\ubbc0\ub85c \ubcf8 run \uc744 \ub36e\uc5b4\uc4f0\uc9c0 \uc54a\ub294\ub2e4."""
     import copy
     import json
 
     if m["task"] != "slack":
-        print("  (slew 모델은 SI branch 가 없어 sweep 대상이 아님 -- 건너뜀)")
+        print("  (slew \ubaa8\ub378\uc740 SI branch \uac00 \uc5c6\uc5b4 sweep \ub300\uc0c1\uc774 \uc544\ub2d8 -- \uac74\ub108\ub700)")
         return
     base_out = m["cfg"]["train"]["out_dir"]
     rows = {}
@@ -725,7 +724,7 @@ def stage_sweep(m: dict, lambdas=(0.0, 0.1, 1.0, 10.0)) -> None:
     os.makedirs(os.path.dirname(fp), exist_ok=True)
     with open(fp, "w") as f:
         json.dump(rows, f, indent=2)
-    print(f"  wrote {fp}  (본 run 은 {base_out} 그대로)")
+    print(f"  wrote {fp}  (\ubcf8 run \uc740 {base_out} \uadf8\ub300\ub85c)")
 
 
 def stage_build(m: dict) -> None:
@@ -775,7 +774,7 @@ def stage_base(m: dict) -> None:
     print(f"    [seen-LOO   ] {sv.mean():8.3f} {unit}  (worst {sv.max():.3f})")
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
-        print(f"    (정답 없어 건너뜀: {skipped})")
+        print(f"    (\uc815\ub2f5 \uc5c6\uc5b4 \uac74\ub108\ub700: {skipped})")
     if hid and field == "slack":
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
 
@@ -800,22 +799,23 @@ def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
     from si_model.training.loo import _effective_mode, fit_field
 
     cur = _effective_mode(cfg, split)
-    print(f"    ── weighting 별 히든 (참고용, 저장 안 함) ──")
+    print(f"    \u2500\u2500 weighting \ubcc4 \ud788\ub4e0 (\ucc38\uace0\uc6a9, \uc800\uc7a5 \uc548 \ud568) \u2500\u2500")
     for w in ("plain", "local", "adaptive"):
         c = copy.deepcopy(cfg)
         c["base"]["weighting"] = w
         if w == "local" and not c["base"].get("bandwidth"):
-            print(f"       {w:9s} (bandwidth 미설정)")
+            print(f"       {w:9s} (bandwidth \ubbf8\uc124\uc815)")
             continue
         try:
             loo, _ = fit_field(y, phi, split, coords, c, force_mode=w)
         except Exception as e:
-            print(f"       {w:9s} (못 잼: {repr(e)[:40]})")
+            print(f"       {w:9s} (\ubabb \uc7bc: {repr(e)[:40]})")
             continue
         e = np.array([float(np.nanmean(np.abs(loo[:, ci] - y[:, ci])) * 1000.0)
                       for ci in hid])
+        current_label = "  <- \uc9c0\uae08 \uc774\uac83" if w == cur else ""
         print(f"       {w:9s} {e.mean():8.3f} ps  (worst {e.max():7.3f})"
-              f"{'  <- 지금 이것' if w == cur else ''}")
+              f"{current_label}")
 def _trainer(m: dict):
     if m["task"] == "slew":
         from si_model.tasks.slew.train_slew import Trainer
@@ -833,7 +833,7 @@ BUNDLE_FORMAT = "si_corner_model/bundle/1"
 
 
 def bundle_path(m: dict) -> str:
-    """One circuit's single weight file: runs/<mode>/<회로>/model.pt."""
+    """One circuit's single weight file: runs/<mode>/<\ud68c\ub85c>/model.pt."""
     return os.path.join(os.path.dirname(m["cfg"]["train"]["out_dir"]), BUNDLE_NAME)
 
 
@@ -845,7 +845,7 @@ def stage_bundle(models: list) -> None:
     interpolating polynomial. But that is an internal detail: from the outside a
     circuit should be one model, one file, one command. So training still writes
     a per-temperature ``best.pt`` (it needs somewhere to checkpoint mid-run) and
-    this stage collects them into ``runs/<mode>/<회로>/model.pt``, which is what
+    this stage collects them into ``runs/<mode>/<\ud68c\ub85c>/model.pt``, which is what
     predict loads and what gets handed over.
     """
     import torch
@@ -867,14 +867,14 @@ def stage_bundle(models: list) -> None:
             temps[str(m["temp"])] = {"model": ck["model"], "enc": ck["enc"],
                                      "cfg": ck["cfg"], "epoch": ck["epoch"]}
         if not temps:
-            print(f"  {design}: 학습된 온도가 없어 건너뜀 (train 먼저)", flush=True)
+            print(f"  {design}: \ud559\uc2b5\ub41c \uc628\ub3c4\uac00 \uc5c6\uc5b4 \uac74\ub108\ub700 (train \uba3c\uc800)", flush=True)
             continue
         out = bundle_path(ms[0])
         os.makedirs(os.path.dirname(out), exist_ok=True)
         torch.save({"format": BUNDLE_FORMAT, "design": design,
                     "temps": temps}, out)
-        note = f"  (미학습: {', '.join(missing)})" if missing else ""
-        print(f"  {out}  <- 온도 {len(temps)}개 [{', '.join(sorted(temps))}]{note}",
+        note = f"  (\ubbf8\ud559\uc2b5: {', '.join(missing)})" if missing else ""
+        print(f"  {out}  <- \uc628\ub3c4 {len(temps)}\uac1c [{', '.join(sorted(temps))}]{note}",
               flush=True)
 
 
@@ -885,19 +885,19 @@ def stage_predict(m: dict, corners: str) -> None:
 
     out_dir = m["cfg"]["train"]["out_dir"]
     tr = _trainer(m)
-    # 배포되는 단일 파일(model.pt)이 있으면 그걸 쓴다. 없으면 학습 직후의
-    # 온도별 체크포인트로 넘어간다 -- bundle 없이 train->predict 만 돌린 경우.
+    # \ubc30\ud3ec\ub418\ub294 \ub2e8\uc77c \ud30c\uc77c(model.pt)\uc774 \uc788\uc73c\uba74 \uadf8\uac78 \uc4f4\ub2e4. \uc5c6\uc73c\uba74 \ud559\uc2b5 \uc9c1\ud6c4\uc758
+    # \uc628\ub3c4\ubcc4 \uccb4\ud06c\ud3ec\uc778\ud2b8\ub85c \ub118\uc5b4\uac04\ub2e4 -- bundle \uc5c6\uc774 train->predict \ub9cc \ub3cc\ub9b0 \uacbd\uc6b0.
     bundle = bundle_path(m)
     if os.path.exists(bundle):
         b = load_checkpoint(bundle, map_location=tr.dev)
         key = str(m["temp"])
         assert key in b["temps"], (
-            f"{bundle} 에 온도 {key} 가 없다 (있는 것: {sorted(b['temps'])}). "
-            f"run.sh bundle 을 다시 돌릴 것")
+            f"{bundle} \uc5d0 \uc628\ub3c4 {key} \uac00 \uc5c6\ub2e4 (\uc788\ub294 \uac83: {sorted(b['temps'])}). "
+            f"run.sh bundle \uc744 \ub2e4\uc2dc \ub3cc\ub9b4 \uac83")
         ck = b["temps"][key]
     else:
         ckpt = os.path.join(out_dir, "best.pt")
-        assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (train 먼저)"
+        assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (train \uba3c\uc800)"
         ck = load_checkpoint(ckpt, map_location=tr.dev)
     tr.model.load_state_dict(ck["model"])
     tr.enc.load_state_dict(ck["enc"])
@@ -938,9 +938,9 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
                     w.writerow([m["design"], m["temp"]] + row)
                     rows += 1
     assert header is not None, \
-        f"합칠 예측 파일이 없다 (predictions_{corners}.csv). predict 먼저 돌릴 것."
+        f"\ud569\uce60 \uc608\uce21 \ud30c\uc77c\uc774 \uc5c6\ub2e4 (predictions_{corners}.csv). predict \uba3c\uc800 \ub3cc\ub9b4 \uac83."
     if missing:
-        print(f"  (!) 빠진 모델: {missing}")
+        print(f"  (!) \ube60\uc9c4 \ubaa8\ub378: {missing}")
     print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
 
     summ = {"by_corner": _corner_table(out_fp), "by_model": {}}
@@ -950,22 +950,22 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
         sfp, ckpt = os.path.join(d, "summary.json"), os.path.join(d, "best.pt")
         if not os.path.exists(sfp):
             continue
-        # train 이 중간에 끊기면 best.pt 는 갱신되지만 summary.json 은 학습이
-        # 끝까지 갔을 때만 쓰인다. 그래서 이전 실행의 요약이 새 체크포인트 옆에
-        # 남아 조용히 섞일 수 있다. by_corner 는 방금 만든 예측에서 뽑으므로
-        # 항상 맞지만, by_model 은 그 옛 파일이라 짚어준다.
+        # train \uc774 \uc911\uac04\uc5d0 \ub04a\uae30\uba74 best.pt \ub294 \uac31\uc2e0\ub418\uc9c0\ub9cc summary.json \uc740 \ud559\uc2b5\uc774
+        # \ub05d\uae4c\uc9c0 \uac14\uc744 \ub54c\ub9cc \uc4f0\uc778\ub2e4. \uadf8\ub798\uc11c \uc774\uc804 \uc2e4\ud589\uc758 \uc694\uc57d\uc774 \uc0c8 \uccb4\ud06c\ud3ec\uc778\ud2b8 \uc606\uc5d0
+        # \ub0a8\uc544 \uc870\uc6a9\ud788 \uc11e\uc77c \uc218 \uc788\ub2e4. by_corner \ub294 \ubc29\uae08 \ub9cc\ub4e0 \uc608\uce21\uc5d0\uc11c \ubf51\uc73c\ubbc0\ub85c
+        # \ud56d\uc0c1 \ub9de\uc9c0\ub9cc, by_model \uc740 \uadf8 \uc61b \ud30c\uc77c\uc774\ub77c \uc9da\uc5b4\uc900\ub2e4.
         if os.path.exists(ckpt) and os.path.getmtime(sfp) < os.path.getmtime(ckpt):
             stale.append(m["name"])
         with open(sfp) as f:
             summ["by_model"][m["name"]] = json.load(f)
     if stale:
-        print(f"  (!) by_model 이 오래됨 (best.pt 보다 이전): {stale}\n"
-              f"      학습을 중간에 끊었으면 그 모델의 by_model 수치는 이전 실행 것이다. "
-              f"코너별 성적(by_corner)은 방금 예측에서 뽑은 값이라 정확하다.")
+        print(f"  (!) by_model \uc774 \uc624\ub798\ub428 (best.pt \ubcf4\ub2e4 \uc774\uc804): {stale}\n"
+              f"      \ud559\uc2b5\uc744 \uc911\uac04\uc5d0 \ub04a\uc5c8\uc73c\uba74 \uadf8 \ubaa8\ub378\uc758 by_model \uc218\uce58\ub294 \uc774\uc804 \uc2e4\ud589 \uac83\uc774\ub2e4. "
+              f"\ucf54\ub108\ubcc4 \uc131\uc801(by_corner)\uc740 \ubc29\uae08 \uc608\uce21\uc5d0\uc11c \ubf51\uc740 \uac12\uc774\ub77c \uc815\ud655\ud558\ub2e4.")
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summ, f, indent=2)
     print(f"  wrote {out_dir}/summary.json "
-          f"(코너 {len(summ['by_corner'])}개, 모델 {len(summ['by_model'])}개)")
+          f"(\ucf54\ub108 {len(summ['by_corner'])}\uac1c, \ubaa8\ub378 {len(summ['by_model'])}\uac1c)")
     _print_corner_table(summ["by_corner"])
     return out_fp
 
@@ -1006,8 +1006,10 @@ def _corner_table(csv_fp: str) -> list:
 def _print_corner_table(rows: list) -> None:
     if not rows:
         return
-    print("\n  코너별 성적 (모델이 아니라 코너 기준)")
-    print(f"    {'회로':<22}{'온도':<6}{'코너':<20}{'경로':>7}{'MAE':>10}{'worst':>10}")
+    print("\n  \ucf54\ub108\ubcc4 \uc131\uc801 (\ubaa8\ub378\uc774 \uc544\ub2c8\ub77c \ucf54\ub108 \uae30\uc900)")
+    headers = ("\ud68c\ub85c", "\uc628\ub3c4", "\ucf54\ub108", "\uacbd\ub85c")
+    print(f"    {headers[0]:<22}{headers[1]:<6}{headers[2]:<20}"
+          f"{headers[3]:>7}{'MAE':>10}{'worst':>10}")
     for r in rows:
         mae = "-" if r["mae_ps"] is None else f"{r['mae_ps']:.2f}ps"
         wst = "-" if r["worst_ps"] is None else f"{r['worst_ps']:.2f}ps"
@@ -1015,7 +1017,8 @@ def _print_corner_table(rows: list) -> None:
               f"{r['n_paths']:>7}{mae:>10}{wst:>10}")
     scored = [r for r in rows if r["mae_ps"] is not None]
     if scored:
-        print(f"    {'전체':<48}{sum(r['n_paths'] for r in rows):>7}"
+        total_label = "\uc804\uccb4"
+        print(f"    {total_label:<48}{sum(r['n_paths'] for r in rows):>7}"
               f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
               f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
 
@@ -1026,11 +1029,11 @@ def main(argv=None):
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=STAGES, nargs="?", default="help")
     ap.add_argument("--config", default=DEFAULT_PROJECT, help="project config (default: config.yaml)")
-    ap.add_argument("--design", default=None, help="이 회로만")
-    ap.add_argument("--temp", default=None, help="이 온도만")
+    ap.add_argument("--design", default=None, help="\uc774 \ud68c\ub85c\ub9cc")
+    ap.add_argument("--temp", default=None, help="\uc774 \uc628\ub3c4\ub9cc")
     ap.add_argument("--corners", default="hidden", choices=["hidden", "seen", "all"])
     ap.add_argument("--file", default=None,
-                    help="check 단계에서 검사할 리포트 파일 (생략하면 config 에서 첫 파일)")
+                    help="check \ub2e8\uacc4\uc5d0\uc11c \uac80\uc0ac\ud560 \ub9ac\ud3ec\ud2b8 \ud30c\uc77c (\uc0dd\ub7b5\ud558\uba74 config \uc5d0\uc11c \uccab \ud30c\uc77c)")
     args = ap.parse_args(argv)
 
     os.chdir(REPO_ROOT)
@@ -1050,7 +1053,7 @@ def main(argv=None):
     failed = []
     for stage in stages:
         if stage == "bundle":
-            print(f"\n===== bundle: 회로별 단일 가중치 파일 =====", flush=True)
+            print(f"\n===== bundle: \ud68c\ub85c\ubcc4 \ub2e8\uc77c \uac00\uc911\uce58 \ud30c\uc77c =====", flush=True)
             try:
                 stage_bundle(models)
             except Exception as e:
@@ -1080,15 +1083,15 @@ def main(argv=None):
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()
-                print(f"!!!!! FAILED {stage}: {m['name']} -- 계속 진행", flush=True)
+                print(f"!!!!! FAILED {stage}: {m['name']} -- \uacc4\uc18d \uc9c4\ud589", flush=True)
 
     print("\n" + "=" * 60)
     if failed:
-        print(f"완료, 단 실패 {len(failed)}건:")
+        print(f"\uc644\ub8cc, \ub2e8 \uc2e4\ud328 {len(failed)}\uac74:")
         for what, err in failed:
             print(f"  - {what}: {err}")
         return 1
-    print(f"전부 성공 ({len(models)} models, stages={list(stages)})")
+    print(f"\uc804\ubd80 \uc131\uacf5 ({len(models)} models, stages={list(stages)})")
     return 0
 
 

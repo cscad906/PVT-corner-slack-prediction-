@@ -10,7 +10,7 @@ hold reports), so it needs no separate setup/hold split -- one model per
 not trained but fetched from a same-level neighbour (V-independent) -- see the
 trainer. No crosstalk is used.
 
-    bash scripts/run.sh build            # config.yaml 에 task: slew 일 때
+    bash scripts/run.sh build            # config.yaml \uc5d0 task: slew \uc77c \ub54c
 """
 import argparse
 import os
@@ -52,7 +52,7 @@ def slew_cap_of(path) -> "tuple[float, float]":
 def build(cfg: dict) -> str:
     ref_corner = cfg["data"]["ref_corner"]
     out_fp = cfg["data"]["cache"]
-    configure_cell_taxonomy(cfg)   # slack 빌더와 동일한 설정을 쓴다
+    configure_cell_taxonomy(cfg)   # slack \ube4c\ub354\uc640 \ub3d9\uc77c\ud55c \uc124\uc815\uc744 \uc4f4\ub2e4
     configure_pins(cfg)
     corners, ann_by = discover(cfg)
     assert ref_corner in corners, f"ref {ref_corner} not in {corners[:3]}..."
@@ -101,8 +101,8 @@ def build(cfg: dict) -> str:
     ok = ~np.isnan(slew).any(axis=1)
     if not ok.all():
         keep = np.where(ok)[0]
-        assert len(keep) > 0, "모든 코너에서 측정된 경로가 하나도 없다"
-        print(f"[PATHS] 전 코너에서 측정된 경로만 남긴다: "
+        assert len(keep) > 0, "\ubaa8\ub4e0 \ucf54\ub108\uc5d0\uc11c \uce21\uc815\ub41c \uacbd\ub85c\uac00 \ud558\ub098\ub3c4 \uc5c6\ub2e4"
+        print(f"[PATHS] \uc804 \ucf54\ub108\uc5d0\uc11c \uce21\uc815\ub41c \uacbd\ub85c\ub9cc \ub0a8\uae34\ub2e4: "
               f"{len(idx_order)} -> {len(keep)}", flush=True)
         slew, cap, path_sig = slew[keep], cap[keep], path_sig[keep]
         idx_order = [idx_order[r] for r in keep]

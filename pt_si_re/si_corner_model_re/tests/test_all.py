@@ -74,6 +74,15 @@ def test_shipped_config_yaml_parses():
     assert os.path.isabs(p["root"])
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "cp949"])
+def test_project_config_reads_legacy_korean_encoding(tmp_path, encoding):
+    source = "root: auto\ndesigns: [cpu]\n# 한국어 주석\n"
+    path = tmp_path / "config.yaml"
+    path.write_bytes(source.encode(encoding))
+    p = load_project(str(path))
+    assert p["designs"] == ["cpu"]
+
+
 def test_shipped_config_defaults_to_the_deployed_layout():
     """배포 배치는 <root>/{si_corner_model, 회로1, 회로2, 회로3} 이다.
     그 경우 root/designs 를 손대지 않아도 맞아야 한다."""

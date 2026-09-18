@@ -235,25 +235,26 @@ def _flat_scan(root: str, regex: str, cfg: dict, kind: str, exclude=None,
         lab, a, b = dupes[0]
         if os.path.dirname(a) == os.path.dirname(b):
             raise AssertionError(
-                f"{kind}: 코너 {lab} 가 같은 폴더의 두 파일에 매칭됐다:\n  {a}\n  {b}\n"
-                f"  annotated 와 crosstalk 이 한 폴더에 있는 배치다. 파일명으로 구분하도록\n"
-                f"  config 에 아래를 추가할 것:\n"
+                f"{kind}: \ucf54\ub108 {lab} \uac00 \uac19\uc740 \ud3f4\ub354\uc758 \ub450 \ud30c\uc77c\uc5d0 \ub9e4\uce6d\ub410\ub2e4:\n  {a}\n  {b}\n"
+                f"  annotated \uc640 crosstalk \uc774 \ud55c \ud3f4\ub354\uc5d0 \uc788\ub294 \ubc30\uce58\ub2e4. \ud30c\uc77c\uba85\uc73c\ub85c \uad6c\ubd84\ud558\ub3c4\ub85d\n"
+                f"  config \uc5d0 \uc544\ub798\ub97c \ucd94\uac00\ud560 \uac83:\n"
                 f"    files:\n"
                 f"      annotated_contains: _fixed_annotated\n"
                 f"      crosstalk_contains: by_path")
         raise AssertionError(
             f"{kind}: corner {lab} matched by more than one file:\n  {a}\n  {b}\n"
-            f"파일명이 코너를 유일하게 지정하지 못한다. data.{kind}_dir 를 더 깊은\n"
-            f"디렉토리로 좁히거나, patterns.{kind}_regex 로 정확한 형식을 지정할 것.")
+            f"\ud30c\uc77c\uba85\uc774 \ucf54\ub108\ub97c \uc720\uc77c\ud558\uac8c \uc9c0\uc815\ud558\uc9c0 \ubabb\ud55c\ub2e4. data.{kind}_dir \ub97c \ub354 \uae4a\uc740\n"
+            f"\ub514\ub809\ud1a0\ub9ac\ub85c \uc881\ud788\uac70\ub098, patterns.{kind}_regex \ub85c \uc815\ud655\ud55c \ud615\uc2dd\uc744 \uc9c0\uc815\ud560 \uac83.")
     if not found:
-        how = ("auto(토큰) 방식" if auto else f"정규식 {regex!r}")
+        how = ("auto(\ud1a0\ud070) \ubc29\uc2dd" if auto else f"\uc815\uaddc\uc2dd {regex!r}")
+        found_scope = "\uc544\ubb34\uac83\ub3c4" if not seen_any else "\uc77c\ubd80\ub9cc"
         raise AssertionError(
             f"no {kind} corners discovered under {root}\n"
-            f"  탐색 방식: {how} -- 파일명에서 {'아무것도' if not seen_any else '일부만'} 못 찾음\n"
-            f"  기대: 파일명 어딘가에 전압(0p5400 / 0.54), 레벨({names}),\n"
-            f"        온도(data.temp={cfg['data'].get('temp')!r}) 토큰이 있어야 한다\n"
-            f"  (공정 접두사 = {prefix!r})\n"
-            f"  실제 파일명을 보려면: bash scripts/run.sh recon")
+            f"  \ud0d0\uc0c9 \ubc29\uc2dd: {how} -- \ud30c\uc77c\uba85\uc5d0\uc11c {found_scope} \ubabb \ucc3e\uc74c\n"
+            f"  \uae30\ub300: \ud30c\uc77c\uba85 \uc5b4\ub518\uac00\uc5d0 \uc804\uc555(0p5400 / 0.54), \ub808\ubca8({names}),\n"
+            f"        \uc628\ub3c4(data.temp={cfg['data'].get('temp')!r}) \ud1a0\ud070\uc774 \uc788\uc5b4\uc57c \ud55c\ub2e4\n"
+            f"  (\uacf5\uc815 \uc811\ub450\uc0ac = {prefix!r})\n"
+            f"  \uc2e4\uc81c \ud30c\uc77c\uba85\uc744 \ubcf4\ub824\uba74: bash scripts/run.sh recon")
     return found
 
 
@@ -308,7 +309,7 @@ def _levels_scan_crosstalk(cfg: dict) -> dict:
 def discover_annotated(cfg: dict) -> dict:
     """{corner_label: annotated report path}."""
     if layout(cfg) == "flat":
-        rx = _patterns(cfg).get("annotated_regex")     # None/"auto" -> 토큰 방식
+        rx = _patterns(cfg).get("annotated_regex")     # None/"auto" -> \ud1a0\ud070 \ubc29\uc2dd
         return _flat_scan(cfg["data"]["annotated_dir"], rx, cfg, "annotated",
                           exclude=cfg["data"].get("crosstalk_dir"),
                           contains=_patterns(cfg).get("annotated_contains"))
@@ -321,7 +322,7 @@ def discover_crosstalk(cfg: dict) -> "dict | None":
     if not cfg["data"].get("crosstalk_dir"):
         return None
     if layout(cfg) == "flat":
-        rx = _patterns(cfg).get("crosstalk_regex")     # None/"auto" -> 토큰 방식
+        rx = _patterns(cfg).get("crosstalk_regex")     # None/"auto" -> \ud1a0\ud070 \ubc29\uc2dd
         return _flat_scan(cfg["data"]["crosstalk_dir"], rx, cfg, "crosstalk",
                           contains=_patterns(cfg).get("crosstalk_contains"))
     return _levels_scan_crosstalk(cfg)

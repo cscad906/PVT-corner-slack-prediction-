@@ -15,7 +15,7 @@ import copy
 import os
 import re
 
-import yaml
+from .yaml_io import load_yaml
 
 _DEFAULTS_NAME = "_defaults.yaml"
 _VAR_RE = re.compile(r"\$\{(\w+)\}")
@@ -106,14 +106,12 @@ def load_config(path: str) -> dict:
     (``python -m si_model.parsing.build_dataset --config mine.yaml``). A
     ``_defaults.yaml`` sitting next to the file, or one directory up, is
     deep-merged underneath it if present."""
-    with open(path) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_yaml(path)
     here = os.path.dirname(os.path.abspath(path))
     for cand in (os.path.join(here, _DEFAULTS_NAME),
                  os.path.join(os.path.dirname(here), _DEFAULTS_NAME)):
         if os.path.exists(cand) and os.path.abspath(cand) != os.path.abspath(path):
-            with open(cand) as f:
-                defaults = yaml.safe_load(f) or {}
+            defaults = load_yaml(cand) or {}
             cfg = _deep_merge(defaults, cfg)
             break
     return resolve_vars(cfg)

@@ -1,6 +1,6 @@
 """Slack training CLI (setup / hold).
 
-    bash scripts/run.sh train [--design <회로>] [--temp <온도>]
+    bash scripts/run.sh train [--design <\ud68c\ub85c>] [--temp <\uc628\ub3c4>]
 
 Scheme: all-seen leave-one-out. A training sample is (path, seen corner c); the
 model sees the other seen corners as tokens (LOO fold) and predicts the residual
@@ -502,9 +502,9 @@ class Trainer:
         summary["si_branch"] = bool(self.has_si)
         summary["enc_blocks"] = self.cfg["model"].get("enc_blocks", 3)
         summary["best_epoch"] = best_ep + 1
-        # 히든 코너 성적은 전체 경로 기준 하나만 찍는다. train/val/test 는 경로를
-        # 쪼갠 것일 뿐 히든 코너는 어차피 다 같아서, 네 줄을 늘어놓으면 "test 가
-        # 진짜 성적" 처럼 읽히기 쉽다. 네 값 모두 summary.json 에는 그대로 남는다.
+        # \ud788\ub4e0 \ucf54\ub108 \uc131\uc801\uc740 \uc804\uccb4 \uacbd\ub85c \uae30\uc900 \ud558\ub098\ub9cc \ucc0d\ub294\ub2e4. train/val/test \ub294 \uacbd\ub85c\ub97c
+        # \ucabc\uac20 \uac83\uc77c \ubfd0 \ud788\ub4e0 \ucf54\ub108\ub294 \uc5b4\ucc28\ud53c \ub2e4 \uac19\uc544\uc11c, \ub124 \uc904\uc744 \ub298\uc5b4\ub193\uc73c\uba74 "test \uac00
+        # \uc9c4\uc9dc \uc131\uc801" \ucc98\ub7fc \uc77d\ud788\uae30 \uc27d\ub2e4. \ub124 \uac12 \ubaa8\ub450 summary.json \uc5d0\ub294 \uadf8\ub300\ub85c \ub0a8\ub294\ub2e4.
         s = summary["all"]
         print(f"  [all paths] model {s['hidden_mae_ps']:.2f} ps "
               f"(worst {s['hidden_worst_ps']:.2f})")

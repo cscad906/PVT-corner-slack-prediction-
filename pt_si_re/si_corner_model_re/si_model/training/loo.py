@@ -234,8 +234,8 @@ def _effective_mode(cfg: dict, split: Split) -> str:
     key = (n_seen, k, tuple(split.corners[:2]))
     if key not in _ADAPTIVE_WARNED:
         _ADAPTIVE_WARNED.add(key)
-        print(f"[BASE] seen 코너 {n_seen}개 <= adaptive_k {k} -- adaptive 는 이웃이 "
-              f"전체와 같아져 대역폭을 고를 수 없다. plain 으로 적합한다.", flush=True)
+        print(f"[BASE] seen \ucf54\ub108 {n_seen}\uac1c <= adaptive_k {k} -- adaptive \ub294 \uc774\uc6c3\uc774 "
+              f"\uc804\uccb4\uc640 \uac19\uc544\uc838 \ub300\uc5ed\ud3ed\uc744 \uace0\ub97c \uc218 \uc5c6\ub2e4. plain \uc73c\ub85c \uc801\ud569\ud55c\ub2e4.", flush=True)
     return "plain"
 
 
