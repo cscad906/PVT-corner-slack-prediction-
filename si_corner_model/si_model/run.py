@@ -1076,8 +1076,11 @@ def select(models: list, design=None, temp=None) -> list:
     sel = [m for m in models
            if (design is None or m["design"] == design)
            and (temp is None or m["temp"] == temp)]
-    assert sel, (f"no model matches --design {design!r} --temp {temp!r}; "
-                 f"available = {[m['name'] for m in models]}")
+    assert sel, (
+        f"no model matches --design {design!r} --temp {temp!r}. "
+        f"--design takes one of {sorted({m['design'] for m in models})}; "
+        f"--temp takes one of {sorted({str(m['temp']) for m in models})} "
+        f"(the temps[].tag names in config.yaml, e.g. m25 for -25C)")
     return sel
 
 
@@ -2300,7 +2303,13 @@ def main(argv=None):
         # directories too, so a forgotten flip would have a later setup run read
         # and write the hold tree.
         p["mode"] = args.mode
-    models = select(expand(p), args.design, args.temp)
+    try:
+        models = select(expand(p), args.design, args.temp)
+    except AssertionError as e:
+        # A mistyped --temp or --design is a usage error, not a crash: say it
+        # in one line instead of a traceback. (`--temp -25` for m25 is the
+        # likely one -- the tag is the config's name, not the number.)
+        raise SystemExit("error: %s" % e)
 
     if args.stage == "list":
         stage_list(models, p)
