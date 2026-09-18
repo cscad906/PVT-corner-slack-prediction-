@@ -79,9 +79,10 @@ docs/START.md top to bottom.
     --corners hidden|seen|all   corners for predict/merge (default hidden)
     --at 0.57:cmax,0.62:rcmax   predict at these corners, measured or not
     --sweep 0.48:0.70:0.02      predict over a voltage range (add --level cmax
-                                for one level). Both write ONE file,
-                                runs/<mode>/_all/predict_<request>.csv, never
-                                overwriting an earlier one (--name to choose)
+                                for one level). Both write one file per
+                                temperature, runs/<mode>/_all/predict_<temp>_
+                                <request>.csv, never overwriting an earlier one
+                                (--name to choose; --temp for one temperature)
     --config <file>          a different project config (default config.yaml)
 
   Examples
@@ -1914,29 +1915,34 @@ def _predict_request(p: dict, models: list, at, sweep, level) -> list:
     return [(v, l) for v in vs for l in ([level] if level else levels)]
 
 
-def _predict_file(p: dict, name: str) -> str:
-    """runs/<mode>/_all/predict_<name>.csv, never an existing one.
+def _predict_files(p: dict, name: str, temps: list) -> dict:
+    """{temp: runs/<mode>/_all/predict_<temp>_<name>.csv}, none of them existing.
 
-    Every request gets its own file and a repeat gets _2, _3: a cmax sweep
-    followed by an rcmax sweep, or the same sweep before and after retraining,
-    must both survive to be compared.
+    One file per temperature, and never over an earlier one: a repeat gets _2,
+    _3. The suffix is chosen for the whole run at once, so the files a single
+    run writes carry the SAME number and stay recognisable as a set.
     """
     import re
 
     out_dir = os.path.join(
         _auto(p.get("out", {}).get("runs"), f"runs/{p.get('mode') or 'setup'}"), "_all")
     os.makedirs(out_dir, exist_ok=True)
-    stem = "predict_" + re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
-    fp = os.path.join(out_dir, stem + ".csv")
-    k = 2
-    while os.path.exists(fp):
-        fp = os.path.join(out_dir, "%s_%d.csv" % (stem, k))
+    tag = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
+
+    def path(t, k):
+        stem = "predict_%s_%s" % (re.sub(r"[^A-Za-z0-9._-]+", "_", str(t)), tag)
+        return os.path.join(out_dir, stem + (".csv" if k == 1 else "_%d.csv" % k))
+
+    k = 1
+    while any(os.path.exists(path(t, k)) for t in temps):
         k += 1
-    return fp
+    return {t: path(t, k) for t in temps}
 
 
 def _default_predict_name(design, temp, at, sweep, level, req) -> str:
-    parts = [x for x in (design, temp) if x]
+    # the temperature is not part of it: each per-temperature file puts its
+    # own temperature in front of this
+    parts = [design] if design else []
     if sweep:
         lo, hi, _ = sweep.split(":")
         parts.append("sweep_%s-%s" % (lo, hi))
@@ -2014,34 +2020,30 @@ def _predict_one_model(m: dict, req: list):
 
 
 def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
-    """Predict every model at the requested corners and write ONE file.
+    """Predict every model at the requested corners and write ONE FILE PER
+    TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.csv.
 
-        design,temp,path_idx,path_key,<corner>,<corner>,...
-        D,T,1,<key>,<ps>,<ps>,...
-        D,T,2,<key>,<ps>,<ps>,...
+        design,path_idx,path_key,<corner>,<corner>,...
+        D,1,<key>,<ps>,<ps>,...
+        D,2,<key>,<ps>,<ps>,...
+                                                   <- one blank row
+        design,summary,,<corner>,<corner>,...
+        D,smallest slack (ps),,...
+        D,sum of negative slacks (ps),,...
+        D,paths with negative slack (out of N),,...
 
-    One row per path, in the report's own path order -- path_idx is the n of
-    `### FIXED_PATH idx=<n>` and path_key is its key= -- so it lines up with the
-    reports. After the last path, ONE blank row, then the per-corner summary
-    under a repeated header:
+    Split by temperature because each temperature has its own RC corners --
+    125C has rcmax and cmax, m25 adds rcmin -- so a single shared table had
+    columns that were empty for half its rows. Per temperature, each file
+    carries only the corners that temperature has, and there is nothing
+    blank to explain. Every circuit at that temperature is in the file; the
+    temperature is in the name, so it is not a column.
 
-        design,temp,summary,,<corner>,<corner>,...
-        D,T,smallest slack (ps),,...
-        D,T,sum of negative slacks (ps),,...
-        D,T,paths with negative slack (out of N),,...
-
-    At the bottom, not the top. On top it broke the two things a table is for:
-    row 2 was no longer a path (the reader asked why the paths were not in
-    index order), and a spreadsheet sort pulled the summary rows in among the
-    paths. Below a blank row it is out of the way of both -- a spreadsheet's
-    sort and filter range stops at the blank row -- and it is still saved,
-    rather than scrolling off the screen. `tail` shows it on a server.
-
-    Every value is a prediction, including at corners that were measured. A
-    corner a model does not have (rcmin at 125C) is left blank -- no label, no
-    screen line. It carried a "corner type" row and a legend for a while
-    (measured / not measured / outside range / missing); the reader's answer
-    was that nobody would read them and blanks say enough.
+    Rows are paths in the report's own order (path_idx is the n of
+    `### FIXED_PATH idx=<n>`, path_key its key=). The summary sits below one
+    blank row, where a spreadsheet's sort and filter range stops, so it never
+    mixes in with the paths. Every value is a prediction, measured corners
+    included.
     """
     import numpy as np
 
@@ -2072,41 +2074,53 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
                 int((col < 0).sum()), N), flush=True)
         results.append((m, keys, pidx, vals, kinds))
     if not results:
-        return None, failed
-
-    fp = _predict_file(p, name)
+        return [], failed
 
     def f1(x):
         return "%.1f" % x if np.isfinite(x) else ""
 
-    with open(fp, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["design", "temp", "path_idx", "path_key"] + cols)
-        for m, keys, pidx, vals, _ in results:
-            d, t = m["design"], str(m["temp"])
-            for i in np.argsort(pidx, kind="stable"):
-                w.writerow([d, t, int(pidx[i]), keys[i]] + [f1(x) for x in vals[i]])
-        w.writerow([])
-        w.writerow(["design", "temp", "summary", ""] + cols)
-        for m, keys, _, vals, kinds in results:
-            d, t = m["design"], str(m["temp"])
-            fin = [kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
-                   for k in range(len(cols))]
-            worst = [float(np.nanmin(vals[:, k])) if fin[k] else np.nan
-                     for k in range(len(cols))]
-            neg = [float(vals[:, k][vals[:, k] < 0].sum()) if fin[k] else np.nan
-                   for k in range(len(cols))]
-            # the count alone: "52/33412" in a cell is read as a date by Excel
-            nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else ""
-                    for k in range(len(cols))]
-            w.writerow([d, t, "smallest slack (ps)", ""] + [f1(x) for x in worst])
-            w.writerow([d, t, "sum of negative slacks (ps)", ""] + [f1(x) for x in neg])
-            w.writerow([d, t, "paths with negative slack (out of %d)" % len(keys), ""]
-                       + nbad)
-    n_paths = sum(len(r[1]) for r in results)
-    print(f"\n[PREDICT] wrote {fp}  ({n_paths} paths x {len(cols)} corners, "
-          f"{len(results)} model(s))", flush=True)
-    return fp, failed
+    temps = []
+    for r in results:
+        if str(r[0]["temp"]) not in temps:
+            temps.append(str(r[0]["temp"]))
+    fps = _predict_files(p, name, temps)
+    written = []
+    print("", flush=True)
+    for t in temps:
+        grp = [r for r in results if str(r[0]["temp"]) == t]
+        # only the corners this temperature actually has
+        keep = [k for k in range(len(cols)) if any(g[4][k] != "n/a" for g in grp)]
+        if not keep:
+            print(f"[PREDICT] {t}: none of the requested corners exist at this "
+                  f"temperature -- no file", flush=True)
+            continue
+        fp = fps[t]
+        with open(fp, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["design", "path_idx", "path_key"] + [cols[k] for k in keep])
+            for m, keys, pidx, vals, _ in grp:
+                for i in np.argsort(pidx, kind="stable"):
+                    w.writerow([m["design"], int(pidx[i]), keys[i]]
+                               + [f1(vals[i, k]) for k in keep])
+            w.writerow([])
+            w.writerow(["design", "summary", ""] + [cols[k] for k in keep])
+            for m, keys, _, vals, kinds in grp:
+                fin = {k: kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
+                       for k in keep}
+                worst = [float(np.nanmin(vals[:, k])) if fin[k] else np.nan for k in keep]
+                neg = [float(vals[:, k][vals[:, k] < 0].sum()) if fin[k] else np.nan
+                       for k in keep]
+                # the count alone: "52/33412" in a cell is read as a date by Excel
+                nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else "" for k in keep]
+                d = m["design"]
+                w.writerow([d, "smallest slack (ps)", ""] + [f1(x) for x in worst])
+                w.writerow([d, "sum of negative slacks (ps)", ""] + [f1(x) for x in neg])
+                w.writerow([d, "paths with negative slack (out of %d)" % len(keys), ""]
+                           + nbad)
+        written.append(fp)
+        print(f"[PREDICT] wrote {fp}  ({sum(len(g[1]) for g in grp)} paths x "
+              f"{len(keep)} corners)", flush=True)
+    return written, failed
 
 
 def stage_merge(models: list, p: dict, corners: str) -> str:

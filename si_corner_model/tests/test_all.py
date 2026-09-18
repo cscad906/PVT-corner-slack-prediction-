@@ -1092,57 +1092,60 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     assert np.abs(a - base).max() > 1.0, "the residual must be large enough to matter"
     np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-3)
 
-    # (2) one file for both temperatures: one row per path, in the report's
-    # FIXED_PATH idx order, and nothing but paths in it
+    # (2) one file PER TEMPERATURE, each with only that temperature's corners
     p = project()
     models = select(expand(p), design="boomcore")
-    req = _predict_request(p, models, None, "0.46:0.72:0.04", "cmax")
+    req = _predict_request(p, models, None, "0.46:0.72:0.04", None)
     assert (0.685, "cmax") in req, "a measured voltage inside the sweep must be added"
-    fp, fails = stage_predict_at(models, p, req, "t")
-    assert not fails
-    rows = list(_csv.reader(open(fp, encoding="utf-8")))
-    assert rows[0][:4] == ["design", "temp", "path_idx", "path_key"]
-    blank = rows.index([])
-    paths, summ = rows[1:blank], rows[blank + 1:]
-    assert len(paths) == 24, "every path, and only paths, above the blank row"
-    for temp in ("125", "m25"):
-        idx = [int(r[2]) for r in paths if r[1] == temp]
-        assert len(idx) == 12 and idx == sorted(idx), "paths must be in idx order"
-    assert summ[0][:3] == ["design", "temp", "summary"] and summ[0][4:] == rows[0][4:]
-    assert [r[2] for r in summ[1:4]] == ["smallest slack (ps)",
-                                         "sum of negative slacks (ps)",
-                                         "paths with negative slack (out of 12)"]
-    assert len(summ) == 1 + 3 * 2, "three summary rows per model, nothing else"
+    fps, fails = stage_predict_at(models, p, req, "t")
+    assert not fails and len(fps) == 2
+    by_temp = {("125" if "predict_125_" in f else "m25"): f for f in fps}
+    assert set(by_temp) == {"125", "m25"}
+
+    def read(fp):
+        rows = list(_csv.reader(open(fp, encoding="utf-8")))
+        b = rows.index([])
+        return rows[0], rows[1:b], rows[b + 1:]
+
+    head, paths, summ = read(by_temp["125"])
+    assert head[:3] == ["design", "path_idx", "path_key"]
+    assert not any(c.endswith("_rcmin") for c in head), "125C has no rcmin: no column"
+    assert any(c.endswith("_cmax") for c in head) and any(c.endswith("_rcmax") for c in head)
+    assert len(paths) == 12 and all(c for r in paths for c in r), "no blank cells"
+    head_m, paths_m, summ_m = read(by_temp["m25"])
+    assert any(c.endswith("_rcmin") for c in head_m)
+    for rows_ in (paths, paths_m):
+        idx = [int(r[1]) for r in rows_]
+        assert idx == sorted(idx), "paths must be in FIXED_PATH idx order"
+    assert summ[0][:2] == ["design", "summary"] and summ[0][3:] == head[3:]
+    assert [r[1] for r in summ[1:]] == ["smallest slack (ps)",
+                                        "sum of negative slacks (ps)",
+                                        "paths with negative slack (out of 12)"]
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
                       ["cfg"]["data"]["cache"]))
-    got = {int(r[2]): r[3] for r in paths if r[1] == "m25"}
+    got = {int(r[1]): r[2] for r in paths_m}
     assert got == {int(i): str(k) for i, k in zip(ds["path_idx"], ds["path_keys"])}
 
-    # (3) a repeat never overwrites
-    fp2, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "t")
-    assert fp2 != fp and os.path.exists(fp) and fp2.endswith("_2.csv")
+    # (3) a repeat never overwrites, and the files of one run share a number
+    fps2, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "t")
+    assert all(f.endswith("_2.csv") for f in fps2) and all(os.path.exists(f) for f in fps)
 
-    # (4) a level a temperature does not have is left blank, not invented
-    req = _predict_request(p, models, "0.58:rcmin", None, None)
-    fp3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
-    rows = list(_csv.reader(open(fp3, encoding="utf-8")))
-    paths = rows[1:rows.index([])]
-    assert {r[4] for r in paths if r[1] == "125"} == {""}
-    assert all(r[4] for r in paths if r[1] == "m25")
-    summ = rows[rows.index([]) + 1:]
-    assert {r[4] for r in summ if r[1] == "125"} == {""}, \
-        "a corner a model does not have is blank in the summary too"
+    # (4) a corner a temperature does not have produces no column there, and
+    # a temperature with nothing to show produces no file
+    req = _predict_request(p, models, "0.58:cmax,0.62:rcmin", None, None)
+    fps3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
+    h125 = read([f for f in fps3 if "predict_125_" in f][0])[0]
+    hm25 = read([f for f in fps3 if "predict_m25_" in f][0])[0]
+    assert h125[3:] == ["0.580V_cmax"] and hm25[3:] == ["0.580V_cmax", "0.620V_rcmin"]
+    req = _predict_request(p, models, "0.62:rcmin", None, None)
+    fps4, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "only_rcmin")
+    assert len(fps4) == 1 and "predict_m25_" in fps4[0]
 
-    # (5) the same request restricted to 125C still runs: rcmin is n/a there,
-    # cmax is predicted. It used to reject the whole request and write nothing.
+    # (5) --temp narrows to one file; name checks stay strict
     only125 = select(expand(p), design="boomcore", temp="125")
     req = _predict_request(p, only125, "0.58:cmax,0.62:rcmin", None, None)
-    fp4, fails = stage_predict_at(only125, p, req, "only125")
-    assert not fails
-    rows = list(_csv.reader(open(fp4, encoding="utf-8")))
-    paths = rows[1:rows.index([])]
-    assert len(paths) == 12 and all(r[4] for r in paths) and not any(r[5] for r in paths)
-    # a sweep restricted to 125C gets only 125C's levels as columns
+    fps5, fails = stage_predict_at(only125, p, req, "only125")
+    assert not fails and len(fps5) == 1 and "predict_125_" in fps5[0]
     req = _predict_request(p, only125, None, "0.5:0.6:0.1", None)
     assert {l for _, l in req} == {"rcmax", "cmax"}
     with pytest.raises(AssertionError, match="unknown level"):

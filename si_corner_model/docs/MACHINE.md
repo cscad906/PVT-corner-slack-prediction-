@@ -402,30 +402,29 @@ bash scripts/run.sh predict --sweep 0.48:0.70:0.02 --level cmax   # 전압 스�
 bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어서
 ```
 
-**실행 한 번에 파일 하나**가 `runs/<mode>/_all/predict_<요청>.csv` 로 나온다. 같은
-요청을 다시 돌리면 `_2`, `_3` 이 붙은 새 파일이 생기고 앞의 것은 그대로 남는다
-(`--name` 으로 이름 지정 가능).
+**온도마다 파일 하나**가 `runs/<mode>/_all/predict_<온도>_<요청>.csv` 로 나온다.
+온도마다 있는 RC 코너가 달라서(125C 는 rcmax·cmax, m25 는 rcmin 까지) 각 파일에는
+**그 온도에 있는 코너만** 열로 들어간다 — 빈 열이 없다. `--temp` 를 주면 그 온도 파일
+하나만 나온다. 같은 요청을 다시 돌리면 두 파일 모두 `_2` 가 붙은 새 파일로 나오고 앞의
+것은 그대로 남는다 (`--name` 으로 이름 지정 가능). 요청한 코너가 그 온도에 하나도 없으면
+그 온도 파일은 안 만든다.
 
 - 한 줄 = 경로 하나, **리포트의 path 인덱스 순서대로**. 열은
-  `design, temp, path_idx, path_key, <코너>, <코너>, ...`
+  `design, path_idx, path_key, <코너>, <코너>, ...`
   - `path_idx` = 리포트의 `### FIXED_PATH idx=<n>` 의 n
   - `path_key` = 같은 줄의 `key=` (시작점->끝점)
-  - 값 = 예측 slack (ps). 그 온도에 없는 레벨(예: 125C 의 rcmin)은 빈칸
-- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 코너별 요약 3줄 (회로·온도마다):
+  - 값 = 예측 slack (ps)
+- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 회로별 요약 3줄:
   `smallest slack (ps)` / `sum of negative slacks (ps)` / `paths with negative slack (out of N)`.
   맨 아래라 엑셀 정렬·필터에 섞이지 않는다 (빈 줄에서 범위가 끊김)
-- 그 온도에 없는 코너(125C 의 rcmin 등)는 **빈칸**이다
 - 서버에서 보기:
   ```
-  column -s, -t runs/setup/_all/predict_*.csv | less -S     # 전체
-  tail -8 runs/setup/_all/predict_<이름>.csv | column -s, -t   # 요약만
+  column -s, -t runs/setup/_all/predict_m25_*.csv | less -S    # 전체
+  tail -4 runs/setup/_all/predict_m25_<이름>.csv | column -s, -t  # 요약만 (회로 1개일 때)
   ```
 - 측정한 전압 범위 **밖**의 값은 외삽이라 믿기 어렵다
-- **온도별로 따로 받고 싶으면 `--temp` 를 준다.** 파일 이름에 온도가 들어가서
-  (`predict_125_...`, `predict_m25_...`) 두 번 돌려도 서로 안 덮는다. `--temp` 를
-  안 주면 모든 온도가 파일 하나에 들어간다
 - 스윕 범위 안의 **측정 전압은 자동으로 들어간다** — 곡선이 실측점을 지나는지 보라고
-- 모든 값은 모델 예측이다. 새 코너(interp/extrap)에서는 **SI 보정을 끈다** —
+- 모든 값은 모델 예측이다. 측정 안 한 코너에서는 **SI 보정을 끈다** —
   크로스토크 리포트가 없기 때문
 - 온도는 125 / m25 만 가능하다. 온도마다 모델이 따로라 그 사이 온도는 못 만든다
 
