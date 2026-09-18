@@ -411,24 +411,16 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
   - `path_idx` = 리포트의 `### FIXED_PATH idx=<n>` 의 n
   - `path_key` = 같은 줄의 `key=` (시작점->끝점)
   - 값 = 예측 slack (ps). 그 온도에 없는 레벨(예: 125C 의 rcmin)은 빈칸
-- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 코너별 요약 4줄 (회로·온도마다):
-  `corner type` (그 코너가 뭔지) / `smallest slack (ps)` / `sum of negative slacks (ps)` /
-  `paths with negative slack (out of N)`.
+- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 코너별 요약 3줄 (회로·온도마다):
+  `smallest slack (ps)` / `sum of negative slacks (ps)` / `paths with negative slack (out of N)`.
   맨 아래라 엑셀 정렬·필터에 섞이지 않는다 (빈 줄에서 범위가 끊김)
+- 그 온도에 없는 코너(125C 의 rcmin 등)는 **빈칸**이다
 - 서버에서 보기:
   ```
   column -s, -t runs/setup/_all/predict_*.csv | less -S     # 전체
-  tail -12 runs/setup/_all/predict_<이름>.csv | column -s, -t  # 요약만
+  tail -8 runs/setup/_all/predict_<이름>.csv | column -s, -t   # 요약만
   ```
-- `corner type` 에 들어가는 말:
-
-  | 표시 | 뜻 |
-  |---|---|
-  | `measured: training corner` | 측정됨, 학습에 쓴 코너 |
-  | `measured: test corner` | 측정됨, 학습에서 가려둔 테스트 코너 |
-  | `not measured: inside measured voltage range` | 측정 안 함, 측정된 전압 범위 안 |
-  | `not measured: OUTSIDE measured voltage range - unreliable` | 측정 안 함, 범위 밖 — 믿지 말 것 |
-  | `no rcmin reports at temperature 125` | 그 온도에는 그 RC 코너 리포트가 없음 (125C 는 rcmax·cmax 만 있음) — 값 칸은 빈칸 |
+- 측정한 전압 범위 **밖**의 값은 외삽이라 믿기 어렵다
 - **온도별로 따로 받고 싶으면 `--temp` 를 준다.** 파일 이름에 온도가 들어가서
   (`predict_125_...`, `predict_m25_...`) 두 번 돌려도 서로 안 덮는다. `--temp` 를
   안 주면 모든 온도가 파일 하나에 들어간다

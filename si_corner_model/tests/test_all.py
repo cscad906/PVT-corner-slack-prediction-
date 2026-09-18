@@ -1109,14 +1109,10 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
         idx = [int(r[2]) for r in paths if r[1] == temp]
         assert len(idx) == 12 and idx == sorted(idx), "paths must be in idx order"
     assert summ[0][:3] == ["design", "temp", "summary"] and summ[0][4:] == rows[0][4:]
-    assert [r[2] for r in summ[1:5]] == ["corner type", "smallest slack (ps)",
+    assert [r[2] for r in summ[1:4]] == ["smallest slack (ps)",
                                          "sum of negative slacks (ps)",
                                          "paths with negative slack (out of 12)"]
-    from si_model.run import CORNER_TYPE
-    kinds = {k for r in summ[1:] if r[2] == "corner type" for k in r[4:]}
-    assert {CORNER_TYPE[k] for k in ("seen", "hidden", "interp", "extrap")} <= kinds
-    assert not any("," in v for v in CORNER_TYPE.values()), \
-        "a comma in a label breaks `column -s, -t`"
+    assert len(summ) == 1 + 3 * 2, "three summary rows per model, nothing else"
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
                       ["cfg"]["data"]["cache"]))
     got = {int(r[2]): r[3] for r in paths if r[1] == "m25"}
@@ -1134,8 +1130,8 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     assert {r[4] for r in paths if r[1] == "125"} == {""}
     assert all(r[4] for r in paths if r[1] == "m25")
     summ = rows[rows.index([]) + 1:]
-    assert [r[4] for r in summ if r[1] == "125" and r[2] == "corner type"] == \
-        ["no rcmin reports at temperature 125"]
+    assert {r[4] for r in summ if r[1] == "125"} == {""}, \
+        "a corner a model does not have is blank in the summary too"
 
     # (5) the same request restricted to 125C still runs: rcmin is n/a there,
     # cmax is predicted. It used to reject the whole request and write nothing.

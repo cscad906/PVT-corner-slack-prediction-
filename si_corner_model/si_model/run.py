@@ -2013,26 +2013,6 @@ def _predict_one_model(m: dict, req: list):
     return keys, pidx, vals, kinds, (vmin, vmax)
 
 
-# What each requested corner is, in words a reader understands without a
-# legend. The first version printed `kind: seen / hidden / interp / extrap`,
-# and the reader's response was "what is kind -- who would understand that?"
-# No commas: `column -s, -t` splits on every comma, quoted or not.
-CORNER_TYPE = {
-    "seen": "measured: training corner",
-    "hidden": "measured: test corner",
-    "interp": "not measured: inside measured voltage range",
-    "extrap": "not measured: OUTSIDE measured voltage range - unreliable",
-    # "this level does not exist at this temperature" was the first wording,
-    # and the reader asked what it meant: "level" is config jargon for
-    # rcmin/cmax/rcmax. Name the actual corner and temperature instead.
-    "n/a": "no {level} reports at temperature {temp}",
-}
-
-
-def _corner_type(kind: str, level: str, temp) -> str:
-    return CORNER_TYPE[kind].format(level=level, temp=temp)
-
-
 def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE file.
 
@@ -2046,7 +2026,6 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
     under a repeated header:
 
         design,temp,summary,,<corner>,<corner>,...
-        D,T,corner type,,measured: training corner,...
         D,T,smallest slack (ps),,...
         D,T,sum of negative slacks (ps),,...
         D,T,paths with negative slack (out of N),,...
@@ -2058,7 +2037,11 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
     sort and filter range stops at the blank row -- and it is still saved,
     rather than scrolling off the screen. `tail` shows it on a server.
 
-    Every value is a prediction, including at corners that were measured.
+    Every value is a prediction, including at corners that were measured. A
+    corner a model does not have (rcmin at 125C) is left blank -- no label, no
+    screen line. It carried a "corner type" row and a legend for a while
+    (measured / not measured / outside range / missing); the reader's answer
+    was that nobody would read them and blanks say enough.
     """
     import numpy as np
 
@@ -2078,25 +2061,16 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             print(f"!!!!! FAILED predict: {m['name']} -- continuing", flush=True)
             continue
         N = len(keys)
-        print("  %-13s  %15s  %17s  %22s   %s" % (
-            "corner", "smallest slack", "sum of negatives",
-            "paths with slack < 0", "corner type"))
+        print("  %-13s  %15s  %17s  %22s" % (
+            "corner", "smallest slack", "sum of negatives", "paths with slack < 0"))
         for k, c in enumerate(cols):
             col = vals[:, k]
             if kinds[k] == "n/a" or not np.isfinite(col).any():
-                print("  %-13s  %15s  %17s  %22s   %s" % (
-                    c, "-", "-", "-", _corner_type(kinds[k], req[k][1], m["temp"])))
-                continue
-            print("  %-13s  %12.1f ps  %14.1f ps  %13d / %-6d   %s" % (
+                continue                       # this model has no such corner
+            print("  %-13s  %12.1f ps  %14.1f ps  %13d / %d" % (
                 c, float(np.nanmin(col)), float(col[col < 0].sum()),
-                int((col < 0).sum()), N, _corner_type(kinds[k], req[k][1], m["temp"])))
-        print("  measured voltages for this model: %.3f - %.3f V" % (vmin, vmax),
-              flush=True)
+                int((col < 0).sum()), N), flush=True)
         results.append((m, keys, pidx, vals, kinds))
-
-    print("\n  Every value is a model prediction, measured corners included.\n"
-          "  Crosstalk (SI) is not modelled at corners that were not measured: "
-          "there is no crosstalk report for them.", flush=True)
     if not results:
         return None, failed
 
@@ -2125,8 +2099,6 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             # the count alone: "52/33412" in a cell is read as a date by Excel
             nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else ""
                     for k in range(len(cols))]
-            w.writerow([d, t, "corner type", ""]
-                       + [_corner_type(kd, req[k][1], t) for k, kd in enumerate(kinds)])
             w.writerow([d, t, "smallest slack (ps)", ""] + [f1(x) for x in worst])
             w.writerow([d, t, "sum of negative slacks (ps)", ""] + [f1(x) for x in neg])
             w.writerow([d, t, "paths with negative slack (out of %d)" % len(keys), ""]
