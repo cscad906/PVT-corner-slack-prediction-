@@ -92,6 +92,30 @@ force_utf8()
 _V_TOK_RE = re.compile(r"(?<!\d)v?(\d+)[p.](\d+)v?(?!\d)", re.IGNORECASE)
 _T_TOK_RE = re.compile(r"(?<![\dA-Za-z])([mn]|-)?(\d+)c?(?![\dA-Za-z])", re.IGNORECASE)
 
+# --design 이 쓰는 hidden 코너 표. si_corner_model_re/config.yaml 에서 베껴 왔다.
+#   (회로, 온도토큰, 전압, 레벨).  2026-09-18 기준.
+# 여기 적어 두면 pyyaml 없이도 돌아간다. 대신 config 가 바뀌면 이 표가 낡는데,
+# 낡은 채로 돌면 새로 hidden 이 된 코너가 조용히 경로 선택에 참여한다. 그래서
+# pyyaml 을 쓸 수 있을 때는 아래 표를 config 와 대조하고, 다르면 멈춘다.
+HIDDEN = {
+    "MIF_Timing_Report": [
+        ("125", 0.54, "cmax"), ("125", 0.685, "rcmax"), ("125", 0.76, "cmax"),
+        ("m25", 0.475, "rcmin"), ("m25", 0.6, "cmax"),
+        ("m25", 0.855, "rcmin"), ("m25", 0.95, "cmax"),
+    ],
+    "MFC_Timing_Report": [
+        ("125", 0.5, "cmax"), ("125", 0.54, "rcmax"),
+        ("m25", 0.6, "cmax"), ("m25", 0.685, "rcmax"), ("m25", 0.76, "rcmin"),
+    ],
+    # 전역 temps 를 그대로 쓰는 회로
+    "PERIC0_Timing_Report": [
+        ("125", 0.54, "rcmax"), ("125", 0.6, "cmax"),
+        ("m25", 0.5, "cmax"), ("m25", 0.685, "rcmin"),
+    ],
+}
+# 폴더 이름에서 찾을 레벨 이름. 긴 것부터 봐야 rcmax 안의 cmax 를 잘못 안 잡는다.
+LEVEL_NAMES = ("rcmax", "rcmin", "cmax")
+
 MARK = "### FIXED_PATH"
 IDXTAG = "idx="
 ANNOT_SUFFIX = "_fixed_annotated.txt"
@@ -122,10 +146,14 @@ CODE_INFO = {
     "E-CONFIG":  ("config.yaml could not be read or expanded",
                   "the message above comes from si_model. fix the config, or "
                   "drop --design and use --skip-corner."),
-    "E-DESIGN":  ("--design is not in config.yaml",
+    "E-DESIGN":  ("--design is not a design this script knows",
                   "use one of the names printed above. the name decides which "
-                  "voltage grid and which hidden corners apply, so it has to be "
-                  "exact."),
+                  "hidden corners apply, so it has to be exact."),
+    "E-HIDDENDRIFT": ("config.yaml holds a different holdout than this script",
+                      "config.yaml is what the model actually holds out, so the "
+                      "table in 7a_select.py (HIDDEN) is stale. copy the corners "
+                      "printed above into it, then run again. picking with a "
+                      "stale table would let a held-out corner choose paths."),
     "E-CORNERNAME": ("a corner folder name cannot be read as voltage+level",
                      "--design has to tell hidden from seen by the folder name. "
                      "rename the folder so the voltage (0p54 / 0.54) and the "
@@ -262,10 +290,14 @@ def parse_corner_name(name, levels):
 
 
 def hidden_from_config(cfg_path, design):
-    """config.yaml -> ({(온도토큰, 전압, 레벨)}, 레벨이름들, 회로목록, 라벨목록).
+    """config.yaml -> ({(온도토큰, 전압, 레벨)}, 레벨이름들, 회로목록, 사유).
 
-    판정은 si_model.run.grid_split 이 한다. 여기서 규칙을 다시 쓰지 않는다 --
-    모델이 숨긴 코너와 여기서 빼는 코너가 갈리면 holdout 이 무의미해진다.
+    위 HIDDEN 표가 아직 맞는지 **대조**하는 데만 쓴다. 판정 자체는 모델 쪽
+    si_model.run.grid_split 이 한 것을 그대로 가져온다 -- 규칙을 여기서 다시
+    쓰면 모델과 답이 갈린다.
+
+    pyyaml 이 없거나 config 를 못 읽으면 (None, None, None, 사유) 를 돌려준다.
+    그때는 대조를 건너뛰고 표를 그대로 쓴다(멈추지 않는다).
     """
     pkg = os.path.dirname(os.path.abspath(cfg_path))
     if not os.path.isdir(os.path.join(pkg, "si_model")):
@@ -416,25 +448,39 @@ def main():
     skip = set(args.skip_corner)
     auto_skip = []
     if args.design:
+        if args.design not in HIDDEN:
+            code("E-DESIGN", "[ FAILED ] no design %r." % args.design,
+                 "           known: %s" % ", ".join(sorted(HIDDEN)))
+        hidden = set(HIDDEN[args.design])
+        levels = LEVEL_NAMES
+        print("  design : %s   (%d hidden corner(s), they will not pick)"
+              % (args.design, len(hidden)))
+        for t, v, lv in sorted(hidden, key=lambda x: (x[0], x[1], x[2])):
+            print("             %gV %-5s @%s" % (v, lv, t))
+
+        # config 와 대조한다. 표가 낡으면 새로 hidden 이 된 코너가 조용히 뽑기에
+        # 참여하므로, 다르면 멈춘다. pyyaml 이 없으면 대조만 건너뛴다.
         cfg_path = args.config or os.path.join(HERE, "si_corner_model_re",
                                                "config.yaml")
-        if not os.path.isfile(cfg_path):
-            code("E-CONFIG", "[ FAILED ] no config.yaml at %s" % cfg_path,
-                 "           give --config <path>.")
-        hidden, levels, designs, extra = hidden_from_config(cfg_path, args.design)
-        if hidden is None and designs is None:
-            c = "E-YAML" if "yaml" in str(extra).lower() else "E-CONFIG"
-            code(c, "[ FAILED ] cannot read %s" % cfg_path,
-                 "           %s" % extra)
-        if hidden is None:
-            code("E-DESIGN", "[ FAILED ] no design %r in %s"
-                 % (args.design, cfg_path),
-                 "           designs: %s" % ", ".join(designs))
-        print("  design : %s   (%s)" % (args.design, cfg_path))
-        print("  hidden : %d corner(s) from config -- these will not pick"
-              % len(hidden))
-        for lab in extra:
-            print("             %s" % lab)
+        from_cfg, _lv, designs, why = hidden_from_config(cfg_path, args.design)
+        if from_cfg is None:
+            print("  config : NOT checked -- %s" % (why or "design not in config"))
+            print("           (the table above is used as is. if config.yaml "
+                  "changed, re-check it.)")
+        elif from_cfg != hidden:
+            only_cfg = sorted(from_cfg - hidden)
+            only_tbl = sorted(hidden - from_cfg)
+            code("E-HIDDENDRIFT",
+                 "[ FAILED ] the table in 7a_select.py no longer matches %s"
+                 % cfg_path,
+                 *(["           only in config : %s" % ", ".join(
+                        "%gV %s @%s" % (v, lv, t) for t, v, lv in only_cfg)]
+                   if only_cfg else [])
+                 + (["           only in table  : %s" % ", ".join(
+                        "%gV %s @%s" % (v, lv, t) for t, v, lv in only_tbl)]
+                    if only_tbl else []))
+        else:
+            print("  config : checked, matches %s" % cfg_path)
 
         # 폴더 이름을 코너로 읽어 hidden 과 맞춘다. 못 읽는 폴더가 있으면 멈춘다 --
         # hidden 인지 모르는 채로 그 코너에 경로를 고르게 할 수는 없다.
