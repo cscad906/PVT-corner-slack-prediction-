@@ -85,6 +85,11 @@ CODE_INFO = {
     "E-ONECORNER": ("only one corner was read",
                     "balancing needs at least two corners. with one corner the "
                     "plain 7_cut.py --keep is the same thing."),
+    "E-SKIPNAME": ("--skip-corner named a corner that is not there",
+                   "the name must match the corner folder exactly. a typo would "
+                   "silently let that corner pick paths, which is the one thing "
+                   "--skip-corner is for. check the spelling against the folder "
+                   "names printed above."),
     "E-NOCAND":  ("no path is measured in every corner",
                   "the corners share no idx at all. check the files with "
                   "7_cut.py first -- W-IDXDIFF tells which corner is missing what."),
@@ -298,12 +303,24 @@ def main():
         if f is None:
             missing.append(name)
             continue
+        # 뺀 코너는 **열지도 않는다.** 그 코너를 모른다는 전제로 고르는 것이라,
+        # 후보 교집합에 넣는 것조차 그 코너를 본 셈이 된다.
         if name in skip:
             skipped.append(name)
             continue
         jobs.append((name, f))
     if not jobs:
         code("E-NOTHING", "[ FAILED ] nothing to read under %s" % args.root)
+    # 오타로 안 빠진 코너는 그대로 뽑기에 참여한다 -- 조용히 넘어가면 안 된다.
+    unknown = sorted(skip - set(skipped))
+    if unknown:
+        have = [n for n, _ in corner_dirs(args.root)]
+        code("E-SKIPNAME",
+             "[ FAILED ] --skip-corner does not match any corner folder:",
+             "           %s" % ", ".join(unknown),
+             "",
+             "           corner folders under %s :" % os.path.abspath(args.root),
+             "           %s" % ", ".join(have))
 
     total_mb = 0.0
     for _, f in jobs:
@@ -317,7 +334,9 @@ def main():
     print("  pick   : %d paths, round-robin over %d corner(s)" % (args.keep, len(jobs)))
     print("  files  : %d   (%.0f MB to read)" % (len(jobs), total_mb))
     if skipped:
-        print("  skipped: %s   (--skip-corner)" % ", ".join(skipped))
+        print("  skipped: %s" % ", ".join(skipped))
+        print("           (--skip-corner: not read at all -- not even to check "
+              "that a path exists there)")
     if missing:
         print("  [ CHECK ] %d corner(s) hold no %s -- not used here:"
               % (len(missing), ANNOT_SUFFIX))
@@ -460,6 +479,8 @@ def main():
         fh.write("# picked %d of %d shared candidates, round-robin over %d corners\n"
                  % (len(picked), len(cand), len(corners)))
         fh.write("# corners: %s\n" % ", ".join(corners))
+        if skipped:
+            fh.write("# not read (--skip-corner): %s\n" % ", ".join(skipped))
         fh.write("# use:  python3 7_cut.py --root <round2> --idx-file %s\n"
                  % os.path.basename(out_path))
         for i in sorted(picked):
