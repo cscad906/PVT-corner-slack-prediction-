@@ -59,7 +59,7 @@ si_corner_model \u2014 \uba85\ub839\uc740 `bash scripts/run.sh <\ub2e8\uacc4>` \
     train      \ud559\uc2b5 -> runs/<\ud68c\ub85c>/<\uc628\ub3c4>/best.pt + summary.json   (torch/GPU)
     bundle     \uc628\ub3c4\ubcc4 \uac00\uc911\uce58\ub97c \ud68c\ub85c\ub2f9 \ud55c \ud30c\uc77c\ub85c -> runs/<\ud68c\ub85c>/model.pt
     predict    \uc800\uc7a5\ub41c \uac00\uc911\uce58\ub85c \uc608\uce21\ub9cc -> predictions_<corners>.csv
-    merge      \uc804 \ud68c\ub85c\u00b7\uc804 \uc628\ub3c4 \uc608\uce21\uc744 runs/_all/ \ub85c \ud569\uce68
+    merge      \uc804 \ud68c\ub85c\xb7\uc804 \uc628\ub3c4 \uc608\uce21\uc744 runs/_all/ \ub85c \ud569\uce68
     all        build -> base -> train -> bundle -> predict -> merge
     sweep      lambda_si {0, 0.1, 1, 10} \ube44\uad50 -> runs/_sweep/ (slack \uc804\uc6a9)
 
@@ -175,7 +175,7 @@ def list_designs(p: dict) -> "list[str]":
 # temperature under `temps[]`. They have to be overridable: temperatures do not
 # share a level set here (125C has no cmin), so "hide this corner" is not even
 # expressible as one global list.
-HOLDOUT_KEYS = ("hidden_voltages", "seen_voltages", "seen_corners", "hidden_levels",
+HOLDOUT_KEYS = ("hidden_voltages", "seen_voltages", "hidden_levels",
                 "hidden_corners", "hidden_per_voltage", "query_corners")
 
 
@@ -308,6 +308,35 @@ def _order(spec, n_levels: int, cap: int) -> int:
     return int(spec)
 
 
+def grid_split(p: dict, m: dict):
+    """One model -> (seen, hidden), each a list of (voltage, level).
+
+    Which cells of the corner grid are held out follows five keys that can
+    combine (hidden_levels / hidden_corners / seen_voltages / hidden_voltages,
+    and hidden_per_voltage already expanded by expand()). Keep that judgement
+    in ONE place: `list` prints it and pt_si_re/7a_select.py excludes those
+    corners when it picks paths. If the two ever disagreed, a corner the model
+    holds out would have steered the path selection -- exactly the leak the
+    holdout exists to prevent.
+    """
+    d, s = m["cfg"]["data"], m["cfg"]["split"]
+    dco = project_for(p, m["design"])["corners"]
+    vs = [float(v) for v in dco["voltages"]]
+    hidden_lv = set(s.get("hidden_levels") or [])
+    hset = {(float(x), str(y)) for x, y in (s.get("hidden_corners") or [])}
+    sv_only = s.get("seen_voltages")
+
+    def _is_hidden(v, lv):
+        return (lv in hidden_lv
+                or (v, lv) in hset
+                or (sv_only and not any(abs(v - x) < 1e-9 for x in sv_only))
+                or any(abs(v - x) < 1e-9 for x in (s.get("hidden_voltages") or [])))
+
+    grid = [(v, lv) for v in vs for lv in d["rc_corners"]]
+    return ([c for c in grid if not _is_hidden(*c)],
+            [c for c in grid if _is_hidden(*c)])
+
+
 def expand(p: dict) -> "list[dict]":
     """Project config -> one engine config per (design, temp).
 
@@ -366,29 +395,6 @@ def expand(p: dict) -> "list[dict]":
                 assert lv in levels, (
                     f"temp {tag}: hidden_levels \uc758 {lv!r} \uac00 \uc774 \uc628\ub3c4\uc758 levels {levels} \uc5d0 \uc5c6\ub2e4")
             hidden_corners = [list(x) for x in ho.get("hidden_corners") or []]
-            seen_corners = [list(x) for x in ho.get("seen_corners") or []]
-            if seen_corners:
-                incompatible = [k for k in ("seen_voltages", "hidden_voltages",
-                                            "hidden_levels", "hidden_per_voltage")
-                                if ho.get(k)]
-                assert not incompatible, (
-                    f"temp {tag}: seen_corners \uc640 {incompatible} \ub294 \uac19\uc774 \uc4f8 \uc218 \uc5c6\ub2e4. "
-                    "\ud3c9\uac00 \ub300\uc0c1\uc740 hidden_corners \uc5d0\ub9cc \uc801\uc744 \uac83")
-                allowed = {(v, lv) for v in volts for lv in levels}
-                for key, pairs in (("seen_corners", seen_corners),
-                                   ("hidden_corners", hidden_corners)):
-                    for pair in pairs:
-                        assert len(pair) == 2 and (float(pair[0]), str(pair[1])) in allowed, (
-                            f"temp {tag}: {key} \uc758 {pair!r} \uac00 voltages x levels \uc5d0 \uc5c6\ub2e4")
-                    assert len({(float(v), str(lv)) for v, lv in pairs}) == len(pairs), (
-                        f"temp {tag}: {key} \uc5d0 \uc911\ubcf5 \ucf54\ub108\uac00 \uc788\ub2e4")
-                seen_set = {(float(v), str(lv)) for v, lv in seen_corners}
-                hidden_set = {(float(v), str(lv)) for v, lv in hidden_corners}
-                assert not (seen_set & hidden_set), (
-                    f"temp {tag}: seen_corners \uc640 hidden_corners \uac00 \uacb9\uce5c\ub2e4: "
-                    f"{sorted(seen_set & hidden_set)}")
-                assert (ref_v, ref_lv) in seen_set, (
-                    f"temp {tag}: \uc575\ucee4 ({ref_v}, {ref_lv}) \ub294 seen_corners \uc5d0 \uc788\uc5b4\uc57c \ud55c\ub2e4")
             if ho.get("hidden_per_voltage"):
                 assert not hidden_corners, (
                     f"temp {tag}: hidden_per_voltage \uc640 hidden_corners \ub294 \uac19\uc774 \uc4f0\uc9c0 \uc54a\ub294\ub2e4")
@@ -433,9 +439,6 @@ def expand(p: dict) -> "list[dict]":
                     patterns["crosstalk_regex"] = fi["crosstalk_regex"]
             if ho.get("query_corners"):
                 data["query_corners"] = ho["query_corners"]
-            if seen_corners:
-                data["selected_corners"] = [corner_label(float(v), str(lv), proc)
-                                            for v, lv in seen_corners + hidden_corners]
             if pa.get("cell_taxonomy"):
                 data["cell_taxonomy"] = pa["cell_taxonomy"]
             for k in ("clock_pins", "ff_output_pins", "strip_path_idx"):
@@ -444,20 +447,16 @@ def expand(p: dict) -> "list[dict]":
 
             # ---- corner split -------------------------------------------
             n_seen_lv = len([lv for lv in levels if lv not in hidden_lv])
-            # `auto` expects exactly the selected seen set, or the full grid
-            # minus holdouts in the default mode. Missing required reports
-            # remain errors in both modes.
-            n_expect = (len(seen_corners) if seen_corners else
-                        len(seen_v) * n_seen_lv - len(hidden_corners))
+            # `auto` = the full grid minus whatever this temperature hides, so a
+            # missing report still trips the guard even with a scattered holdout.
+            n_expect = len(seen_v) * n_seen_lv - len(hidden_corners)
             min_seen = sp.get("min_seen", "auto")
             split = {
                 "hidden_levels": [lv for lv in hidden_lv if lv in levels],
                 "hidden_corners": hidden_corners,
                 "min_seen": (n_expect if str(min_seen) == "auto" else int(min_seen)),
             }
-            if seen_corners:
-                split["seen_corners"] = seen_corners
-            elif seen_decl:
+            if seen_decl:
                 split["seen_voltages"] = seen_v
             else:
                 split["hidden_voltages"] = hidden_v
@@ -472,16 +471,12 @@ def expand(p: dict) -> "list[dict]":
             base = {
                 "axes": [
                     {"name": "v", "ref": ref_v,
-                     "order": _order(b.get("v_order"),
-                                     len({float(v) for v, _ in seen_corners})
-                                     if seen_corners else len(seen_v), 3),
+                     "order": _order(b.get("v_order"), len(seen_v), 3),
                      "fit_scale": float(b.get("v_fit_scale", 1.0)),
                      "token_scale": float(b.get("v_token_scale", 0.1)),
                      "gap_cap": float(b.get("v_gap_cap", 2.5))},
                     {"name": "rc", "ref": lvals[ref_lv],
-                     "order": _order(b.get("level_order"),
-                                     len({str(lv) for _, lv in seen_corners})
-                                     if seen_corners else n_seen_lv, 2),
+                     "order": _order(b.get("level_order"), n_seen_lv, 2),
                      "levels": lvals,
                      "fit_scale": float(b.get("level_fit_scale", 1.0)),
                      "token_scale": float(b.get("level_token_scale", 1.0)),
@@ -552,38 +547,14 @@ def stage_list(models: list, p: dict) -> None:
         # \uc608\uc0c1 \ucf54\ub108 \uc218 / \ub2e4\ud56d\uc2dd \ud06c\uae30 -- \uc2e4\uc81c \ud30c\uc2f1 \uc804\uc5d0 \uc0b0\uc218\ub85c \ubbf8\ub9ac \uac80\uc0b0
         from si_model.parsing.keys import corner_label as _lab
         dco = project_for(p, m["design"])["corners"]
-        vs = [float(v) for v in dco["voltages"]]
-        hidden_lv = set(s.get("hidden_levels") or [])
-        hset = {(float(x), str(y)) for x, y in (s.get("hidden_corners") or [])}
-        sv_only = s.get("seen_voltages")
-
-        def _is_hidden(v, lv):
-            return (lv in hidden_lv
-                    or (v, lv) in hset
-                    or (sv_only and not any(abs(v - x) < 1e-9 for x in sv_only))
-                    or any(abs(v - x) < 1e-9 for x in (s.get("hidden_voltages") or [])))
-
-        full_grid = [(v, lv) for v in vs for lv in d["rc_corners"]]
-        if s.get("seen_corners"):
-            seen = [(float(v), str(lv)) for v, lv in s["seen_corners"]]
-            hid = [(float(v), str(lv)) for v, lv in s["hidden_corners"]]
-            grid = seen + hid
-            ignored = len(full_grid) - len(grid)
-            print(f"     selected: seen {len(seen)} + \ud3c9\uac00 target {len(hid)}; "
-                  f"\uc81c\uc678 {ignored}\uac1c (\ub9ac\ud3ec\ud2b8 \ubd88\ud544\uc694)")
-        else:
-            grid = full_grid
-            seen = [c for c in grid if not _is_hidden(*c)]
-            hid = [c for c in grid if _is_hidden(*c)]
-        total = len(grid)
+        seen, hid = grid_split(p, m)
+        total = len(seen) + len(hid)
         if hid:
             print(f"     hidden  : {len(hid)}\uac1c "
                   + ", ".join(_lab(v, lv, dco["process"]) for v, lv in hid[:6])
                   + (" ..." if len(hid) > 6 else ""))
         else:
             print("     hidden  : \uc5c6\uc74c (query_corners \ub9cc \uc608\uce21 \ub300\uc0c1)")
-        if d.get("query_corners"):
-            print(f"     query   : {len(d['query_corners'])}\uac1c (\uc815\ub2f5 \uc5c6\uc774 \uc608\uce21\ub9cc)")
         from si_model.config import expand_terms
         n_lv = len({lv for _, lv in seen})
         n_v = len({v for v, _ in seen})
@@ -686,7 +657,7 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
     if not ok:
         print("  \ud310\uc815: \u2717 \uacbd\ub85c\ub97c \ud558\ub098\ub3c4 \ubabb \uc77d\uc5c8\ub2e4.")
         print("        \uc704\uc5d0\uc11c \u2717 \uc778 \uc815\uaddc\uc2dd\uc758 '\uc2e4\uc81c' \uc904\uc744 \ubcf4\uace0")
-        print("        si_model/parsing/annotated.py \uc0c1\ub2e8\uc744 \uadf8 \ud615\uc2dd\uc5d0 \ub9de\ucd98\ub2e4 (docs/PARSING.md \u00a74).")
+        print("        si_model/parsing/annotated.py \uc0c1\ub2e8\uc744 \uadf8 \ud615\uc2dd\uc5d0 \ub9de\ucd98\ub2e4 (docs/PARSING.md \xa74).")
         return 1
     if bad:
         print(f"  \ud310\uc815: \u25b3 \uacbd\ub85c\ub294 \uc77d\ud788\uc9c0\ub9cc \ubabb \uc7a1\uc740 \ud56d\ubaa9\uc774 \uc788\ub2e4: {bad}")
@@ -817,6 +788,8 @@ def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
         current_label = "  <- \uc9c0\uae08 \uc774\uac83" if w == cur else ""
         print(f"       {w:9s} {e.mean():8.3f} ps  (worst {e.max():7.3f})"
               f"{current_label}")
+
+
 def _trainer(m: dict):
     if m["task"] == "slew":
         from si_model.tasks.slew.train_slew import Trainer

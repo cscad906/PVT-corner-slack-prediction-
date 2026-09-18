@@ -53,6 +53,24 @@
     --jobs N (-j N)   동시에 읽을 코너 수 (기본 4)
     --force           목록 파일이 이미 있어도 덮어쓴다
     --skip-corner <이름>  이 코너는 뽑기에서 뺀다(측정은 그대로). 여러 번 줄 수 있다.
+    --design <회로>   그 회로의 hidden 코너를 config.yaml 에서 읽어 자동으로 뺀다.
+                      --skip-corner 를 손으로 나열하는 것과 같은데, 빠뜨릴 수가 없다.
+    --config <파일>   config.yaml 위치. 생략하면 si_corner_model_re/config.yaml.
+
+hidden 코너를 자동으로 빼기
+    python3 7a_select.py --root round2 --keep 3000 --design MIF_Timing_Report
+
+    hidden 이 무엇인지는 **모델 쪽 코드에게 물어본다**(si_model.run.grid_split).
+    여기서 규칙을 다시 구현하면 언젠가 모델과 답이 갈리고, 그러면 모델이 숨긴
+    코너가 경로 선택에 참여하게 된다 -- holdout 이 막으려던 바로 그것이다.
+
+    회로마다 전압 그리드도 hidden 도 다르므로 --design 은 반드시 정확해야 한다.
+    한 회로의 **모든 온도**의 hidden 을 합쳐서 뺀다. 2회차 폴더에 125 와 m25 가
+    섞여 있어도 되고, 그래야 목록 하나로 전 코너를 자를 수 있다.
+
+    코너 폴더 이름은 전압/레벨/온도를 각각 따로 찾아 맞춘다(순서·구분자·대소문자
+    무관). 못 읽는 폴더가 있으면 멈춘다 -- hidden 인지 아닌지 모르는 채로 뽑으면
+    안 되기 때문이다.
 """
 import argparse
 import os
@@ -65,6 +83,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "_engine"))
 from utf8 import force_utf8, wopen
 force_utf8()
+
+# 코너 폴더 이름에서 전압/온도를 찾는 규칙. si_corner_model 의
+# parsing/discovery.py 와 같은 것을 쓴다 -- 거기서 리포트 파일 이름을 읽는 방식과
+# 여기서 폴더 이름을 읽는 방식이 달라지면 같은 코너를 다르게 부르게 된다.
+# 전압: 0p5000 / 0.54 / v0p55 / 0p55v  (소수점 표시가 반드시 있어야 하므로 125 는
+#       절대 전압으로 안 읽힌다).  온도: 125 / 125c / m25 / -25 / n40
+_V_TOK_RE = re.compile(r"(?<!\d)v?(\d+)[p.](\d+)v?(?!\d)", re.IGNORECASE)
+_T_TOK_RE = re.compile(r"(?<![\dA-Za-z])([mn]|-)?(\d+)c?(?![\dA-Za-z])", re.IGNORECASE)
 
 MARK = "### FIXED_PATH"
 IDXTAG = "idx="
@@ -90,6 +116,27 @@ CODE_INFO = {
                    "silently let that corner pick paths, which is the one thing "
                    "--skip-corner is for. check the spelling against the folder "
                    "names printed above."),
+    "E-YAML":    ("config.yaml needs PyYAML, which this python cannot import",
+                  "run with a python that has pyyaml, or drop --design and list "
+                  "the hidden corners with --skip-corner instead."),
+    "E-CONFIG":  ("config.yaml could not be read or expanded",
+                  "the message above comes from si_model. fix the config, or "
+                  "drop --design and use --skip-corner."),
+    "E-DESIGN":  ("--design is not in config.yaml",
+                  "use one of the names printed above. the name decides which "
+                  "voltage grid and which hidden corners apply, so it has to be "
+                  "exact."),
+    "E-CORNERNAME": ("a corner folder name cannot be read as voltage+level",
+                     "--design has to tell hidden from seen by the folder name. "
+                     "rename the folder so the voltage (0p54 / 0.54) and the "
+                     "level (cmax / rcmax / rcmin) are both in it, or drop "
+                     "--design and use --skip-corner."),
+    "E-DUPCORNER": ("two corner folders read as the same corner",
+                    "one of them would be picked and the other skipped by luck. "
+                    "rename so each corner appears once."),
+    "W-NOHIDDEN": ("a hidden corner has no folder under --root",
+                   "nothing was picked from it, so the holdout still holds. it "
+                   "just means that corner was never measured here."),
     "E-NOCAND":  ("no path is measured in every corner",
                   "the corners share no idx at all. check the files with "
                   "7_cut.py first -- W-IDXDIFF tells which corner is missing what."),
@@ -185,6 +232,72 @@ def scan_annot(path, tick=None):
                     "noidx": n_noidx, "dup": n_dup, "bytes": nbytes}
 
 
+def parse_corner_name(name, levels):
+    """폴더 이름 -> (전압, 레벨, 온도토큰). 못 읽으면 (None, ...) 로 돌려준다.
+
+    순서대로 **잘라내며** 찾는다(discovery.py 와 같은 방식). 레벨을 먼저 떼야
+    'rcmax' 안의 'cmax' 를 잘못 잡지 않고, 전압을 떼야 남은 숫자를 온도로 안전하게
+    읽을 수 있다.
+    """
+    rest = name
+    level = None
+    # 긴 이름부터 -- 'rcmax' 가 'cmax' 보다 먼저 걸려야 한다
+    for lv in sorted(levels, key=len, reverse=True):
+        m = re.search(r"(?<![A-Za-z])" + re.escape(lv) + r"(?![A-Za-z])",
+                      rest, re.IGNORECASE)
+        if m:
+            level = lv
+            rest = rest[:m.start()] + "|" + rest[m.end():]
+            break
+    volt = None
+    m = _V_TOK_RE.search(rest)
+    if m:
+        volt = float("%s.%s" % (m.group(1), m.group(2)))
+        rest = rest[:m.start()] + "|" + rest[m.end():]
+    temp = None
+    m = _T_TOK_RE.search(rest)
+    if m:
+        temp = ("m" if m.group(1) else "") + m.group(2)
+    return volt, level, temp
+
+
+def hidden_from_config(cfg_path, design):
+    """config.yaml -> ({(온도토큰, 전압, 레벨)}, 레벨이름들, 회로목록, 라벨목록).
+
+    판정은 si_model.run.grid_split 이 한다. 여기서 규칙을 다시 쓰지 않는다 --
+    모델이 숨긴 코너와 여기서 빼는 코너가 갈리면 holdout 이 무의미해진다.
+    """
+    pkg = os.path.dirname(os.path.abspath(cfg_path))
+    if not os.path.isdir(os.path.join(pkg, "si_model")):
+        return None, None, None, "no si_model package next to %s" % cfg_path
+    sys.path.insert(0, pkg)
+    try:
+        from si_model.run import load_project, expand, grid_split
+        from si_model.parsing.keys import corner_label
+    except ImportError as e:                         # noqa: BLE001
+        return None, None, None, str(e)
+    try:
+        proj = load_project(cfg_path)
+        models = expand(proj)
+    except Exception as e:                           # noqa: BLE001
+        return None, None, None, "%s: %s" % (type(e).__name__, e)
+
+    designs = sorted({m["design"] for m in models})
+    mine = [m for m in models if m["design"] == design]
+    if not mine:
+        return None, None, designs, None
+    hidden, levels, labels = set(), set(), []
+    for m in mine:
+        seen, hid = grid_split(proj, m)
+        token = str(m["cfg"]["data"]["temp"])
+        proc = m["cfg"]["data"]["corner_prefix"]
+        levels.update(m["cfg"]["data"]["rc_corners"])
+        for v, lv in hid:
+            hidden.add((token, float(v), str(lv)))
+            labels.append("%s @%s" % (corner_label(v, lv, proc), token))
+    return hidden, sorted(levels), designs, labels
+
+
 def corner_dirs(root):
     out = []
     for name in sorted(os.listdir(root)):
@@ -278,6 +391,10 @@ def main():
                     help="목록 파일이 이미 있어도 덮어쓴다")
     ap.add_argument("--skip-corner", action="append", default=[], metavar="NAME",
                     help="이 코너는 뽑기에서 뺀다 (여러 번 줄 수 있다)")
+    ap.add_argument("--design", metavar="NAME",
+                    help="이 회로의 hidden 코너를 config.yaml 에서 읽어 자동으로 뺀다")
+    ap.add_argument("--config", metavar="FILE",
+                    help="config.yaml 위치 (기본: si_corner_model_re/config.yaml)")
     args = ap.parse_args()
 
     print("=" * 68)
@@ -295,8 +412,63 @@ def main():
     if os.path.exists(out_path) and not args.force:
         code("E-EXISTS", "[ FAILED ] already there: %s" % out_path)
 
-    # ---- 읽을 파일 모으기 ------------------------------------------------
+    # ---- --design : hidden 코너를 config 에서 알아낸다 --------------------
     skip = set(args.skip_corner)
+    auto_skip = []
+    if args.design:
+        cfg_path = args.config or os.path.join(HERE, "si_corner_model_re",
+                                               "config.yaml")
+        if not os.path.isfile(cfg_path):
+            code("E-CONFIG", "[ FAILED ] no config.yaml at %s" % cfg_path,
+                 "           give --config <path>.")
+        hidden, levels, designs, extra = hidden_from_config(cfg_path, args.design)
+        if hidden is None and designs is None:
+            c = "E-YAML" if "yaml" in str(extra).lower() else "E-CONFIG"
+            code(c, "[ FAILED ] cannot read %s" % cfg_path,
+                 "           %s" % extra)
+        if hidden is None:
+            code("E-DESIGN", "[ FAILED ] no design %r in %s"
+                 % (args.design, cfg_path),
+                 "           designs: %s" % ", ".join(designs))
+        print("  design : %s   (%s)" % (args.design, cfg_path))
+        print("  hidden : %d corner(s) from config -- these will not pick"
+              % len(hidden))
+        for lab in extra:
+            print("             %s" % lab)
+
+        # 폴더 이름을 코너로 읽어 hidden 과 맞춘다. 못 읽는 폴더가 있으면 멈춘다 --
+        # hidden 인지 모르는 채로 그 코너에 경로를 고르게 할 수는 없다.
+        bad, byc = [], {}
+        for name, _ in corner_dirs(args.root):
+            v, lv, t = parse_corner_name(name, levels)
+            if v is None or lv is None:
+                bad.append(name)
+                continue
+            byc.setdefault((t, v, lv), []).append(name)
+        if bad:
+            code("E-CORNERNAME",
+                 "[ FAILED ] cannot read %d corner folder name(s):" % len(bad),
+                 *["           %s" % b for b in bad[:12]])
+        dup = ["%s = %s" % (k, ", ".join(v)) for k, v in byc.items() if len(v) > 1]
+        if dup:
+            code("E-DUPCORNER",
+                 "[ FAILED ] two folders read as the same corner:",
+                 *["           %s" % d for d in dup[:12]])
+        nofolder = []
+        for key in sorted(hidden):
+            hit = byc.get(key)
+            if hit:
+                auto_skip.extend(hit)
+            else:
+                nofolder.append("%sV %s @%s" % (key[1], key[2], key[0]))
+        skip |= set(auto_skip)
+        print("  matched: %d hidden corner(s) to a folder, %d with no folder"
+              % (len(auto_skip), len(nofolder)))
+        if nofolder:
+            print("           (not measured here: %s)" % ", ".join(nofolder[:8]))
+        print("")
+
+    # ---- 읽을 파일 모으기 ------------------------------------------------
     jobs, missing, skipped = [], [], []
     for name, d in corner_dirs(args.root):
         f = annot_in(d)
@@ -312,7 +484,8 @@ def main():
     if not jobs:
         code("E-NOTHING", "[ FAILED ] nothing to read under %s" % args.root)
     # 오타로 안 빠진 코너는 그대로 뽑기에 참여한다 -- 조용히 넘어가면 안 된다.
-    unknown = sorted(skip - set(skipped))
+    # --design 으로 붙은 이름은 폴더에서 가져온 것이라 늘 맞는다. 손으로 준 것만 본다.
+    unknown = sorted(set(args.skip_corner) - set(skipped))
     if unknown:
         have = [n for n, _ in corner_dirs(args.root)]
         code("E-SKIPNAME",
