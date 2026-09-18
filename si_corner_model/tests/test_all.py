@@ -1102,13 +1102,21 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     assert not fails
     rows = list(_csv.reader(open(fp, encoding="utf-8")))
     assert rows[0][:4] == ["design", "temp", "path_idx", "path_key"]
-    assert len(rows) == 1 + 24 and all(not r[2].startswith("[") for r in rows[1:])
+    blank = rows.index([])
+    paths, summ = rows[1:blank], rows[blank + 1:]
+    assert len(paths) == 24, "every path, and only paths, above the blank row"
     for temp in ("125", "m25"):
-        idx = [int(r[2]) for r in rows[1:] if r[1] == temp]
+        idx = [int(r[2]) for r in paths if r[1] == temp]
         assert len(idx) == 12 and idx == sorted(idx), "paths must be in idx order"
+    assert summ[0][:3] == ["design", "temp", "summary"] and summ[0][4:] == rows[0][4:]
+    assert [r[2] for r in summ[1:5]] == ["kind", "worst slack ps",
+                                         "sum of negative slack ps",
+                                         "paths below 0 (of 12)"]
+    kinds = {k for r in summ[1:] if r[2] == "kind" for k in r[4:]}
+    assert {"seen", "hidden", "interp", "extrap"} <= kinds
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
                       ["cfg"]["data"]["cache"]))
-    got = {int(r[2]): r[3] for r in rows[1:] if r[1] == "m25"}
+    got = {int(r[2]): r[3] for r in paths if r[1] == "m25"}
     assert got == {int(i): str(k) for i, k in zip(ds["path_idx"], ds["path_keys"])}
 
     # (3) a repeat never overwrites
@@ -1119,5 +1127,23 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     req = _predict_request(p, models, "0.58:rcmin", None, None)
     fp3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
     rows = list(_csv.reader(open(fp3, encoding="utf-8")))
-    assert {r[4] for r in rows[1:] if r[1] == "125"} == {""}
-    assert all(r[4] for r in rows[1:] if r[1] == "m25")
+    paths = rows[1:rows.index([])]
+    assert {r[4] for r in paths if r[1] == "125"} == {""}
+    assert all(r[4] for r in paths if r[1] == "m25")
+
+    # (5) the same request restricted to 125C still runs: rcmin is n/a there,
+    # cmax is predicted. It used to reject the whole request and write nothing.
+    only125 = select(expand(p), design="boomcore", temp="125")
+    req = _predict_request(p, only125, "0.58:cmax,0.62:rcmin", None, None)
+    fp4, fails = stage_predict_at(only125, p, req, "only125")
+    assert not fails
+    rows = list(_csv.reader(open(fp4, encoding="utf-8")))
+    paths = rows[1:rows.index([])]
+    assert len(paths) == 12 and all(r[4] for r in paths) and not any(r[5] for r in paths)
+    # a sweep restricted to 125C gets only 125C's levels as columns
+    req = _predict_request(p, only125, None, "0.5:0.6:0.1", None)
+    assert {l for _, l in req} == {"rcmax", "cmax"}
+    with pytest.raises(AssertionError, match="unknown level"):
+        _predict_request(p, only125, "0.58:rcmn", None, None)
+    with pytest.raises(AssertionError, match="nothing to predict"):
+        _predict_request(p, only125, None, "0.5:0.6:0.1", "rcmin")

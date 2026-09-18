@@ -1878,12 +1878,22 @@ def _predict_request(p: dict, models: list, at, sweep, level) -> list:
     have = set()
     for m in models:
         have.update(m["cfg"]["data"].get("rc_corners") or [])
-    levels = [l for l in order if l in have] + sorted(have - set(order))
+    # Two different questions, kept apart. Is the NAME a level at all -- a typo
+    # is an error. Does THIS selection have it -- if not, those cells are n/a.
+    # Checking the name against the selected models alone rejected a whole
+    # `--at 0.58:cmax,0.62:rcmin --temp 125` because 125C has no rcmin, and
+    # wrote nothing, although 0.58:cmax was fine; without --temp the same
+    # request was accepted with rcmin as n/a at 125C.
+    known = order + sorted(have - set(order))
+    levels = [l for l in known if l in have]      # the sweep's default columns
     if at:
         assert not level, "--level only applies to --sweep; --at names each level"
         req = _parse_at(at)
         for _, l in req:
-            assert l in levels, f"--at: unknown level {l!r}; levels here are {levels}"
+            assert l in known, f"--at: unknown level {l!r}; declared levels are {known}"
+        assert any(l in have for _, l in req), (
+            f"--at: the selected model(s) have none of these levels "
+            f"(they have {sorted(have)}) -- nothing to predict")
         return req
     vs = _parse_sweep(sweep)
     lo, hi = vs[0], vs[-1]
@@ -1894,7 +1904,10 @@ def _predict_request(p: dict, models: list, at, sweep, level) -> list:
                 vs.append(v)
     vs = sorted(set(vs))
     if level:
-        assert level in levels, f"--level: unknown level {level!r}; levels here are {levels}"
+        assert level in known, f"--level: unknown level {level!r}; declared levels are {known}"
+        assert level in have, (
+            f"--level {level}: the selected model(s) have no {level} "
+            f"(they have {sorted(have)}) -- nothing to predict")
     return [(v, l) for v in vs for l in ([level] if level else levels)]
 
 
@@ -2005,12 +2018,22 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
         D,T,2,<key>,<ps>,<ps>,...
 
     One row per path, in the report's own path order -- path_idx is the n of
-    `### FIXED_PATH idx=<n>` and path_key is its key= -- and nothing else in the
-    file, so it lines up with the reports and opens as a plain table.
+    `### FIXED_PATH idx=<n>` and path_key is its key= -- so it lines up with the
+    reports. After the last path, ONE blank row, then the per-corner summary
+    under a repeated header:
 
-    It first carried per-model summary rows on top and sorted paths worst-first.
-    That read as noise: the reader asked what the extra rows were and why the
-    paths were not in index order. The summary stays, on the screen only.
+        design,temp,summary,,<corner>,<corner>,...
+        D,T,kind,,seen,interp,...
+        D,T,worst slack ps,,...
+        D,T,sum of negative slack ps,,...
+        D,T,paths below 0 (of N),,...
+
+    At the bottom, not the top. On top it broke the two things a table is for:
+    row 2 was no longer a path (the reader asked why the paths were not in
+    index order), and a spreadsheet sort pulled the summary rows in among the
+    paths. Below a blank row it is out of the way of both -- a spreadsheet's
+    sort and filter range stops at the blank row -- and it is still saved,
+    rather than scrolling off the screen. `tail` shows it on a server.
 
     Every value is a prediction, including at corners that were measured.
     """
@@ -2043,7 +2066,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
                 c, kinds[k], float(np.nanmin(col)), float(col[col < 0].sum()),
                 int((col < 0).sum()), N))
         print("  measured voltages here: %.3f - %.3f V" % (vmin, vmax), flush=True)
-        results.append((m, keys, pidx, vals))
+        results.append((m, keys, pidx, vals, kinds))
 
     print("\n  kind: seen   = measured, used in training\n"
           "        hidden = measured, held out of training\n"
@@ -2063,10 +2086,27 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
     with open(fp, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["design", "temp", "path_idx", "path_key"] + cols)
-        for m, keys, pidx, vals in results:
+        for m, keys, pidx, vals, _ in results:
             d, t = m["design"], str(m["temp"])
             for i in np.argsort(pidx, kind="stable"):
                 w.writerow([d, t, int(pidx[i]), keys[i]] + [f1(x) for x in vals[i]])
+        w.writerow([])
+        w.writerow(["design", "temp", "summary", ""] + cols)
+        for m, keys, _, vals, kinds in results:
+            d, t = m["design"], str(m["temp"])
+            fin = [kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
+                   for k in range(len(cols))]
+            worst = [float(np.nanmin(vals[:, k])) if fin[k] else np.nan
+                     for k in range(len(cols))]
+            neg = [float(vals[:, k][vals[:, k] < 0].sum()) if fin[k] else np.nan
+                   for k in range(len(cols))]
+            # the count alone: "52/33412" in a cell is read as a date by Excel
+            nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else ""
+                    for k in range(len(cols))]
+            w.writerow([d, t, "kind", ""] + list(kinds))
+            w.writerow([d, t, "worst slack ps", ""] + [f1(x) for x in worst])
+            w.writerow([d, t, "sum of negative slack ps", ""] + [f1(x) for x in neg])
+            w.writerow([d, t, "paths below 0 (of %d)" % len(keys), ""] + nbad)
     n_paths = sum(len(r[1]) for r in results)
     print(f"\n[PREDICT] wrote {fp}  ({n_paths} paths x {len(cols)} corners, "
           f"{len(results)} model(s))", flush=True)
