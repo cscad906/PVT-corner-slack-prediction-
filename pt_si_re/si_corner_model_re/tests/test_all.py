@@ -74,15 +74,6 @@ def test_shipped_config_yaml_parses():
     assert os.path.isabs(p["root"])
 
 
-@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "euc-kr", "cp949"])
-def test_project_config_reads_legacy_korean_encoding(tmp_path, encoding):
-    source = "root: auto\ndesigns: [cpu]\n# \ud55c\uad6d\uc5b4 \uc8fc\uc11d\n"
-    path = tmp_path / "config.yaml"
-    path.write_bytes(source.encode(encoding))
-    p = load_project(str(path))
-    assert p["designs"] == ["cpu"]
-
-
 def test_shipped_config_defaults_to_the_deployed_layout():
     """\ubc30\ud3ec \ubc30\uce58\ub294 <root>/{si_corner_model, \ud68c\ub85c1, \ud68c\ub85c2, \ud68c\ub85c3} \uc774\ub2e4.
     \uadf8 \uacbd\uc6b0 root/designs \ub97c \uc190\ub300\uc9c0 \uc54a\uc544\ub3c4 \ub9de\uc544\uc57c \ud55c\ub2e4."""

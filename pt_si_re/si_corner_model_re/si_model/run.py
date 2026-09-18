@@ -34,7 +34,7 @@ import os
 import sys
 import traceback
 
-from .yaml_io import load_yaml
+import yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PROJECT = os.path.join(REPO_ROOT, "config.yaml")
@@ -92,7 +92,8 @@ si_corner_model \u2014 \uba85\ub839\uc740 `bash scripts/run.sh <\ub2e8\uacc4>` \
 
 # ------------------------------------------------------------------ expansion
 def load_project(fp: str) -> dict:
-    p = load_yaml(fp) or {}
+    with open(fp) as f:
+        p = yaml.safe_load(f) or {}
     root = os.environ.get("SI_ROOT") or p.get("root") or "auto"
     if str(root) == "auto":
         # The same model can live beside the design reports or one directory

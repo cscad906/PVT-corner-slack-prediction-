@@ -1,6 +1,6 @@
 """Slew training CLI -- adaptive-bandwidth OLS base + neural residual (no SI).
 
-    bash scripts/run.sh train            # config.yaml \uc5d0 task: slew \uc77c \ub54c
+    bash scripts/run.sh train            # config.yaml 에 task: slew 일 때
 
 Target = launch slew (ns). Base = per-corner weighted OLS (base.weighting); the
 neural CornerSetHead learns the base residual (all-seen leave-one-out). CAP is
@@ -322,7 +322,7 @@ class Trainer:
                    for n, rr in rows.items()}
         summary["hidden_cap_fetch_mape"] = cap_mape
         summary["best_epoch"] = best_ep + 1
-        # \ud788\ub4e0 \ucf54\ub108 \uc131\uc801\uc740 \uc804\uccb4 \uacbd\ub85c \uae30\uc900 \ud55c \uc904\ub9cc (train.py \uc640 \uac19\uc740 \uc774\uc720)
+        # 히든 코너 성적은 전체 경로 기준 한 줄만 (train.py 와 같은 이유)
         print(f"  [all paths] SLEW model {summary['all']['hidden_slew_mape']:.2f}%")
         print(f"  CAP (same-axis1 neighbour fetch) hidden MAPE = {cap_mape:.3f}%")
         with open(f"{out_dir}/summary.json", "w") as f:
