@@ -88,6 +88,18 @@ def test_shipped_config_defaults_to_the_deployed_layout():
     assert p["root"] == os.path.dirname(REPO_ROOT)
 
 
+def test_auto_root_finds_mif_mfc_reports_above_nested_repo(tmp_path, monkeypatch):
+    """A model copied under pt_si_re still finds sibling design reports."""
+    data_root = tmp_path / "academy_experiment"
+    nested_repo = data_root / "pt_si_re" / "si_corner_model_re"
+    nested_repo.mkdir(parents=True)
+    for design in ("MFC_Timing_Report", "MIF_Timing_Report"):
+        (data_root / design).mkdir()
+    monkeypatch.setattr("si_model.run.REPO_ROOT", str(nested_repo))
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    assert p["root"] == str(data_root)
+
+
 def test_repo_itself_is_not_mistaken_for_a_design(tmp_path):
     """root 밑에 이 repo 가 같이 있어도 회로로 잡히면 안 된다."""
     (tmp_path / os.path.basename(REPO_ROOT)).mkdir()      # si_corner_model

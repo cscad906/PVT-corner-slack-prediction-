@@ -20,7 +20,7 @@ base(OLS) 튜닝은 [OLS.md](OLS.md), 리포트 파싱은 [PARSING.md](PARSING.m
 
 | 키 | 기본 | 의미 |
 |---|---|---|
-| `root` | — | 회로 폴더들이 있는 디렉토리. `auto` = 이 repo 의 부모 디렉토리. **환경변수 `SI_ROOT` 가 우선** |
+| `root` | — | 회로 폴더들이 있는 디렉토리. `auto`는 모델의 부모와 그 위에서 `designs` 폴더가 있는 곳을 선택한다. 다른 위치라면 절대경로로 지정한다. **환경변수 `SI_ROOT` 가 우선** |
 | `designs` | `auto` | `auto`(root 밑 모든 하위폴더) / 리스트 `[a, b]` / **매핑**(회로별 override, 아래). **환경변수 `SI_DESIGNS=a,b` 가 우선** |
 | `temps[].tag` | — | 모델/폴더 이름에 쓰일 문자열 (`125`, `m25`) |
 | `temps[].token` | `tag` | **파일명 안의** 온도 토큰. tag 와 달라도 됨 |

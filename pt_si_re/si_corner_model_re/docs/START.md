@@ -117,6 +117,11 @@ files:
 리포트가 `setup/` 없이 회로 폴더 바로 밑에 있으면 `files: {subdir: ""}` 로 두면 된다
 (하위 몇 겹이든 재귀로 찾는다).
 
+`pt_si_re/si_corner_model_re`처럼 모델을 회로 폴더보다 한 단계 아래에 둔
+경우에도 `root: auto`가 MFC/MIF/PERIC0 폴더를 찾아 같은 `root`를 사용한다.
+`bash scripts/run.sh list`의 `root`와 `files` 줄을 확인한다. 회로 폴더가
+이 두 상위 위치에 없으면 `root`나 `SI_ROOT`에 실제 절대경로를 지정한다.
+
 ### 케이스 B — 회로 폴더 밑에 하위폴더가 있다
 
 ```

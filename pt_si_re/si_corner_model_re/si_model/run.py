@@ -96,7 +96,22 @@ def load_project(fp: str) -> dict:
         p = yaml.safe_load(f) or {}
     root = os.environ.get("SI_ROOT") or p.get("root") or "auto"
     if str(root) == "auto":
-        root = os.path.dirname(REPO_ROOT)
+        # The same model can live beside the design reports or one directory
+        # deeper under pt_si_re/. Prefer the nearby directory that actually
+        # contains the configured designs; retain the old parent default when
+        # the reports are not present in this checkout.
+        parent = os.path.dirname(REPO_ROOT)
+        names = os.environ.get("SI_DESIGNS")
+        names = ([x.strip() for x in names.split(",") if x.strip()] if names else
+                 p.get("designs"))
+        if isinstance(names, dict):
+            names = list(names)
+        if isinstance(names, list) and names:
+            candidates = (parent, os.path.dirname(parent))
+            root = max(candidates, key=lambda path: sum(
+                os.path.isdir(os.path.join(path, name)) for name in names))
+        else:
+            root = parent
     p["root"] = os.path.abspath(os.path.expanduser(str(root)))
     return p
 

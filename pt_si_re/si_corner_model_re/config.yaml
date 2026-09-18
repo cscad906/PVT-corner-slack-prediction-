@@ -13,18 +13,19 @@
 # =============================================================================
 
 # ─── 1. 경로 ─────────────────────────────────────────────────────────────────
-#  배치가 아래와 같으면 이 두 줄은 그대로 두면 된다 (고칠 것 없음):
+#  회로 폴더와 모델이 나란히 있거나, 모델이 pt_si_re/ 아래에 있으면 auto 가
+#  회로 폴더가 있는 상위 디렉토리를 찾는다:
 #
 #      academy_experiment/          <- root (auto 가 여기를 잡는다)
-#      ├── si_corner_model/         <- 이 repo. designs 에서 자동 제외됨
-#      ├── 회로1/  report.sspg_0p5000_125c_rcmax.rpt ...
-#      ├── 회로2/  ...
-#      └── 회로3/  ...
+#      ├── MFC_Timing_Report/  setup/report.sspg_...rpt
+#      ├── MIF_Timing_Report/  setup/report.sspg_...rpt
+#      ├── PERIC0_Timing_Report/ ...
+#      └── pt_si_re/si_corner_model_re/  <- 이 repo
 #
-root: auto                          # auto = 이 repo 의 부모 디렉토리
-                                    #        = /user/s5e9965p5/academy_experiment
-                                    #   repo 가 회로들과 다른 곳에 있으면 절대경로로 적는다
-                                    #   환경변수 SI_ROOT 가 우선한다
+root: auto                          # auto = 부모 또는 그 위에서 designs 폴더를 탐색
+                                    #   둘 다 없으면 repo 부모를 사용한다.
+                                    #   다른 곳에 있으면 절대경로로 적는다.
+                                    #   환경변수 SI_ROOT 가 우선한다.
 
 designs:                            # ★ 회로만 적는다. auto 로 두면 pr_si / spice 까지
   - MFC_Timing_Report               #   회로로 잘못 잡힌다.
