@@ -74,7 +74,7 @@ def test_shipped_config_yaml_parses():
     assert os.path.isabs(p["root"])
 
 
-@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "cp949"])
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "euc-kr", "cp949"])
 def test_project_config_reads_legacy_korean_encoding(tmp_path, encoding):
     source = "root: auto\ndesigns: [cpu]\n# 한국어 주석\n"
     path = tmp_path / "config.yaml"

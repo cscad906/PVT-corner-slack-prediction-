@@ -6,9 +6,12 @@ import yaml
 def load_yaml(path):
     with open(path, "rb") as f:
         raw = f.read()
-    try:
-        source = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        # Legacy EDA workstations may save the same YAML as Korean CP949.
-        source = raw.decode("cp949")
+    for encoding in ("utf-8-sig", "euc-kr", "cp949"):
+        try:
+            source = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise UnicodeError("Cannot decode YAML as UTF-8, EUC-KR, or CP949: " + str(path))
     return yaml.safe_load(source)
