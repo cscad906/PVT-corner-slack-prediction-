@@ -257,6 +257,22 @@ def build_design(cfg: dict, split: Split, y=None):
         from si_model.run import select_weighting
         cfg = select_weighting(y, split, phi, coords, cfg)
         caller_cfg["base"]["weighting"] = cfg["base"]["weighting"]
+    # Everything the three selections decided, in one place, so the checkpoint
+    # carries it and predict can reproduce THIS base instead of choosing again.
+    # Re-choosing at predict time is how a trained correction ends up on top of
+    # a base it never saw: a code or config change between train and predict --
+    # files copied across by hand, a default flipped -- re-selects silently.
+    # Measured: switching the base settings before predict moved predictions by
+    # 0.069 ps and mean error 0.123 -> 0.167 ps, with no error and no warning.
+    caller_cfg["base"]["_resolved"] = {
+        "v_order": int(cfg["base"]["axes"][0]["order"]),
+        "cross_terms": bool(cfg["base"].get("cross_terms", True)),
+        "cross_max_degree": int(cfg["base"].get("cross_max_degree", 3)),
+        "levels": {str(k): float(v) for k, v in
+                   (cfg["base"]["axes"][1].get("levels") or {}).items()},
+        "level_order": int(cfg["base"]["axes"][1]["order"]),
+        "weighting": str(cfg["base"].get("weighting", "plain")),
+    }
     return phi, coords, exps, names
 
 

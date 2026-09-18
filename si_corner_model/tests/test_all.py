@@ -991,3 +991,47 @@ def test_cell_taxonomy_defaults_are_safe():
     # an unknown library is not an error: it trains as <unk> + drive 1.0
     assert cell_family("SEC9T_WHATEVER_X4") == "<unk>"
     assert cell_drive("SEC9T_WHATEVER") == 1.0
+
+
+def test_predict_replays_the_training_base(real_tree, tmp_path, monkeypatch):
+    """predict must reproduce the base the weights were trained on, even when
+    the config would now choose a different one.
+
+    The model is a residual on the OLS base. predict used to rebuild the base
+    and re-run every selection, which reproduces training only while nothing
+    changes in between; with the base settings flipped before predict, the same
+    weights gave different predictions and a worse error, silently. Now the
+    checkpoint records the resolved base and predict replays it.
+    """
+    pytest.importorskip("torch")
+    import csv as _csv
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import expand, load_project, select, stage_predict, stage_train
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def model(base_over=None):
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        p["base"].update(base_over or {})
+        return select(expand(p), design="boomcore", temp="m25")[0]
+
+    m = model()
+    build(m["cfg"])
+    stage_train(m)
+    fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
+    trained = [float(r["model_ps"]) for r in _csv.DictReader(open(fp))]
+
+    # everything the base selection could decide, decided the other way
+    m2 = model({"select_on": "seen_loo", "weighting": "plain",
+                "level_coords": "declared"})
+    stage_predict(m2, "hidden")
+    replayed = [float(r["model_ps"]) for r in _csv.DictReader(open(fp))]
+
+    assert np.allclose(trained, replayed, atol=1e-9), (
+        "predict re-chose the base instead of replaying the trained one")

@@ -1738,19 +1738,60 @@ def stage_bundle(models: list) -> None:
               flush=True)
 
 
+def _pin_training_base(m: dict, ck: dict) -> None:
+    """Make predict use exactly the base the weights were trained on.
+
+    The model is a residual on top of the OLS base, so its output only means
+    something on that same base. predict used to rebuild the base from the
+    current config and re-run every selection -- level coordinates, basis,
+    weighting -- which reproduces training only while nothing has changed in
+    between. Change a default, copy in a newer run.py, edit a config key, and
+    the trained correction lands on a different base, silently: measured, that
+    moved predictions by 0.069 ps and mean error 0.123 -> 0.167 ps on the test
+    grid, with no error raised.
+
+    It also matters with nothing changed. Selection under select_on: hidden
+    reads held-out labels; a deployment drop has none, so a re-selection there
+    would fall back to seen-LOO and could pick a different basis than training
+    did. The decision belongs to training; predict should only replay it.
+
+    A checkpoint written before this existed has no record to replay. It still
+    predicts, re-selecting as before, and says once that it cannot vouch for
+    the base.
+    """
+    r = ((ck.get("cfg") or {}).get("base") or {}).get("_resolved")
+    if not r:
+        print("[PREDICT] checkpoint has no record of its training base (trained "
+              "before this was saved) -- the base is re-selected now and may "
+              "not match. Re-run train to pin it.", flush=True)
+        return
+    b = m["cfg"]["base"]
+    b["axes"][0]["order"] = int(r["v_order"])
+    b["cross_terms"] = bool(r["cross_terms"])
+    b["cross_max_degree"] = int(r["cross_max_degree"])
+    b["axes"][1]["levels"] = {str(k): float(v) for k, v in r["levels"].items()}
+    b["axes"][1]["order"] = int(r["level_order"])
+    b["weighting"] = str(r["weighting"])
+    # nothing is chosen again: every selection is replayed, not re-run
+    b["select"] = False
+    b["level_coords"] = "declared"
+    b["fit_level_values"] = False
+
+
 def stage_predict(m: dict, corners: str) -> None:
     import numpy as np
 
     from si_model.compat import load_checkpoint
 
     out_dir = m["cfg"]["train"]["out_dir"]
-    tr = _trainer(m)
     # Prefer the single shipped file (model.pt) when it exists; otherwise fall
     # back to the per-temperature checkpoint left by training -- the case where
-    # train->predict was run without bundle.
+    # train->predict was run without bundle. Loaded BEFORE the trainer is built,
+    # because the trainer computes the base, and the base has to be the one
+    # the weights were trained against.
     bundle = bundle_path(m)
     if os.path.exists(bundle):
-        b = load_checkpoint(bundle, map_location=tr.dev)
+        b = load_checkpoint(bundle, map_location="cpu")
         key = str(m["temp"])
         assert key in b["temps"], (
             f"{bundle} has no temperature {key} (it has: {sorted(b['temps'])}). "
@@ -1759,7 +1800,9 @@ def stage_predict(m: dict, corners: str) -> None:
     else:
         ckpt = os.path.join(out_dir, "best.pt")
         assert os.path.exists(ckpt), f"no checkpoint yet: {ckpt} (run train first)"
-        ck = load_checkpoint(ckpt, map_location=tr.dev)
+        ck = load_checkpoint(ckpt, map_location="cpu")
+    _pin_training_base(m, ck)
+    tr = _trainer(m)
     try:
         tr.model.load_state_dict(ck["model"])
         tr.enc.load_state_dict(ck["enc"])
