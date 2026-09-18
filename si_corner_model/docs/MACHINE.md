@@ -410,7 +410,8 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
 그 온도 파일은 안 만든다.
 
 - 한 줄 = 경로 하나, **리포트의 path 인덱스 순서대로**. 열은
-  `design, path_idx, path_key, <코너>, <코너>, ...`
+  `design, path_idx, path_key, <코너> slack (ps), <코너> slack (ps), ...`
+  (예: `0.570V_cmax slack (ps)`)
   - `path_idx` = 리포트의 `### FIXED_PATH idx=<n>` 의 n
   - `path_key` = 같은 줄의 `key=` (시작점->끝점)
   - 값 = 예측 slack (ps)

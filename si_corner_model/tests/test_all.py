@@ -1109,16 +1109,19 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
 
     head, paths, summ = read(by_temp["125"])
     assert head[:3] == ["design", "path_idx", "path_key"]
-    assert not any(c.endswith("_rcmin") for c in head), "125C has no rcmin: no column"
-    assert any(c.endswith("_cmax") for c in head) and any(c.endswith("_rcmax") for c in head)
+    assert all(c.endswith(" slack (ps)") for c in head[3:]), \
+        "every value column must say it is slack, and in ps"
+    assert not any("_rcmin" in c for c in head), "125C has no rcmin: no column"
+    assert any("_cmax" in c for c in head) and any("_rcmax" in c for c in head)
     assert len(paths) == 12 and all(c for r in paths for c in r), "no blank cells"
     head_m, paths_m, summ_m = read(by_temp["m25"])
-    assert any(c.endswith("_rcmin") for c in head_m)
+    assert any("_rcmin" in c for c in head_m)
     for rows_ in (paths, paths_m):
         idx = [int(r[1]) for r in rows_]
         assert idx == sorted(idx), "paths must be in FIXED_PATH idx order"
-    assert summ[0][:2] == ["design", "summary"] and summ[0][3:] == head[3:]
-    assert [r[1] for r in summ[1:]] == ["smallest slack (ps)",
+    assert summ[0][:3] == ["design", "", "summary"]
+    assert [c + " slack (ps)" for c in summ[0][3:]] == head[3:]
+    assert [r[2] for r in summ[1:]] == ["smallest slack (ps)",
                                         "sum of negative slacks (ps)",
                                         "paths with negative slack (out of 12)"]
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
@@ -1136,7 +1139,8 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     fps3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
     h125 = read([f for f in fps3 if "predict_125_" in f][0])[0]
     hm25 = read([f for f in fps3 if "predict_m25_" in f][0])[0]
-    assert h125[3:] == ["0.580V_cmax"] and hm25[3:] == ["0.580V_cmax", "0.620V_rcmin"]
+    assert h125[3:] == ["0.580V_cmax slack (ps)"]
+    assert hm25[3:] == ["0.580V_cmax slack (ps)", "0.620V_rcmin slack (ps)"]
     req = _predict_request(p, models, "0.62:rcmin", None, None)
     fps4, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "only_rcmin")
     assert len(fps4) == 1 and "predict_m25_" in fps4[0]

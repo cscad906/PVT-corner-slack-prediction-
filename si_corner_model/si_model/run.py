@@ -2026,14 +2026,14 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
     """Predict every model at the requested corners and write ONE FILE PER
     TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.csv.
 
-        design,path_idx,path_key,<corner>,<corner>,...
+        design,path_idx,path_key,<corner> slack (ps),<corner> slack (ps),...
         D,1,<key>,<ps>,<ps>,...
         D,2,<key>,<ps>,<ps>,...
                                                    <- one blank row
-        design,summary,,<corner>,<corner>,...
-        D,smallest slack (ps),,...
-        D,sum of negative slacks (ps),,...
-        D,paths with negative slack (out of N),,...
+        design,,summary,<corner>,<corner>,...
+        D,,smallest slack (ps),...
+        D,,sum of negative slacks (ps),...
+        D,,paths with negative slack (out of N),...
 
     Split by temperature because each temperature has its own RC corners --
     125C has rcmax and cmax, m25 adds rcmin -- so a single shared table had
@@ -2100,13 +2100,21 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
         fp = fps[t]
         with open(fp, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["design", "path_idx", "path_key"] + [cols[k] for k in keep])
+            # say what the numbers ARE, and in what unit: a bare corner name
+            # over a column of numbers left the reader asking whether it was
+            # slack at all. The summary header below keeps the bare names --
+            # its rows carry their own meaning and unit, and one is a count.
+            w.writerow(["design", "path_idx", "path_key"]
+                       + ["%s slack (ps)" % cols[k] for k in keep])
             for m, keys, pidx, vals, _ in grp:
                 for i in np.argsort(pidx, kind="stable"):
                     w.writerow([m["design"], int(pidx[i]), keys[i]]
                                + [f1(vals[i, k]) for k in keep])
             w.writerow([])
-            w.writerow(["design", "summary", ""] + [cols[k] for k in keep])
+            # the label sits in the path_key column, which is wide anyway:
+            # in path_idx it stretched that narrow column to the label's width
+            # in every `column -t` view of the file
+            w.writerow(["design", "", "summary"] + [cols[k] for k in keep])
             for m, keys, _, vals, kinds in grp:
                 fin = {k: kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
                        for k in keep}
@@ -2116,9 +2124,9 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
                 # the count alone: "52/33412" in a cell is read as a date by Excel
                 nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else "" for k in keep]
                 d = m["design"]
-                w.writerow([d, "smallest slack (ps)", ""] + [f1(x) for x in worst])
-                w.writerow([d, "sum of negative slacks (ps)", ""] + [f1(x) for x in neg])
-                w.writerow([d, "paths with negative slack (out of %d)" % len(keys), ""]
+                w.writerow([d, "", "smallest slack (ps)"] + [f1(x) for x in worst])
+                w.writerow([d, "", "sum of negative slacks (ps)"] + [f1(x) for x in neg])
+                w.writerow([d, "", "paths with negative slack (out of %d)" % len(keys)]
                            + nbad)
         written.append(fp)
         print(f"[PREDICT] wrote {fp}  ({sum(len(g[1]) for g in grp)} paths x "
