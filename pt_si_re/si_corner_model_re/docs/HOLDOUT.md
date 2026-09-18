@@ -6,6 +6,35 @@
 
 ---
 
+## 리포트가 없는 코너를 제외하고 Seen을 지정할 때
+
+특정 코너의 **리포트 파일 전체가 없다면** `seen_corners`를 온도별로 적는다.
+이 모드에서는 지정한 Seen과 `hidden_corners`의 정답 리포트만 읽고, 나머지
+코너는 데이터셋에서 제외한다. 따라서 제외한 코너의 리포트는 없어도 된다.
+
+```yaml
+temps:
+  - tag: "125"
+    token: 125
+    levels: [rcmax, cmax]
+    seen_corners: [[0.5, cmax], [0.54, cmax], [0.6, rcmax], [0.685, cmax]]
+    hidden_corners: [[0.54, rcmax], [0.6, cmax]]
+```
+
+위 예시는 125C의 `(0.5, rcmax)`, `(0.685, rcmax)`를 완전히 제외한다.
+`seen_corners`에는 앵커(`ref_voltage` × `ref_level`)가 반드시 있어야 한다.
+`hidden_corners`에는 **정답 리포트가 있는 평가 target**만 적는다. target의
+정답 리포트도 없다면 `hidden_corners` 대신 `query_corners`에 적는다. 그
+target은 예측만 하고 MAE에는 포함되지 않는다.
+
+`seen_corners` 모드에서는 `seen_voltages`, `hidden_voltages`,
+`hidden_levels`, `hidden_per_voltage`를 함께 쓰지 않는다. 설정을 바꾼 뒤
+`bash scripts/run.sh list`로 선택 코너와 제외 개수를 확인하고,
+`bash scripts/run.sh build`로 캐시를 다시 만든다. Seen이 너무 적으면 OLS
+기저가 불안정해질 수 있으므로 `list`의 Seen 수와 파라미터 수를 확인한다.
+
+---
+
 ## 1. 왜 온도마다 따로 적어야 하나
 
 이번 데이터는 온도마다 BEOL 레벨이 다르다:
@@ -127,6 +156,7 @@ temps:
 - `ref_level` 은 **모든 온도에 존재하는 레벨**이어야 한다. 이번엔 125C 에 `rcmin`
   이 없으므로 `cmax` 를 쓴다.
 - `seen_voltages` 와 `hidden_voltages` 는 **동시 사용 불가** (서로 모순).
+- `seen_corners` 를 쓰면 `hidden_corners` 이외의 홀드아웃 선택 키와 **동시 사용 불가**.
 - `hidden_per_voltage` 와 `hidden_corners` 는 **동시 사용 불가** (한 온도 안에서).
 - 숨긴 코너가 하나도 없고 `query_corners` 도 없으면 에러 — 예측할 대상이 없다.
 

@@ -336,6 +336,19 @@ def discover(cfg: dict, need_crosstalk: bool = True):
     """
     ann_by = discover_annotated(cfg)
     xt_by = discover_crosstalk(cfg) if need_crosstalk else None
+    selected = cfg["data"].get("selected_corners")
+    if selected:
+        # Explicit seen-corner mode: ignore other reports before the path
+        # intersection pass. A missing selected report is still an error.
+        missing_ann = sorted(set(selected) - set(ann_by))
+        missing_xt = sorted(set(selected) - set(xt_by)) if xt_by is not None else []
+        assert not missing_ann and not missing_xt, (
+            f"selected corners lack reports: annotated={missing_ann}, "
+            f"crosstalk={missing_xt}. Remove an unavailable seen corner; "
+            "use query_corners for a target with no ground truth")
+        ann_by = {c: ann_by[c] for c in selected}
+        if xt_by is not None:
+            xt_by = {c: xt_by[c] for c in selected}
     if xt_by is not None:
         only_a, only_x = set(ann_by) - set(xt_by), set(xt_by) - set(ann_by)
         assert not only_a and not only_x, \

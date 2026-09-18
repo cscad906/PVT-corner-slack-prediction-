@@ -72,6 +72,7 @@ env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
 | `ref_voltage` / `ref_level` | 앵커 코너. 다항식 원점(`dv = V − ref`)이자 경로 선택 기준 |
 | `level_values` | 레벨 이름 → 축 좌표 |
 | `query_corners` | 측정이 아예 없는 순수 예측 코너 |
+| `seen_corners` | 선택한 `(전압, BEOL)` 코너만 Seen으로 사용. 지정하지 않은 코너의 리포트는 없어도 됨. `hidden_corners`는 평가 target으로 별도 지정 |
 
 ### 앵커(`ref_*`) 규칙 — 어기면 에러
 
@@ -106,6 +107,7 @@ level_values: {rcmin: -1, cmax: 0, rcmax: 3}   # rcmax 를 멀리 -> 그 사이 
 corners:
   hidden_voltages: [0.54]                   # ① 이 전압의 모든 레벨 (행 통째)
   seen_voltages: []                         # ②  반대: 이것만 seen, 나머지 전압은 전부 hidden
+  seen_corners: []                          # 개별 Seen 지정 시에만 사용
   hidden_levels: [rcmin]                     # ③ 이 레벨의 모든 전압 (열 통째)
   hidden_corners: [[0.6, rcmax]]            # ④ 콕 집어 한 칸씩
   query_corners: [[0.57, cmax]]             # ⑤ 측정 자체가 없는 코너 (항상 hidden)
@@ -120,6 +122,9 @@ corners:
 | ⑤ `query_corners` | **검증이 아니라 실사용.** 정답이 없으니 지표에서 빠지고 예측값만 CSV 에 나온다 |
 
 ①~④ 는 정답이 있으므로 hidden 지표(`hidden_mae_ps`)에 들어간다. ⑤ 는 안 들어간다.
+`seen_corners` 를 지정하면 나열한 코너와 `hidden_corners` 만 리포트가 필요하고,
+나머지 코너는 완전히 제외된다. 이때 ①~③, `hidden_per_voltage` 는 함께 쓰지 않는다.
+온도별 예시는 [HOLDOUT.md](HOLDOUT.md)에 있다.
 
 **홀드아웃을 아예 안 하고 싶으면** ①~④ 를 모두 비우고 ⑤ 를 넣는다. 그러면 전
 코너가 seen 이고, 검증은 `run.sh base` 의 **seen-LOO** 수치로 한다.

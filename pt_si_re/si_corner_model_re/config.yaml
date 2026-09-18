@@ -56,6 +56,9 @@ temps:                              # 온도 = 분리 차원(모델이 갈린다
   - tag: "125"                      #   tag    = 모델/폴더 이름
     token: 125                      #   token  = 파일명 안의 온도 토큰
     levels: [rcmax, cmax]           #   levels = 그 온도에 존재하는 BEOL 레벨
+    # seen_corners: [[0.5, cmax], [0.54, cmax], [0.6, rcmax], [0.685, cmax]]
+    # 리포트가 없는 코너를 제외해야 할 때만 위 줄을 켠다. 앵커 (0.685, cmax) 필수.
+    # hidden_corners 는 정답 리포트가 있는 평가 target 으로 계속 둔다.
     # 숨길 코너는 온도마다 따로 적는다. 온도별로 levels 가 다르므로 전역 목록
     # 하나로는 표현 자체가 안 된다 (125C 엔 rcmin 이 없다).
     # 아래 corners.* 의 홀드아웃 키를 여기에 쓰면 이 온도에만 적용된다.
@@ -101,6 +104,11 @@ corners:
   #    전압마다 한 칸씩 흩어 빼는 게 낫다 -> hidden_corners 또는 hidden_per_voltage
   hidden_corners: []                # 콕 집어서 한 칸씩: [[0.6, rcmax], [0.54, rcmin]]
                                     #   (이번 데이터는 temps[] 안에서 온도별로 지정)
+  seen_corners: []                  # 비어 있으면 기존처럼 나머지 전부 seen.
+                                    #   지정하면 적은 코너만 학습 입력에 사용하고,
+                                    #   hidden_corners 만 평가 target 으로 사용한다.
+                                    #   그 외 코너의 리포트는 없어도 된다.
+                                    #   온도별 구성이 다르면 temps[] 안에 적는다.
   hidden_per_voltage: 0             # 0 = 안 씀. 1 이면 "모든 전압에서 한 칸씩" 을
                                     #   레벨을 돌아가며 자동 선택 (대각선으로 흩어짐).
                                     #   앵커 코너는 절대 안 고른다.

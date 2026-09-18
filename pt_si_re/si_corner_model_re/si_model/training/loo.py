@@ -78,22 +78,25 @@ def _hidden_axis1_values(cfg: dict) -> set:
     return out
 
 
-def _hidden_corner_pairs(cfg: dict) -> list:
-    """Individually named corners to hold out: ``[[0.6, cmax], [0.54, rcmax]]``.
+def _corner_pairs(cfg: dict, key: str) -> list:
+    """Convert individual ``[voltage, level]`` pairs to numeric axis coords.
 
-    Lets a specific (voltage, level) cell be hidden without hiding its whole row
-    or column -- the finest-grained holdout, useful when the grid is small and
-    dropping an entire voltage would cost too many anchors."""
+    Both ``hidden_corners`` and ``seen_corners`` use the same level map and
+    float32-safe matching rules."""
     lv = _level_map(cfg)
     out = []
-    for pair in cfg["split"].get("hidden_corners") or []:
-        assert len(pair) == 2, f"split.hidden_corners entry must be [voltage, level]: {pair!r}"
+    for pair in cfg["split"].get(key) or []:
+        assert len(pair) == 2, f"split.{key} entry must be [voltage, level]: {pair!r}"
         v, a = pair
         if isinstance(a, str):
-            assert a in lv, f"split.hidden_corners: unknown level {a!r}; known = {sorted(lv)}"
+            assert a in lv, f"split.{key}: unknown level {a!r}; known = {sorted(lv)}"
             a = lv[a]
         out.append((float(v), float(a)))
     return out
+
+
+def _hidden_corner_pairs(cfg: dict) -> list:
+    return _corner_pairs(cfg, "hidden_corners")
 
 
 def make_split(corners, vt: np.ndarray, cfg: dict,
@@ -101,6 +104,9 @@ def make_split(corners, vt: np.ndarray, cfg: dict,
     """Seen/hidden corner split.
 
     Voltage rule (pick one):
+      - ``seen_corners``: exact measured (V, level) pairs; all other loaded
+        corners are hidden. The project layer loads only these plus explicit
+        ``hidden_corners`` targets, so unrelated reports do not thin paths.
       - ``seen_voltages``: the measured V grid (e.g. a coarse grid); every
         voltage NOT on it is hidden -> predict the fine in-between corners.
       - ``hidden_voltages``: the explicit list of hidden voltages.
@@ -110,6 +116,7 @@ def make_split(corners, vt: np.ndarray, cfg: dict,
     is always hidden -- it can never be an input.
     """
     sv = cfg["split"].get("seen_voltages")
+    sc = _corner_pairs(cfg, "seen_corners")
     hv = set(cfg["split"].get("hidden_voltages") or [])
     h1 = _hidden_axis1_values(cfg)
     hc = _hidden_corner_pairs(cfg)
@@ -120,9 +127,11 @@ def make_split(corners, vt: np.ndarray, cfg: dict,
         return any(_near(v, x) for x in hv)
 
     hidden = np.array([
-        v_hidden(v)
-        or any(_near(a, x) for x in h1)
-        or any(_near(v, hvv) and _near(a, hav) for hvv, hav in hc)
+        (not any(_near(v, svv) and _near(a, sav) for svv, sav in sc))
+        if sc else
+        (v_hidden(v)
+         or any(_near(a, x) for x in h1)
+         or any(_near(v, hvv) and _near(a, hav) for hvv, hav in hc))
         for v, a in vt
     ])
     if measured is not None:

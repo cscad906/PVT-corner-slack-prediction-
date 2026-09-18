@@ -160,7 +160,7 @@ def list_designs(p: dict) -> "list[str]":
 # temperature under `temps[]`. They have to be overridable: temperatures do not
 # share a level set here (125C has no cmin), so "hide this corner" is not even
 # expressible as one global list.
-HOLDOUT_KEYS = ("hidden_voltages", "seen_voltages", "hidden_levels",
+HOLDOUT_KEYS = ("hidden_voltages", "seen_voltages", "seen_corners", "hidden_levels",
                 "hidden_corners", "hidden_per_voltage", "query_corners")
 
 
@@ -351,6 +351,29 @@ def expand(p: dict) -> "list[dict]":
                 assert lv in levels, (
                     f"temp {tag}: hidden_levels 의 {lv!r} 가 이 온도의 levels {levels} 에 없다")
             hidden_corners = [list(x) for x in ho.get("hidden_corners") or []]
+            seen_corners = [list(x) for x in ho.get("seen_corners") or []]
+            if seen_corners:
+                incompatible = [k for k in ("seen_voltages", "hidden_voltages",
+                                            "hidden_levels", "hidden_per_voltage")
+                                if ho.get(k)]
+                assert not incompatible, (
+                    f"temp {tag}: seen_corners 와 {incompatible} 는 같이 쓸 수 없다. "
+                    "평가 대상은 hidden_corners 에만 적을 것")
+                allowed = {(v, lv) for v in volts for lv in levels}
+                for key, pairs in (("seen_corners", seen_corners),
+                                   ("hidden_corners", hidden_corners)):
+                    for pair in pairs:
+                        assert len(pair) == 2 and (float(pair[0]), str(pair[1])) in allowed, (
+                            f"temp {tag}: {key} 의 {pair!r} 가 voltages x levels 에 없다")
+                    assert len({(float(v), str(lv)) for v, lv in pairs}) == len(pairs), (
+                        f"temp {tag}: {key} 에 중복 코너가 있다")
+                seen_set = {(float(v), str(lv)) for v, lv in seen_corners}
+                hidden_set = {(float(v), str(lv)) for v, lv in hidden_corners}
+                assert not (seen_set & hidden_set), (
+                    f"temp {tag}: seen_corners 와 hidden_corners 가 겹친다: "
+                    f"{sorted(seen_set & hidden_set)}")
+                assert (ref_v, ref_lv) in seen_set, (
+                    f"temp {tag}: 앵커 ({ref_v}, {ref_lv}) 는 seen_corners 에 있어야 한다")
             if ho.get("hidden_per_voltage"):
                 assert not hidden_corners, (
                     f"temp {tag}: hidden_per_voltage 와 hidden_corners 는 같이 쓰지 않는다")
@@ -395,6 +418,9 @@ def expand(p: dict) -> "list[dict]":
                     patterns["crosstalk_regex"] = fi["crosstalk_regex"]
             if ho.get("query_corners"):
                 data["query_corners"] = ho["query_corners"]
+            if seen_corners:
+                data["selected_corners"] = [corner_label(float(v), str(lv), proc)
+                                            for v, lv in seen_corners + hidden_corners]
             if pa.get("cell_taxonomy"):
                 data["cell_taxonomy"] = pa["cell_taxonomy"]
             for k in ("clock_pins", "ff_output_pins", "strip_path_idx"):
@@ -403,16 +429,20 @@ def expand(p: dict) -> "list[dict]":
 
             # ---- corner split -------------------------------------------
             n_seen_lv = len([lv for lv in levels if lv not in hidden_lv])
-            # `auto` = the full grid minus whatever this temperature hides, so a
-            # missing report still trips the guard even with a scattered holdout.
-            n_expect = len(seen_v) * n_seen_lv - len(hidden_corners)
+            # `auto` expects exactly the selected seen set, or the full grid
+            # minus holdouts in the default mode. Missing required reports
+            # remain errors in both modes.
+            n_expect = (len(seen_corners) if seen_corners else
+                        len(seen_v) * n_seen_lv - len(hidden_corners))
             min_seen = sp.get("min_seen", "auto")
             split = {
                 "hidden_levels": [lv for lv in hidden_lv if lv in levels],
                 "hidden_corners": hidden_corners,
                 "min_seen": (n_expect if str(min_seen) == "auto" else int(min_seen)),
             }
-            if seen_decl:
+            if seen_corners:
+                split["seen_corners"] = seen_corners
+            elif seen_decl:
                 split["seen_voltages"] = seen_v
             else:
                 split["hidden_voltages"] = hidden_v
@@ -427,12 +457,16 @@ def expand(p: dict) -> "list[dict]":
             base = {
                 "axes": [
                     {"name": "v", "ref": ref_v,
-                     "order": _order(b.get("v_order"), len(seen_v), 3),
+                     "order": _order(b.get("v_order"),
+                                     len({float(v) for v, _ in seen_corners})
+                                     if seen_corners else len(seen_v), 3),
                      "fit_scale": float(b.get("v_fit_scale", 1.0)),
                      "token_scale": float(b.get("v_token_scale", 0.1)),
                      "gap_cap": float(b.get("v_gap_cap", 2.5))},
                     {"name": "rc", "ref": lvals[ref_lv],
-                     "order": _order(b.get("level_order"), n_seen_lv, 2),
+                     "order": _order(b.get("level_order"),
+                                     len({str(lv) for _, lv in seen_corners})
+                                     if seen_corners else n_seen_lv, 2),
                      "levels": lvals,
                      "fit_scale": float(b.get("level_fit_scale", 1.0)),
                      "token_scale": float(b.get("level_token_scale", 1.0)),
@@ -514,9 +548,18 @@ def stage_list(models: list, p: dict) -> None:
                     or (sv_only and not any(abs(v - x) < 1e-9 for x in sv_only))
                     or any(abs(v - x) < 1e-9 for x in (s.get("hidden_voltages") or [])))
 
-        grid = [(v, lv) for v in vs for lv in d["rc_corners"]]
-        seen = [c for c in grid if not _is_hidden(*c)]
-        hid = [c for c in grid if _is_hidden(*c)]
+        full_grid = [(v, lv) for v in vs for lv in d["rc_corners"]]
+        if s.get("seen_corners"):
+            seen = [(float(v), str(lv)) for v, lv in s["seen_corners"]]
+            hid = [(float(v), str(lv)) for v, lv in s["hidden_corners"]]
+            grid = seen + hid
+            ignored = len(full_grid) - len(grid)
+            print(f"     selected: seen {len(seen)} + 평가 target {len(hid)}; "
+                  f"제외 {ignored}개 (리포트 불필요)")
+        else:
+            grid = full_grid
+            seen = [c for c in grid if not _is_hidden(*c)]
+            hid = [c for c in grid if _is_hidden(*c)]
         total = len(grid)
         if hid:
             print(f"     hidden  : {len(hid)}개 "
@@ -524,6 +567,8 @@ def stage_list(models: list, p: dict) -> None:
                   + (" ..." if len(hid) > 6 else ""))
         else:
             print("     hidden  : 없음 (query_corners 만 예측 대상)")
+        if d.get("query_corners"):
+            print(f"     query   : {len(d['query_corners'])}개 (정답 없이 예측만)")
         from si_model.config import expand_terms
         n_lv = len({lv for _, lv in seen})
         n_v = len({v for v, _ in seen})

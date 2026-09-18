@@ -475,6 +475,23 @@ def test_seen_voltages_inverts_the_rule(project):
                    for l in ("rcmax", "cmax", "rcmin")}
 
 
+def test_seen_corners_selects_individual_voltage_level_pairs(project):
+    project["temps"][0]["seen_corners"] = [
+        [0.5, "cmax"], [0.54, "cmax"], [0.6, "rcmax"], [0.685, "cmax"]]
+    cfg = expand(project)[0]["cfg"]
+    assert cfg["split"]["min_seen"] == 4
+    assert len(cfg["data"]["selected_corners"]) == 6  # seen 4 + target 2
+    assert "SSPG_0p5V_rcmax" not in cfg["data"]["selected_corners"]
+    assert "SSPG_0p685V_cmax" in cfg["data"]["selected_corners"]
+
+
+def test_seen_corners_rejects_hidden_overlap(project):
+    project["temps"][0]["seen_corners"] = [
+        [0.54, "rcmax"], [0.685, "cmax"]]
+    with pytest.raises(AssertionError, match="겹친다"):
+        expand(project)
+
+
 def test_holdout_rules_combine(project):
     got = _hidden_labels(project, {"hidden_voltages": [0.54], "hidden_levels": ["rcmin"],
                                    "hidden_corners": [[0.6, "rcmax"]]})
@@ -786,6 +803,35 @@ def test_end_to_end_build_and_base(real_tree, tmp_path, monkeypatch):
         assert mae_ps < 20, f"hidden base MAE 가 너무 크다: {mae_ps:.2f} ps"
         assert phi.shape[1] < split.seen.sum(), (
             "선택된 기저는 자유도를 최소 1 남겨야 한다 (seen-LOO 가 의미를 가지려면)")
+
+
+def test_missing_unselected_corner_report_does_not_drop_paths(real_tree, tmp_path,
+                                                                monkeypatch):
+    """Absent whole-corner reports may be excluded, while selected reports are required."""
+    from si_model.parsing.build_dataset import build
+    from si_model.training.loo import make_split
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    p["designs"] = ["boomcore"]
+    p["files"]["crosstalk_subdir"] = None
+    p["temps"][0]["seen_corners"] = [
+        [0.5, "cmax"], [0.54, "cmax"], [0.6, "rcmax"], [0.685, "cmax"]]
+    m = select(expand(p), design="boomcore", temp="125")[0]
+    reports = real_tree / "boomcore" / "setup"
+    (reports / "report.sspg_0p5000_125c_rcmax.rpt").unlink()
+    (reports / "report.sspg_0p6850_125c_rcmax.rpt").unlink()
+
+    build(m["cfg"])
+    ds = dict(np.load(m["cfg"]["data"]["cache"]))
+    assert ds["slack"].shape == (12, 6)  # no paths lost to absent excluded reports
+    sp = make_split(ds["corners"].tolist(), ds["vt"], m["cfg"])
+    assert sp.seen.sum() == 4 and sp.hidden.sum() == 2
+
+    (reports / "report.sspg_0p5400_125c_cmax.rpt").unlink()
+    with pytest.raises(AssertionError, match="selected corners lack reports"):
+        build(m["cfg"])
 
 
 def test_hidden_labels_never_reach_the_base(real_tree, tmp_path, monkeypatch):
