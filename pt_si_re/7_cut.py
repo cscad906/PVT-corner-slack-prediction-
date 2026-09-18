@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""7 - 다 만든 산출물을 **앞에서부터 경로 N개**만 남긴 사본으로 만든다.
+"""7 - 다 만든 산출물을 **경로 N개**만 남긴 사본으로 만든다.
 
     python3 7_cut.py --root round2 --keep 300
     python3 7_cut.py --file round2/tt0p6v25c_Cnom/tt0p6v25c_Cnom_fixed_annotated.txt --keep 300
+
+    # 코너별로 고르게 뽑은 목록으로 자르기 (7a_select.py 가 만든 파일)
+    python3 7a_select.py --root round2 --keep 3000
+    python3 7_cut.py     --root round2 --idx-file round2_select3000.idx
+
+자르는 방법이 두 가지다
+    --keep N        앞에서부터 N개. 파일에 나온 순서 그대로라 "제일 위험한 N개".
+                    코너마다 slack 분포가 밀려 있으면 제일 느린 코너 것만 남는다.
+    --idx-file <파일>  거기 적힌 idx 만 남긴다. 코너별 균형을 맞추고 싶을 때
+                    7a_select.py 로 목록을 먼저 만들어서 준다. 목록은 전 코너에
+                    똑같이 적용되므로 코너 간 짝은 그대로다.
+                    파일은 한 줄에 idx 하나. '#' 로 시작하는 줄은 주석이다.
 
 무엇을 왜 하나
     1_union.py --max-paths 는 **2회차를 돌리기 전에** 개수를 정하는 것이다.
@@ -52,6 +64,7 @@
 
     --root 를 주면 결과는 <root>_top<N>/ 에, 코너 폴더 구조를 그대로 만든다.
     --file 을 주면 그 파일 옆 top<N>/ 안에 같은 이름으로 만든다.
+    --idx-file 일 때는 top<N> 대신 sel<N> 을 쓴다(앞에서 자른 것과 헷갈리지 않게).
     --out 으로 직접 정할 수도 있다.
 
 메모리
@@ -60,7 +73,8 @@
 옵션
     --root <폴더>    코너 폴더들이 들어 있는 상위 폴더
     --file <파일>    파일 하나만 자를 때
-    --keep N         남길 경로 수                                    (필수)
+    --keep N         남길 경로 수 (앞에서부터)        --idx-file 과 둘 중 하나 필수
+    --idx-file <파일>  남길 idx 목록                  --keep 과 둘 중 하나 필수
     --out <경로>     결과 위치. 생략하면 위 규칙대로 정한다
     --jobs N (-j N)  동시에 처리할 코너 수 (기본 4)
     --force          결과가 이미 있어도 덮어쓴다
@@ -95,7 +109,11 @@ CODE_INFO = {
     "E-ARGS":    ("--root or --file is required (exactly one)",
                   "give --root <folder of corner folders>, or --file <one file>."),
     "E-KEEP":    ("--keep must be 1 or more",
-                  "give the number of paths to keep, e.g. --keep 300."),
+                  "give the number of paths to keep, e.g. --keep 300, "
+                  "or --idx-file <list> instead."),
+    "E-IDXFILE": ("--idx-file is unusable",
+                  "it must exist and hold one idx per line ('#' starts a "
+                  "comment). 7a_select.py writes that file."),
     "E-NOROOT":  ("the folder or file does not exist",
                   "check the path."),
     "E-NOTHING": ("no file to cut was found",
@@ -123,6 +141,10 @@ CODE_INFO = {
                   "that corner was skipped for the missing one. Run "
                   "4_all_corners.py --phase 1 (annotation) or --phase 2 "
                   "(crosstalk) for it before handing the data over."),
+    "W-IDXMISS": ("a file is missing some idx asked for by --idx-file",
+                  "those paths are not in that corner, so the corners no longer "
+                  "hold the same set. rebuild the list with 7a_select.py -- it "
+                  "only picks idx that every corner measured."),
     "W-NOIDX":   ("some marker lines carry no readable idx",
                   "the block was still kept -- cutting goes by order, not by "
                   "number. But idx is how corners are paired, so check the file."),
@@ -171,8 +193,25 @@ def idx_of(line):
     return n if got else None
 
 
-def cut_blocks(src, dst, keep, tick=None):
-    """앞에서부터 블록 N개만 남긴다. 한 줄씩 흘려 보낸다.
+def read_idx_file(path):
+    """--idx-file -> idx 집합. 한 줄에 하나, '#' 뒤는 주석. 못 읽으면 None."""
+    want = set()
+    with open(path, "r", errors="ignore") as fh:
+        for line in fh:
+            s = line.split("#", 1)[0].strip()
+            if not s:
+                continue
+            try:
+                want.add(int(s))
+            except ValueError:
+                return None
+    return want or None
+
+
+def cut_blocks(src, dst, keep, tick=None, want=None):
+    """블록을 골라 남긴다. 한 줄씩 흘려 보낸다.
+
+    want 가 없으면 앞에서부터 keep 개. want 가 있으면 그 idx 인 블록만.
 
     첫 블록 앞의 머리말은 그대로 옮긴다. 지금 산출물에는 머리말이 없지만,
     있어도 잃지 않게 해 둔다.
@@ -201,10 +240,13 @@ def cut_blocks(src, dst, keep, tick=None):
                     measured += 1
                 this_ok = False
                 total += 1
-                writing = kept < keep          # 번호가 아니라 순서로 자른다
+                i = idx_of(line)
+                if want is None:
+                    writing = kept < keep      # 번호가 아니라 순서로 자른다
+                else:
+                    writing = i in want        # 이때만 번호를 본다
                 if writing:
                     kept += 1
-                    i = idx_of(line)
                     idxs.append(i)
                     if i is None:
                         noidx += 1
@@ -217,13 +259,37 @@ def cut_blocks(src, dst, keep, tick=None):
     return kept, total, measured, noidx, idxs
 
 
-def cut_tcl(src, dst, keep):
-    """fixed_paths.tcl 의 FIXED_PATHS 목록을 앞 N개만 남긴다.
+def tcl_idx_of(line):
+    """목록 한 줄에서 idx. 항목의 key 가 '...->...#<idx>' 라 거기서 뗀다.
+
+    못 읽으면 None -- 부르는 쪽이 순서(몇 번째 항목인가)로 대신 센다.
+    """
+    p = line.find("{{")
+    if p < 0:
+        return None
+    q = line.find("}", p + 2)
+    if q < 0:
+        return None
+    key = line[p + 2:q]
+    h = key.rfind("#")
+    if h < 0:
+        return None
+    try:
+        return int(key[h + 1:])
+    except ValueError:
+        return None
+
+
+def cut_tcl(src, dst, keep, want=None):
+    """fixed_paths.tcl 의 FIXED_PATHS 목록에서 항목을 골라 남긴다.
 
     항목은 한 줄에 하나다(1_union.py 가 그렇게 쓴다). 목록 밖의 줄 -- 머리말,
     proc, 리포트 루프 -- 은 하나도 안 건드린다.
+
+    want 가 없으면 앞에서 keep 개. 있으면 key 끝의 '#<idx>' 가 목록에 있는 항목만.
     """
     total = kept = 0
+    idxs = []
     state = 0          # 0=목록 전, 1=목록 안, 2=목록 후
     with open(src, "r", errors="ignore") as fi, wopen(dst) as fo:
         for line in fi:
@@ -239,18 +305,26 @@ def cut_tcl(src, dst, keep):
                     continue
                 if line.lstrip().startswith("{"):
                     total += 1
-                    if total <= keep:
+                    i = tcl_idx_of(line)
+                    if want is None:
+                        take = total <= keep
+                        # key 를 못 읽었으면 몇 번째인가로 대신 센다.
+                        i = total if i is None else i
+                    else:
+                        take = i in want
+                    if take:
                         kept += 1
+                        idxs.append(i)
                         fo.write(line)
                     continue
                 fo.write(line)       # 목록 안의 주석/빈 줄은 그대로
                 continue
             fo.write(line)
-    # tcl 에는 '경로가 잡혔나' 라는 개념이 없다. 목록 순서가 곧 idx 라 1..kept.
-    return kept, total, kept, 0, list(range(1, kept + 1))
+    # tcl 에는 '경로가 잡혔나' 라는 개념이 없다. 남긴 항목이 곧 측정할 경로다.
+    return kept, total, kept, 0, idxs
 
 
-def cut_one(src, dst, keep, tick=None):
+def cut_one(src, dst, keep, tick=None, want=None):
     """확장자를 보고 알맞은 방식으로 자른다."""
     d = os.path.dirname(os.path.abspath(dst))
     if not os.path.isdir(d):
@@ -262,8 +336,8 @@ def cut_one(src, dst, keep, tick=None):
             if not os.path.isdir(d):
                 raise
     if src.endswith(".tcl"):
-        return cut_tcl(src, dst, keep)
-    return cut_blocks(src, dst, keep, tick)
+        return cut_tcl(src, dst, keep, want)
+    return cut_blocks(src, dst, keep, tick, want)
 
 
 def corner_dirs(root):
@@ -329,8 +403,10 @@ def main():
         description="최종 산출물을 앞에서부터 경로 N개만 남긴 사본으로 만든다.")
     ap.add_argument("--root", help="코너 폴더들이 들어 있는 상위 폴더")
     ap.add_argument("--file", help="파일 하나만 자를 때")
-    ap.add_argument("--keep", type=int, required=True, metavar="N",
-                    help="남길 경로 수 (앞에서부터)")
+    ap.add_argument("--keep", type=int, metavar="N",
+                    help="남길 경로 수 (앞에서부터). --idx-file 과 둘 중 하나")
+    ap.add_argument("--idx-file", metavar="FILE",
+                    help="남길 idx 목록 (7a_select.py 산출물). --keep 과 둘 중 하나")
     ap.add_argument("--out", help="결과 위치. 생략하면 <root>_top<N> / <폴더>/top<N>")
     ap.add_argument("--jobs", "-j", type=int, default=4, metavar="N",
                     help="동시에 처리할 코너 수 (기본 4)")
@@ -338,8 +414,29 @@ def main():
                     help="결과가 이미 있어도 덮어쓴다")
     args = ap.parse_args()
 
+    # --keep 은 "앞에서 N개", --idx-file 은 "이 번호들만". 둘 중 하나만 준다.
+    want = None
+    if args.idx_file:
+        if args.keep is not None:
+            code("E-KEEP", "[ FAILED ] give either --keep or --idx-file, not both.")
+        if not os.path.isfile(args.idx_file):
+            code("E-IDXFILE", "[ FAILED ] no such file: %s" % args.idx_file)
+        want = read_idx_file(args.idx_file)
+        if not want:
+            code("E-IDXFILE", "[ FAILED ] no idx read from %s" % args.idx_file)
+        args.keep = len(want)          # 아래 표/검사는 그대로 이 숫자를 쓴다
+        tag = "sel"
+    else:
+        if args.keep is None:
+            code("E-KEEP", "[ FAILED ] give --keep <N> or --idx-file <file>.")
+        tag = "top"
+
     print("=" * 68)
-    print("7 - cut to the first %d paths" % args.keep)
+    if want is None:
+        print("7 - cut to the first %d paths" % args.keep)
+    else:
+        print("7 - cut to the %d idx listed in %s"
+              % (args.keep, os.path.basename(args.idx_file)))
     print("=" * 68)
 
     if bool(args.root) == bool(args.file):
@@ -361,7 +458,7 @@ def main():
                 dst = os.path.join(dst, base)
         else:
             dst = os.path.join(os.path.dirname(os.path.abspath(args.file)),
-                               "top%d" % args.keep, base)
+                               "%s%d" % (tag, args.keep), base)
         jobs.append(("(file)", args.file, dst))
         out_root = os.path.dirname(os.path.abspath(dst))
     else:
@@ -371,7 +468,7 @@ def main():
         if not corners:
             code("E-NOROOT", "[ FAILED ] no corner folder under %s" % args.root)
         out_root = args.out or (os.path.abspath(args.root.rstrip("/\\"))
-                                + "_top%d" % args.keep)
+                                + "_%s%d" % (tag, args.keep))
         for name, d in corners:
             got = {"annot": None, "xtalk": None}
             for src, rel in targets_in(d):
@@ -406,7 +503,11 @@ def main():
 
     print("  from   : %s" % os.path.abspath(args.root or args.file))
     print("  to     : %s" % os.path.abspath(out_root))
-    print("  keep   : first %d paths per file" % args.keep)
+    if want is None:
+        print("  keep   : first %d paths per file" % args.keep)
+    else:
+        print("  keep   : %d listed idx per file   (%s)"
+              % (args.keep, os.path.abspath(args.idx_file)))
     print("  files  : %d   (%.0f MB to read)" % (len(jobs), total_mb))
 
     # 무엇이 들어갔는지 **돌리기 전에** 보여 준다. 코너마다 최종 2종이 다 있는지가
@@ -474,7 +575,7 @@ def main():
         kept = total = meas = noidx = None
         idxs = []
         try:
-            kept, total, meas, noidx, idxs = cut_one(src, dst, args.keep, tick)
+            kept, total, meas, noidx, idxs = cut_one(src, dst, args.keep, tick, want)
         except Exception as e:                       # noqa: BLE001
             err = str(e)
         took = time.time() - t0
@@ -487,8 +588,10 @@ def main():
             tail = "no '### FIXED_PATH' marker -- is this a fixed_paths report?"
         else:
             note = []
-            if total < args.keep:
+            if want is None and total < args.keep:
                 note.append("short")
+            if want is not None and kept < args.keep:
+                note.append("missing:%d" % (args.keep - kept))
             if meas < kept:
                 note.append("empty:%d" % (kept - meas))
             if noidx:
@@ -520,8 +623,8 @@ def main():
     # 표는 항상 같은 순서로 낸다. 끝난 순서로 내면 돌릴 때마다 달라진다.
     counts = set()
     idxsets = {}
-    short, failed, empties = [], [], []
-    noidx_all = n_block_files = 0
+    short, failed, empties, missing = [], [], [], []
+    noidx_all = n_block_files = n_tcl_files = 0
     for name, src, kept, total, meas, noidx, idxs, err in done:
         base = os.path.basename(src)
         if err:
@@ -529,10 +632,21 @@ def main():
             continue
         if total == 0:
             continue
-        n_block_files += (0 if src.endswith(".tcl") else 1)
+        if src.endswith(".tcl"):
+            n_tcl_files += 1
+        else:
+            n_block_files += 1
         noidx_all += noidx
-        if total < args.keep:
-            short.append("%s / %s : has %d, asked %d" % (name, base, total, args.keep))
+        if want is None:
+            if total < args.keep:
+                short.append("%s / %s : has %d, asked %d"
+                             % (name, base, total, args.keep))
+        elif kept < args.keep:
+            # 목록에 있는데 이 파일엔 없는 idx. 코너 간 짝이 깨지는 신호다.
+            gone = sorted(want - set(i for i in idxs if i is not None))
+            missing.append("%s / %s : %d of %d idx not in this file, e.g. %s"
+                           % (name, base, args.keep - kept, args.keep,
+                              ", ".join(str(g) for g in gone[:5])))
         if not src.endswith(".tcl"):
             counts.add(kept)
             idxsets.setdefault(
@@ -560,8 +674,10 @@ def main():
                      "not a fixed_paths report?"))
             continue
         note = []
-        if total < args.keep:
+        if want is None and total < args.keep:
             note.append("short")
+        if want is not None and kept < args.keep:
+            note.append("missing:%d" % (args.keep - kept))
         if meas < kept:
             note.append("empty:%d" % (kept - meas))
         if noidx:
@@ -574,7 +690,9 @@ def main():
     print("-" * 68)
     for f in failed:
         print("  [ FAILED ] %s" % f)
-    if n_block_files == 0 and not failed:
+    # tcl 만 자른 경우는 마커가 없는 게 정상이다. 그때까지 E-NOMARK 로
+    # 끝내면 멀쩡히 잘라 놓고 실패로 보고하게 된다.
+    if n_block_files == 0 and n_tcl_files == 0 and not failed:
         code("E-NOMARK", "")
 
     print("  kept per file : %s" % (", ".join(str(c) for c in sorted(counts)) or "-"))
@@ -601,6 +719,10 @@ def main():
                        ["  [ CHECK ] %d different idx sets among the files:"
                         % len(idxsets)]
                        + ["    %s ..." % ", ".join(v[:2]) for v in idxsets.values()]))
+    if missing:
+        issues.append(("W-IDXMISS",
+                       ["  [ CHECK ] some listed idx are not in the file:"]
+                       + ["    %s" % s for s in missing[:12]]))
     if noidx_all:
         issues.append(("W-NOIDX",
                        ["  [ CHECK ] %d kept block(s) had no readable idx."
@@ -619,7 +741,10 @@ def main():
                        + ["    %s" % s for s in nofinal[:12]]))
 
     if not issues:
+        # code() 는 OK- 면 끝내지 않고 돌아온다. 여기서 직접 끝낸다
+        # (안 그러면 아래 issues[0] 에서 죽는다).
         code("OK-CUT")
+        return
     for c, lines in issues:
         print("")
         for ln in lines:
