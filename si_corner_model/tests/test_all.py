@@ -1109,11 +1109,14 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
         idx = [int(r[2]) for r in paths if r[1] == temp]
         assert len(idx) == 12 and idx == sorted(idx), "paths must be in idx order"
     assert summ[0][:3] == ["design", "temp", "summary"] and summ[0][4:] == rows[0][4:]
-    assert [r[2] for r in summ[1:5]] == ["kind", "worst slack ps",
-                                         "sum of negative slack ps",
-                                         "paths below 0 (of 12)"]
-    kinds = {k for r in summ[1:] if r[2] == "kind" for k in r[4:]}
-    assert {"seen", "hidden", "interp", "extrap"} <= kinds
+    assert [r[2] for r in summ[1:5]] == ["corner type", "smallest slack (ps)",
+                                         "sum of negative slacks (ps)",
+                                         "paths with negative slack (out of 12)"]
+    from si_model.run import CORNER_TYPE
+    kinds = {k for r in summ[1:] if r[2] == "corner type" for k in r[4:]}
+    assert {CORNER_TYPE[k] for k in ("seen", "hidden", "interp", "extrap")} <= kinds
+    assert not any("," in v for v in CORNER_TYPE.values()), \
+        "a comma in a label breaks `column -s, -t`"
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
                       ["cfg"]["data"]["cache"]))
     got = {int(r[2]): r[3] for r in paths if r[1] == "m25"}

@@ -1783,6 +1783,9 @@ def _pin_training_base(m: dict, ck: dict) -> None:
     b["select"] = False
     b["level_coords"] = "declared"
     b["fit_level_values"] = False
+    # the level coordinates now differ from the cache's BY DESIGN -- they are
+    # the trained ones -- so relabel_levels must not report it as a config edit
+    b["_pinned"] = True
 
 
 def _load_predictor(m: dict):
@@ -2010,6 +2013,19 @@ def _predict_one_model(m: dict, req: list):
     return keys, pidx, vals, kinds, (vmin, vmax)
 
 
+# What each requested corner is, in words a reader understands without a
+# legend. The first version printed `kind: seen / hidden / interp / extrap`,
+# and the reader's response was "what is kind -- who would understand that?"
+# No commas: `column -s, -t` splits on every comma, quoted or not.
+CORNER_TYPE = {
+    "seen": "measured: training corner",
+    "hidden": "measured: test corner",
+    "interp": "not measured: inside measured voltage range",
+    "extrap": "not measured: OUTSIDE measured voltage range - unreliable",
+    "n/a": "this level does not exist at this temperature",
+}
+
+
 def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE file.
 
@@ -2023,10 +2039,10 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
     under a repeated header:
 
         design,temp,summary,,<corner>,<corner>,...
-        D,T,kind,,seen,interp,...
-        D,T,worst slack ps,,...
-        D,T,sum of negative slack ps,,...
-        D,T,paths below 0 (of N),,...
+        D,T,corner type,,measured: training corner,...
+        D,T,smallest slack (ps),,...
+        D,T,sum of negative slacks (ps),,...
+        D,T,paths with negative slack (out of N),,...
 
     At the bottom, not the top. On top it broke the two things a table is for:
     row 2 was no longer a path (the reader asked why the paths were not in
@@ -2055,26 +2071,25 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             print(f"!!!!! FAILED predict: {m['name']} -- continuing", flush=True)
             continue
         N = len(keys)
-        print("  %-14s %-7s %12s %16s %15s" % (
-            "corner", "kind", "worst slack", "sum of negative", "paths below 0"))
+        print("  %-13s  %15s  %17s  %22s   %s" % (
+            "corner", "smallest slack", "sum of negatives",
+            "paths with slack < 0", "corner type"))
         for k, c in enumerate(cols):
             col = vals[:, k]
             if kinds[k] == "n/a" or not np.isfinite(col).any():
-                print("  %-14s %-7s %12s %16s %15s" % (c, kinds[k], "-", "-", "-"))
+                print("  %-13s  %15s  %17s  %22s   %s" % (
+                    c, "-", "-", "-", CORNER_TYPE[kinds[k]]))
                 continue
-            print("  %-14s %-7s %9.1f ps %13.1f ps %9d / %d" % (
-                c, kinds[k], float(np.nanmin(col)), float(col[col < 0].sum()),
-                int((col < 0).sum()), N))
-        print("  measured voltages here: %.3f - %.3f V" % (vmin, vmax), flush=True)
+            print("  %-13s  %12.1f ps  %14.1f ps  %13d / %-6d   %s" % (
+                c, float(np.nanmin(col)), float(col[col < 0].sum()),
+                int((col < 0).sum()), N, CORNER_TYPE[kinds[k]]))
+        print("  measured voltages for this model: %.3f - %.3f V" % (vmin, vmax),
+              flush=True)
         results.append((m, keys, pidx, vals, kinds))
 
-    print("\n  kind: seen   = measured, used in training\n"
-          "        hidden = measured, held out of training\n"
-          "        interp = not measured, inside the measured voltage range\n"
-          "        extrap = not measured, OUTSIDE that range -- do not trust\n"
-          "        n/a    = this temperature has no such level (left blank)\n"
-          "  SI (crosstalk) is off at interp/extrap corners: there is no report "
-          "for them.", flush=True)
+    print("\n  Every value is a model prediction, measured corners included.\n"
+          "  Crosstalk (SI) is not modelled at corners that were not measured: "
+          "there is no crosstalk report for them.", flush=True)
     if not results:
         return None, failed
 
@@ -2103,10 +2118,11 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             # the count alone: "52/33412" in a cell is read as a date by Excel
             nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else ""
                     for k in range(len(cols))]
-            w.writerow([d, t, "kind", ""] + list(kinds))
-            w.writerow([d, t, "worst slack ps", ""] + [f1(x) for x in worst])
-            w.writerow([d, t, "sum of negative slack ps", ""] + [f1(x) for x in neg])
-            w.writerow([d, t, "paths below 0 (of %d)" % len(keys), ""] + nbad)
+            w.writerow([d, t, "corner type", ""] + [CORNER_TYPE[k] for k in kinds])
+            w.writerow([d, t, "smallest slack (ps)", ""] + [f1(x) for x in worst])
+            w.writerow([d, t, "sum of negative slacks (ps)", ""] + [f1(x) for x in neg])
+            w.writerow([d, t, "paths with negative slack (out of %d)" % len(keys), ""]
+                       + nbad)
     n_paths = sum(len(r[1]) for r in results)
     print(f"\n[PREDICT] wrote {fp}  ({n_paths} paths x {len(cols)} corners, "
           f"{len(results)} model(s))", flush=True)

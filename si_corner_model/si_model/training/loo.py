@@ -137,7 +137,11 @@ def relabel_levels(corners, vt: np.ndarray, cfg: dict) -> np.ndarray:
     # there reads as a config problem in the middle of a training run, which is
     # how it got reported. Only `declared` can differ for a reason worth
     # hearing: someone edited level_values since the cache was built.
-    if changed and str(cfg["base"].get("level_coords", "measured")) != "measured":
+    # Nor when predict has pinned the trained base: those coordinates differ
+    # from the cache's by design, and the message would read as a config edit
+    # nobody made -- which is exactly how it was reported.
+    if (changed and str(cfg["base"].get("level_coords", "measured")) != "measured"
+            and not cfg["base"].get("_pinned")):
         print(f"[LEVELS] level coordinates re-derived from config for "
               f"{len(changed)} corner(s): corners.level_values differs from "
               f"what the cache was built with. Using the config; no rebuild "
