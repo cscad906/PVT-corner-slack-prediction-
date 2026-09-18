@@ -428,7 +428,7 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
   | `measured: test corner` | 측정됨, 학습에서 가려둔 테스트 코너 |
   | `not measured: inside measured voltage range` | 측정 안 함, 측정된 전압 범위 안 |
   | `not measured: OUTSIDE measured voltage range - unreliable` | 측정 안 함, 범위 밖 — 믿지 말 것 |
-  | `this level does not exist at this temperature` | 그 온도에 없는 레벨 (예: 125C 의 rcmin) — 값 칸은 빈칸 |
+  | `no rcmin reports at temperature 125` | 그 온도에는 그 RC 코너 리포트가 없음 (125C 는 rcmax·cmax 만 있음) — 값 칸은 빈칸 |
 - **온도별로 따로 받고 싶으면 `--temp` 를 준다.** 파일 이름에 온도가 들어가서
   (`predict_125_...`, `predict_m25_...`) 두 번 돌려도 서로 안 덮는다. `--temp` 를
   안 주면 모든 온도가 파일 하나에 들어간다

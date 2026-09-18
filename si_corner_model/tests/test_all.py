@@ -1133,6 +1133,9 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     paths = rows[1:rows.index([])]
     assert {r[4] for r in paths if r[1] == "125"} == {""}
     assert all(r[4] for r in paths if r[1] == "m25")
+    summ = rows[rows.index([]) + 1:]
+    assert [r[4] for r in summ if r[1] == "125" and r[2] == "corner type"] == \
+        ["no rcmin reports at temperature 125"]
 
     # (5) the same request restricted to 125C still runs: rcmin is n/a there,
     # cmax is predicted. It used to reject the whole request and write nothing.

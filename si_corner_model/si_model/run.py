@@ -2022,8 +2022,15 @@ CORNER_TYPE = {
     "hidden": "measured: test corner",
     "interp": "not measured: inside measured voltage range",
     "extrap": "not measured: OUTSIDE measured voltage range - unreliable",
-    "n/a": "this level does not exist at this temperature",
+    # "this level does not exist at this temperature" was the first wording,
+    # and the reader asked what it meant: "level" is config jargon for
+    # rcmin/cmax/rcmax. Name the actual corner and temperature instead.
+    "n/a": "no {level} reports at temperature {temp}",
 }
+
+
+def _corner_type(kind: str, level: str, temp) -> str:
+    return CORNER_TYPE[kind].format(level=level, temp=temp)
 
 
 def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
@@ -2078,11 +2085,11 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             col = vals[:, k]
             if kinds[k] == "n/a" or not np.isfinite(col).any():
                 print("  %-13s  %15s  %17s  %22s   %s" % (
-                    c, "-", "-", "-", CORNER_TYPE[kinds[k]]))
+                    c, "-", "-", "-", _corner_type(kinds[k], req[k][1], m["temp"])))
                 continue
             print("  %-13s  %12.1f ps  %14.1f ps  %13d / %-6d   %s" % (
                 c, float(np.nanmin(col)), float(col[col < 0].sum()),
-                int((col < 0).sum()), N, CORNER_TYPE[kinds[k]]))
+                int((col < 0).sum()), N, _corner_type(kinds[k], req[k][1], m["temp"])))
         print("  measured voltages for this model: %.3f - %.3f V" % (vmin, vmax),
               flush=True)
         results.append((m, keys, pidx, vals, kinds))
@@ -2118,7 +2125,8 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             # the count alone: "52/33412" in a cell is read as a date by Excel
             nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else ""
                     for k in range(len(cols))]
-            w.writerow([d, t, "corner type", ""] + [CORNER_TYPE[k] for k in kinds])
+            w.writerow([d, t, "corner type", ""]
+                       + [_corner_type(kd, req[k][1], t) for k, kd in enumerate(kinds)])
             w.writerow([d, t, "smallest slack (ps)", ""] + [f1(x) for x in worst])
             w.writerow([d, t, "sum of negative slacks (ps)", ""] + [f1(x) for x in neg])
             w.writerow([d, t, "paths with negative slack (out of %d)" % len(keys), ""]
