@@ -105,10 +105,7 @@ bash scripts/run.sh                     # 단계 목록 확인
 ```yaml
 mode: setup         # setup/ 와 setup/xtalk/ 를 읽고 cache/setup, runs/setup 에 쓴다
 root: auto          # si_corner_model 이 회로들과 나란히 -> 자동
-designs:            # pr_si / spice 가 섞여 있으니 auto 로 두지 말고 명시한다
-  - MFC_Timing_Report
-  - MIF_Timing_Report
-  - PERIC0_Timing_Report
+# 제공 config.yaml 의 designs 매핑에 PERIC0/MFC/MIF 별 전압과 hidden 코너가 설정되어 있다.
 files:
   subdir: auto              # = <mode>
   crosstalk_subdir: auto    # = <mode>/xtalk
@@ -373,28 +370,29 @@ PT 가 이 서버에서 안 돌고 **결과만 가져오는** 경우, 필요한 
 bash scripts/run.sh list
 ```
 
-실제 출력은 이렇다 (회사와 같은 배치로 리허설한 결과 그대로):
+출력 예시는 이렇다 (파일 수는 실제 리포트 배치에 따라 다르다):
 
 ```
 root    : /user/s5e9965p5/academy_experiment
 task    : slack    models: 6    process: SSPG
 voltages: [0.5, 0.54, 0.6, 0.685]    levels: {'rcmin': -1, 'cmax': 0, 'rcmax': 1}
 anchor  : 0.685V x cmax  (항상 seen)
+(designs 가 회로별 override 로 선언됨 -- 아래 값은 회로마다 다를 수 있다)
 
   ── MFC_Timing_Report/125  [SI:on ]
      reports : /user/s5e9965p5/academy_experiment/MFC_Timing_Report/setup
      levels  : ['rcmax', 'cmax']   ref: SSPG_0p685V_cmax   temp token: 125
      out     : cache/setup/MFC_Timing_Report/125/dataset.npz  |  runs/setup/MFC_Timing_Report/125
-     hidden  : 2개 SSPG_0p54V_rcmax, SSPG_0p6V_cmax
-     corners : 전체 8 = seen 6 + hidden 2   (min_seen 가드 6)
-     basis   : v^3 x level^1 까지 -> 최대 6 파라미터 [...]  ⚠ seen 이 파라미터 수 이하 -- ...
+     hidden  : 2개 SSPG_0p5V_cmax, SSPG_0p54V_rcmax
+     corners : 전체 10 = seen 8 + hidden 2   (min_seen 가드 8)
+     basis   : v^3 x level^1 까지 -> 최대 6 파라미터 [...]
                (최종 기저는 build 때 seen-LOO 로 선택된다 -- run.sh base 로 확인)
      base    : weighting=adaptive  cross_max_degree=2
      files   : 디렉토리 존재, 파일 40개
 ```
 
-`basis` 줄의 **⚠ 는 정상이다** — 여기 적힌 건 "최대 이만큼까지 쓸 수 있다"는 상한이고,
-실제 기저는 `build` 때 seen-LOO 로 더 작게 골라진다(125C 는 5 파라미터). 확정된
+`basis` 줄에 **⚠ 가 나오면** 적힌 파라미터 수는 상한이므로,
+실제 기저는 `build` 때 seen-LOO 로 더 작게 골라진다. 확정된
 기저와 그 성적은 `run.sh base` 가 찍는다.
 
 **여기서 확인할 것 5가지:**
@@ -417,7 +415,7 @@ bash scripts/run.sh base       # OLS base 오차 (numpy만, 수 초)
 ```
 
 `build` 성공 로그:
-`wrote cache/setup/MFC_Timing_Report/125/dataset.npz: N=<경로수> C=8 S=... A=...`
+`wrote cache/setup/MFC_Timing_Report/125/dataset.npz: N=<경로수> C=10 S=... A=...`
 → **C 가 STEP 4 의 코너 수와 같은지 확인.**
 
 `base` 출력:
@@ -476,7 +474,7 @@ runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summar
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps
 MFC_Timing_Report,125,A->B,SSPG_0p54V_rcmax,12.000,12.500,0.500
-MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
+MFC_Timing_Report,m25,A->B,SSPG_0p76V_rcmin,20.000,19.100,-0.900
 ```
 
 `model_ps` 가 최종 예측값이다. **base 수치는 여기 안 나온다** — 모델 수치와
@@ -490,9 +488,9 @@ MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
   코너별 성적 (모델이 아니라 코너 기준)
     회로                    온도    코너                       경로       MAE     worst
     MFC_Timing_Report     125   SSPG_0p54V_rcmax       3000   14.00ps   24.65ps
-    MFC_Timing_Report     125   SSPG_0p6V_cmax         3000    6.15ps   14.81ps
-    MFC_Timing_Report     m25   SSPG_0p5V_cmax         3000   13.78ps   27.46ps
-    MFC_Timing_Report     m25   SSPG_0p685V_rcmin      3000    8.99ps   18.42ps
+    MFC_Timing_Report     125   SSPG_0p5V_cmax         3000    6.15ps   14.81ps
+    MFC_Timing_Report     m25   SSPG_0p6V_cmax         3000   13.78ps   27.46ps
+    MFC_Timing_Report     m25   SSPG_0p76V_rcmin       3000    8.99ps   18.42ps
     전체                                                12000   10.73ps   27.46ps
 ```
 

@@ -77,7 +77,7 @@ m25C 는 BEOL 레벨 집합이 달라서 따로 적합해야 하지만, 밖에�
 ```
 design,temp,path_key,corner,truth_ps,model_ps,model_err_ps
 MFC_Timing_Report,125,A->B,SSPG_0p54V_rcmax,12.000,12.500,0.500
-MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
+MFC_Timing_Report,m25,A->B,SSPG_0p76V_rcmin,20.000,19.100,-0.900
 ```
 
 `model_ps` 가 최종 예측값. 측정값 없는 코너(`query_corners`)는 `truth_ps` 빈칸.
@@ -88,7 +88,7 @@ MFC_Timing_Report,m25,A->B,SSPG_0p685V_rcmin,20.000,19.100,-0.900
 ```
   회로                    온도    코너                       경로       MAE     worst
   MFC_Timing_Report     125   SSPG_0p54V_rcmax       3000   14.00ps   24.65ps
-  MFC_Timing_Report     125   SSPG_0p6V_cmax         3000    6.15ps   14.81ps
+  MFC_Timing_Report     125   SSPG_0p5V_cmax         3000    6.15ps   14.81ps
   전체                                                12000   10.73ps   27.46ps
 ```
 

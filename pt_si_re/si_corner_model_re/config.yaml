@@ -27,10 +27,40 @@ root: auto                          # auto = 부모 또는 그 위에서 designs
                                     #   다른 곳에 있으면 절대경로로 적는다.
                                     #   환경변수 SI_ROOT 가 우선한다.
 
-designs:                            # ★ 회로만 적는다. auto 로 두면 pr_si / spice 까지
-  - MFC_Timing_Report               #   회로로 잘못 잡힌다.
-  - MIF_Timing_Report
-  - PERIC0_Timing_Report
+# 회로별 전압 그리드와 평가 target 은 서로 다르다. 아래 매핑의 미지정 키는
+# 전역 설정을 상속한다. temps 는 리스트라 회로별로 적으면 전체가 교체된다.
+designs:
+  PERIC0_Timing_Report: {}          # 아래 전역 voltages / temps 사용
+
+  MFC_Timing_Report:
+    corners:
+      voltages: [0.5, 0.54, 0.6, 0.685, 0.76]
+    temps:
+      - tag: "125"
+        token: 125
+        levels: [rcmax, cmax]
+        seen_corners: []            # 리포트가 있는 Seen 코너만 필요할 때 입력
+        hidden_corners: [[0.5, cmax], [0.54, rcmax]]
+      - tag: m25
+        token: m25
+        levels: [rcmax, cmax, rcmin]
+        seen_corners: []
+        hidden_corners: [[0.6, cmax], [0.685, rcmax], [0.76, rcmin]]
+
+  MIF_Timing_Report:
+    corners:
+      voltages: [0.475, 0.54, 0.6, 0.685, 0.76, 0.855, 0.95]
+    temps:
+      - tag: "125"
+        token: 125
+        levels: [rcmax, cmax]
+        seen_corners: []
+        hidden_corners: [[0.54, cmax], [0.685, rcmax], [0.76, cmax]]
+      - tag: m25
+        token: m25
+        levels: [rcmax, cmax, rcmin]
+        seen_corners: []
+        hidden_corners: [[0.475, rcmin], [0.6, cmax], [0.855, rcmin], [0.95, cmax]]
 
 _designs_note: |                    # (참고) designs 는 세 가지 형태 중 하나:
                                     #

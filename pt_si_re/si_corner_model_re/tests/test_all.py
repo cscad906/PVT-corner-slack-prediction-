@@ -80,12 +80,44 @@ def test_shipped_config_defaults_to_the_deployed_layout():
     with open(os.path.join(REPO_ROOT, "config.yaml")) as f:
         raw = yaml.safe_load(f)
     assert raw["root"] == "auto", "기본 root 는 auto 여야 한다 (repo 의 부모 = 회로들이 있는 곳)"
-    # designs 는 명시 목록이어야 한다: root 에 회로가 아닌 폴더(pr_si, spice)가
-    # 같이 있어서 auto 로 두면 그것들까지 회로로 잡힌다.
-    assert isinstance(raw["designs"], list) and raw["designs"]
+    # root 에 비회로 폴더도 있으므로 designs 는 명시 목록 또는 회로별 매핑이다.
+    assert isinstance(raw["designs"], (list, dict)) and raw["designs"]
     # auto 는 이 checkout 의 부모 디렉토리로 풀린다
     p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
     assert p["root"] == os.path.dirname(REPO_ROOT)
+
+
+def test_shipped_mif_mfc_peric0_grids_and_holdouts():
+    """회로별 코너 구성이 과거 공통 PERIC0 그리드로 되돌아가지 않게 한다."""
+    from si_model.training.loo import make_split
+
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    models = {m["name"]: m["cfg"] for m in expand(p)}
+    expected = {
+        "PERIC0_Timing_Report/125": (4, 2, 6),
+        "PERIC0_Timing_Report/m25": (4, 2, 10),
+        "MFC_Timing_Report/125": (5, 2, 8),
+        "MFC_Timing_Report/m25": (5, 3, 12),
+        "MIF_Timing_Report/125": (7, 3, 11),
+        "MIF_Timing_Report/m25": (7, 4, 17),
+    }
+    assert set(models) == set(expected)
+    for name, (n_v, n_hidden, n_seen) in expected.items():
+        cfg = models[name]
+        assert cfg["split"]["min_seen"] == n_seen
+        assert len(cfg["split"]["hidden_corners"]) == n_hidden
+        assert "seen_corners" not in cfg["split"]  # 빈 입력란 -> 기존 분할
+        project = p["designs"].get(name.split("/")[0], {})
+        volts = project.get("corners", {}).get("voltages", p["corners"]["voltages"])
+        assert len(volts) == n_v
+        levels = cfg["data"]["rc_corners"]
+        labels = [corner_label(v, lv, "SSPG") for v in volts for lv in levels]
+        coords = cfg["base"]["axes"][1]["levels"]
+        vt = np.asarray([parse_corner(c, coords, "SSPG") for c in labels], np.float32)
+        split = make_split(labels, vt, cfg)
+        assert int(split.seen.sum()) == n_seen
+        assert int(split.hidden.sum()) == n_hidden
+        assert split.seen[split.ref_ci]
 
 
 def test_auto_root_finds_mif_mfc_reports_above_nested_repo(tmp_path, monkeypatch):
