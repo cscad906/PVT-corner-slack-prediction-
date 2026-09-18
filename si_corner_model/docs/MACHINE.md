@@ -393,6 +393,32 @@ si_corner_model/
 
 넘길 때 필요한 건 보통 `runs/<mode>/_all/` 두 개와 회로별 `model.pt` 다.
 
+### 측정 안 한 코너까지 예측하기 (`predict --at` / `--sweep`)
+
+리포트가 없는 코너도 좌표만 주면 예측한다. rebuild 도 재학습도 필요 없다.
+
+```
+bash scripts/run.sh predict --sweep 0.48:0.70:0.02 --level cmax   # 전압 스윕
+bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어서
+```
+
+**실행 한 번에 파일 하나**가 `runs/<mode>/_all/predict_<요청>.csv` 로 나온다. 같은
+요청을 다시 돌리면 `_2`, `_3` 이 붙은 새 파일이 생기고 앞의 것은 그대로 남는다
+(`--name` 으로 이름 지정 가능).
+
+- 맨 위: 회로·온도마다 요약 4줄 — `[kind]` / `[min slack ps]` / `[TNS ps]` / `[violating of N]`
+- 그 아래: 모든 경로, **가장 나쁜 slack 순서**로. 서버에서는 이렇게 본다:
+  ```
+  head -40 runs/setup/_all/predict_*.csv | column -s, -t
+  ```
+- `kind`: `seen`(학습에 쓴 코너) · `hidden`(측정했지만 가려둔 코너) ·
+  `interp`(새 코너, 측정 전압 범위 안) · `extrap`(범위 밖 — 믿지 말 것) ·
+  `n/a`(그 온도에 없는 레벨, 예: 125C 의 rcmin — 빈칸)
+- 스윕 범위 안의 **측정 전압은 자동으로 들어간다** — 곡선이 실측점을 지나는지 보라고
+- 모든 값은 모델 예측이다. 새 코너(interp/extrap)에서는 **SI 보정을 끈다** —
+  크로스토크 리포트가 없기 때문
+- 온도는 125 / m25 만 가능하다. 온도마다 모델이 따로라 그 사이 온도는 못 만든다
+
 ---
 
 ## 8.5 `Killed` 만 뜨고 이유가 안 남을 때

@@ -1035,3 +1035,88 @@ def test_predict_replays_the_training_base(real_tree, tmp_path, monkeypatch):
 
     assert np.allclose(trained, replayed, atol=1e-9), (
         "predict re-chose the base instead of replaying the trained one")
+
+
+def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
+    """predict --sweep / --at: corners nobody measured, one file, never
+    overwritten.
+
+    The anchor is (1): pointed at a HIDDEN corner's coordinates, the coordinate
+    path must reproduce the evaluation path there. Both ask the same question
+    -- the hidden corner has no own token to mask and this fixture has no SI --
+    so any difference is the coordinate path encoding the query, the frames or
+    the base differently from how the model was trained. Measured to agree to
+    1e-5 ps (float32 rounding), under `local` weighting.
+    """
+    pytest.importorskip("torch")
+    import csv as _csv
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import (_load_predictor, _predict_request, expand,
+                              load_project, select, stage_predict_at, stage_train)
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def project():
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        return p
+
+    for m in select(expand(project()), design="boomcore"):
+        build(m["cfg"])
+        stage_train(m)
+
+    # (1) coordinate path == evaluation path, at the hidden corners.
+    # Random weights, not the trained ones: after one epoch the correction head
+    # is still close to its zero init, so the residual is ~0 and the comparison
+    # would only ever see the base half. Measured: with trained weights, feeding
+    # the network the BASE frame instead of its own still passed. This asks
+    # whether two code paths compute the same function, and any weights answer
+    # that -- random ones make the answer depend on the query encoding.
+    import torch
+
+    m = select(expand(project()), design="boomcore", temp="m25")[0]
+    tr = _load_predictor(m)
+    torch.manual_seed(0)
+    for prm in list(tr.model.parameters()) + list(tr.enc.parameters()):
+        prm.data.normal_(0.0, 0.3)
+    H = tr.split.hidden_idx
+    assert len(H)
+    a = tr.predict_corners(H)
+    b = tr.predict_coords(tr.ds["vt"][H], tr.split.vt[H])
+    base = tr.base_hat.cpu().numpy()[:, H]
+    assert np.abs(a - base).max() > 1.0, "the residual must be large enough to matter"
+    np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-3)
+
+    # (2) one file for both temperatures, summaries on top, worst first
+    p = project()
+    models = select(expand(p), design="boomcore")
+    req = _predict_request(p, models, None, "0.46:0.72:0.04", "cmax")
+    assert (0.685, "cmax") in req, "a measured voltage inside the sweep must be added"
+    fp, fails = stage_predict_at(models, p, req, "t")
+    assert not fails
+    rows = list(_csv.reader(open(fp, encoding="utf-8")))
+    assert rows[0][:5] == ["design", "temp", "path_key", "worst_ps", "worst_corner"]
+    labels = [r[2] for r in rows[1:9]]
+    assert labels == ["[kind]", "[min slack ps]", "[TNS ps]"] + [labels[3]] + \
+        ["[kind]", "[min slack ps]", "[TNS ps]"] + [labels[7]]
+    assert {r[1] for r in rows[1:9]} == {"125", "m25"}
+    kinds = set(rows[1][5:]) | set(rows[5][5:])
+    assert {"seen", "hidden", "interp", "extrap"} <= kinds
+    worst = [float(r[3]) for r in rows[9:]]
+    assert worst == sorted(worst) and len(worst) == 24
+
+    # (3) a repeat never overwrites
+    fp2, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "t")
+    assert fp2 != fp and os.path.exists(fp) and fp2.endswith("_2.csv")
+
+    # (4) a level a temperature does not have is left blank, not invented
+    req = _predict_request(p, models, "0.58:rcmin", None, None)
+    fp3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
+    rows = list(_csv.reader(open(fp3, encoding="utf-8")))
+    by = {(r[1], r[2]): r[5] for r in rows[1:9]}
+    assert by[("125", "[kind]")] == "n/a" and by[("m25", "[kind]")] == "interp"

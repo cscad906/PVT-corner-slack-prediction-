@@ -320,7 +320,7 @@ class Trainer:
     # 30k-path drop that is 1.26 GB of awin/abump/aslew/node_feat/edge_feat kept
     # alive for the entire run, to serve a handful of small arrays that really
     # are still read later. Keep those and drop the rest.
-    _DS_KEEP = ("fam_vocab", "vt", "path_keys")
+    _DS_KEEP = ("fam_vocab", "vt", "path_keys", "slack")
 
     def _release_ds(self):
         self.n_node_feat = int(self.ds["node_feat"].shape[-1])
@@ -414,9 +414,6 @@ class Trainer:
         # like). Distinguishes edge queries (no seen corner beyond -> gap = cap)
         # from interior ones -- a plain min-distance confidence cannot separate
         # them on this grid.
-        B = len(paths)
-        vt_t = torch.as_tensor(self.ds["vt"], dtype=torch.float32, device=dev)
-        ref = self.ds["vt"][self.split.ref_ci]
         q = self.dvdt[ci]                                 # normalized coords [A]
         if train:
             # query-coordinate jitter (the inherited model's pvt noise): training
@@ -424,17 +421,7 @@ class Trainer:
             # the MLPs can key on exact coordinates and behave arbitrarily at
             # hidden ones (observed: gate collapsed to 0 there).
             q = q + torch.randn(self.A, device=dev) * 0.08
-        tok_dvdt = torch.stack([
-            (vt_t[:, a] - float(ref[a])) / self.ax_tscale[a] for a in range(self.A)
-        ], 1)
-        gaps = []
-        for ax in range(self.A):
-            cap = self.ax_gapcap[ax]
-            d = (tok_dvdt[None, :, ax] - q[ax]).expand(B, -1)
-            below = torch.where(tmask & (d < -1e-6), -d, torch.full_like(d, cap)).amin(1)
-            above = torch.where(tmask & (d > 1e-6), d, torch.full_like(d, cap)).amin(1)
-            gaps += [below.clamp(max=cap), above.clamp(max=cap)]
-        query = torch.cat([q[None].expand(B, -1), torch.stack(gaps, -1)], -1)  # [B,3A]
+        query = self._query_vec(q, tmask)                 # [B,3A]
 
         sp = self.stage_pad[P]                        # [B,Smax]
         spn = sp.detach().cpu().numpy()                # same, for the memmaps
@@ -463,6 +450,36 @@ class Trainer:
             "si_target": self.si_label[P, ci] - self.si_smooth[P, ci],
             "paths": P, "ci": ci,
         }
+
+    def _query_vec(self, q: torch.Tensor, tmask: torch.Tensor) -> torch.Tensor:
+        """[B, 3A] query features: the target's normalized coords, then per axis
+        the one-sided distance to the nearest UNMASKED seen corner below and
+        above it (capped).
+
+        Computed after masking/augmentation, so axis dropout teaches the gate
+        what one-sided extrapolation looks like. Distinguishes edge queries (no
+        seen corner beyond -> gap = cap) from interior ones -- a plain
+        min-distance confidence cannot separate them on this grid.
+
+        Split out of make_batch so that a coordinate which is NOT a grid corner
+        (predict --at / --sweep) is encoded by exactly the same code as one that
+        is. The gate reads these gaps; two encodings would be two models.
+        """
+        dev = self.dev
+        B = tmask.shape[0]
+        vt_t = torch.as_tensor(self.ds["vt"], dtype=torch.float32, device=dev)
+        ref = self.ds["vt"][self.split.ref_ci]
+        tok_dvdt = torch.stack([
+            (vt_t[:, a] - float(ref[a])) / self.ax_tscale[a] for a in range(self.A)
+        ], 1)
+        gaps = []
+        for ax in range(self.A):
+            cap = self.ax_gapcap[ax]
+            d = (tok_dvdt[None, :, ax] - q[ax]).expand(B, -1)
+            below = torch.where(tmask & (d < -1e-6), -d, torch.full_like(d, cap)).amin(1)
+            above = torch.where(tmask & (d > 1e-6), d, torch.full_like(d, cap)).amin(1)
+            gaps += [below.clamp(max=cap), above.clamp(max=cap)]
+        return torch.cat([q[None].expand(B, -1), torch.stack(gaps, -1)], -1)
 
     def forward(self, b: dict) -> dict:
         path_emb = self.enc(b["fam"], b["node"], b["edge"], b["nmask"], b["crit"])
@@ -596,21 +613,16 @@ class Trainer:
         return {"mae": np.array(mae), "si_mae": np.array(si_mae)}
 
     @torch.no_grad()
-    def export_predictions(self, out_dir: str, corner_idx=None, bs: int = 512,
-                           tag: str = "hidden") -> np.ndarray:
-        """Dump per-(path, corner) MODEL predictions in ps (+ truth comparison
-        when a measurement exists; pure-inference corners get predictions only).
+    @torch.no_grad()
+    def predict_corners(self, idx, bs: int = 512) -> np.ndarray:
+        """[N, len(idx)] model predictions (ps) at existing grid corners.
 
-        Writes ``predictions_<tag>.csv`` and ``.npz`` (path_keys, corners,
-        truth_ps, model_ps). The OLS base is never reported anywhere -- to
-        inspect base-only quality use the standalone
-        ``bash scripts/run.sh base``. Default corners = hidden;
-        at SEEN corners the target's own token is masked (LOO-style).
+        At a SEEN corner the target's own token is masked (LOO-style), so this is
+        a prediction there too, never an echo of the measurement.
         """
         self.model.eval(); self.enc.eval()
         prev_hard = self.model.si.hard
         self.model.si.hard = True   # exact PT worst-instant at inference
-        idx = self.split.hidden_idx if corner_idx is None else np.asarray(corner_idx)
         paths = np.arange(self.N)
         pred = np.empty((self.N, len(idx)))
         for k, ci in enumerate(idx):
@@ -622,6 +634,111 @@ class Trainer:
                             .cpu().numpy())
             pred[:, k] = np.concatenate(outs)
         self.model.si.hard = prev_hard
+        return pred
+
+    @torch.no_grad()
+    def predict_coords(self, model_vt, base_vt, bs: int = 512) -> np.ndarray:
+        """[N, Q] model predictions (ps) at corners that are NOT in the dataset.
+
+        A corner nobody measured has no report to parse, so nothing about it
+        needs building. What a prediction needs is the path's own features and
+        the seen corners' measurements -- both already here -- plus the target
+        coordinate, which is an input. So any coordinate can be asked for,
+        without a rebuild, without retraining, and without touching the on-disk
+        feature caches (which a changed corner count would otherwise delete and
+        rebuild).
+
+        The same corner is given in two frames, because the two halves of the
+        model live in two:
+          model_vt [Q, A]  the frame the cache was built in -- the tokens and
+                           dvdt use it, so the network was trained in it
+          base_vt  [Q, A]  the base's frame, split.vt, after any level
+                           relabelling; the polynomial is fit in it
+
+        Base: the per-path fit on the seen corners, with the pinned basis and
+        weighting, evaluated at the new coordinate -- exactly how the base is
+        evaluated at a hidden corner, done by appending the coordinates as
+        extra unmeasured columns to a copy of the grid.
+
+        Residual: the query is encoded by _query_vec, the same code make_batch
+        uses, with every seen corner visible (there is no own token to mask).
+
+        No SI. An unmeasured corner has no crosstalk report, so the SI branch
+        has no input; it is given nothing present, which makes its output
+        exactly zero. It models jumps -- glitches, toggles -- that the base
+        cannot represent, and interpolating a jump from neighbouring corners
+        would be wrong rather than approximate.
+        """
+        from si_model.config import fit_scales
+        from si_model.model.base_ols import design_matrix
+        from si_model.training.loo import Split, fit_field
+
+        sp, dev = self.split, self.dev
+        base_vt = np.asarray(base_vt, float).reshape(-1, self.A)
+        model_vt = np.asarray(model_vt, float).reshape(-1, self.A)
+        Q = len(base_vt)
+
+        vt_aug = np.concatenate([np.asarray(sp.vt, float), base_vt], 0)
+        ref = vt_aug[sp.ref_ci]
+        scales = np.asarray(fit_scales(self.cfg))
+        co = (vt_aug - ref) / scales
+        phi = design_matrix(co, self.base.exps)
+        y = np.asarray(self.ds["slack"], float)
+        y = np.concatenate([y, np.full((self.N, Q), np.nan)], 1)
+        seen = np.concatenate([np.asarray(sp.seen, bool), np.zeros(Q, bool)])
+        sp_aug = Split(list(sp.corners) + ["_query%d" % i for i in range(Q)],
+                       vt_aug, seen, ~seen, sp.ref_ci)
+        loo, _ = fit_field(y, phi, sp_aug, co, self.cfg)
+        base = loo[:, self.C:] * PS                                   # [N, Q]
+
+        ref_m = np.asarray(self.ds["vt"][sp.ref_ci], float)
+        qs = torch.as_tensor((model_vt - ref_m) / self.ax_tscale[None, :],
+                             dtype=torch.float32, device=dev)
+        self.model.eval(); self.enc.eval()
+        prev_hard = self.model.si.hard
+        self.model.si.hard = True
+        seen_t = torch.as_tensor(sp.seen, device=dev)
+        Smax = self.stage_pad.shape[1]
+        Aa = self.si_x.shape[1]
+        resid = np.empty((self.N, Q))
+        for k in range(Q):
+            for i in range(0, self.N, bs):
+                P = np.arange(i, min(i + bs, self.N))
+                Pt = torch.as_tensor(P, dtype=torch.long, device=dev)
+                B = len(P)
+                tmask = seen_t[None, :].expand(B, -1).clone()
+                zeros = lambda *shape: torch.zeros(*shape, device=dev)
+                b = {
+                    "tokens": self.tokens[Pt], "token_mask": tmask,
+                    "query_vt": self._query_vec(qs[k], tmask),
+                    "fam": self.node_fam[Pt], "node": self.node_feat[Pt],
+                    "edge": self.edge_feat[Pt], "nmask": self.node_mask[Pt],
+                    "crit": self.critical[Pt], "sig_feats": self.sig[Pt],
+                    "si_x_raw": zeros(B, Smax, Aa, 5),
+                    "si_awin": zeros(B, Smax, Aa, 2),
+                    "si_vwin": zeros(B, Smax, 2),
+                    "si_bump": zeros(B, Smax, Aa),
+                    "si_present": torch.zeros(B, Smax, Aa, dtype=torch.bool,
+                                              device=dev),
+                    "si_stage_mask": self.stage_mask[Pt],
+                }
+                resid[P, k] = self.forward(b)["resid"].cpu().numpy()
+        self.model.si.hard = prev_hard
+        return base + resid
+
+    def export_predictions(self, out_dir: str, corner_idx=None, bs: int = 512,
+                           tag: str = "hidden") -> np.ndarray:
+        """Dump per-(path, corner) MODEL predictions in ps (+ truth comparison
+        when a measurement exists; pure-inference corners get predictions only).
+
+        Writes ``predictions_<tag>.csv`` and ``.npz`` (path_keys, corners,
+        truth_ps, model_ps). The OLS base is never reported anywhere -- to
+        inspect base-only quality use the standalone
+        ``bash scripts/run.sh base``. Default corners = hidden;
+        at SEEN corners the target's own token is masked (LOO-style).
+        """
+        idx = self.split.hidden_idx if corner_idx is None else np.asarray(corner_idx)
+        pred = self.predict_corners(idx, bs)
 
         truth = self.slack_ps.cpu().numpy()[:, idx]
         keys = [str(x) for x in self.ds["path_keys"]]

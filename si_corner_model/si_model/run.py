@@ -77,6 +77,11 @@ docs/START.md top to bottom.
                              WRITTEN together, so setup results cannot be
                              overwritten by a hold run
     --corners hidden|seen|all   corners for predict/merge (default hidden)
+    --at 0.57:cmax,0.62:rcmax   predict at these corners, measured or not
+    --sweep 0.48:0.70:0.02      predict over a voltage range (add --level cmax
+                                for one level). Both write ONE file,
+                                runs/<mode>/_all/predict_<request>.csv, never
+                                overwriting an earlier one (--name to choose)
     --config <file>          a different project config (default config.yaml)
 
   Examples
@@ -88,6 +93,8 @@ docs/START.md top to bottom.
     bash scripts/run.sh base --design cpu
     bash scripts/run.sh train --design cpu --temp 125
     bash scripts/run.sh predict --corners all
+    bash scripts/run.sh predict --sweep 0.48:0.70:0.02 --level cmax
+    bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25
 
   Changing paths without editing files
     env SI_ROOT=/real/path SI_DESIGNS=cpu,gpu bash scripts/run.sh list
@@ -1778,9 +1785,8 @@ def _pin_training_base(m: dict, ck: dict) -> None:
     b["fit_level_values"] = False
 
 
-def stage_predict(m: dict, corners: str) -> None:
-    import numpy as np
-
+def _load_predictor(m: dict):
+    """A trainer with the trained weights loaded and the training base pinned."""
     from si_model.compat import load_checkpoint
 
     out_dir = m["cfg"]["train"]["out_dir"]
@@ -1818,9 +1824,276 @@ def stage_predict(m: dict, corners: str) -> None:
             "  different number of families, changes the model shape.\n"
             "  Re-run train for this model (its weights are stale), or restore\n"
             "  the dataset the weights were trained on." % (str(e).split("\n")[0],))
+    return tr
+
+
+def stage_predict(m: dict, corners: str) -> None:
+    import numpy as np
+
+    tr = _load_predictor(m)
     idx = {"hidden": tr.split.hidden_idx, "seen": tr.split.seen_idx,
            "all": np.arange(tr.C)}[corners]
-    tr.export_predictions(out_dir, idx, tag=corners)
+    tr.export_predictions(m["cfg"]["train"]["out_dir"], idx, tag=corners)
+
+
+# ------------------------------------------------------- predict --at/--sweep
+def _parse_at(spec: str) -> list:
+    """'0.57:cmax,0.62:rcmax' -> [(0.57, 'cmax'), (0.62, 'rcmax')]"""
+    out = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        assert ":" in part, (
+            f"--at takes voltage:level pairs separated by commas, e.g. "
+            f"0.57:cmax,0.62:rcmax -- got {part!r}")
+        v, lv = part.split(":", 1)
+        out.append((round(float(v), 6), lv.strip()))
+    assert out, "--at is empty"
+    return out
+
+
+def _parse_sweep(spec: str) -> list:
+    """'0.48:0.70:0.02' -> [0.48, 0.50, ..., 0.70], both ends included."""
+    import numpy as np
+
+    parts = spec.split(":")
+    assert len(parts) == 3, (
+        f"--sweep takes start:stop:step, e.g. 0.48:0.70:0.02 -- got {spec!r}")
+    lo, hi, st = (float(x) for x in parts)
+    assert st > 0 and hi >= lo, f"--sweep {spec}: need step > 0 and stop >= start"
+    n = int(np.floor((hi - lo) / st + 1e-9))
+    return [round(lo + i * st, 6) for i in range(n + 1)]
+
+
+def _predict_request(p: dict, models: list, at, sweep, level) -> list:
+    """The corners to predict, as (voltage, level) pairs, one list for every
+    model so the output has one set of columns.
+
+    A sweep also gets every MEASURED voltage that falls inside its range. Those
+    are the points where the answer is known, and a curve that passes through
+    them is the check a prediction without ground truth can still be given.
+    """
+    order = list(((p.get("corners") or {}).get("level_values") or {}))
+    have = set()
+    for m in models:
+        have.update(m["cfg"]["data"].get("rc_corners") or [])
+    levels = [l for l in order if l in have] + sorted(have - set(order))
+    if at:
+        assert not level, "--level only applies to --sweep; --at names each level"
+        req = _parse_at(at)
+        for _, l in req:
+            assert l in levels, f"--at: unknown level {l!r}; levels here are {levels}"
+        return req
+    vs = _parse_sweep(sweep)
+    lo, hi = vs[0], vs[-1]
+    for m in models:
+        for v in project_for(p, m["design"])["corners"]["voltages"]:
+            v = round(float(v), 6)
+            if lo - 1e-9 <= v <= hi + 1e-9:
+                vs.append(v)
+    vs = sorted(set(vs))
+    if level:
+        assert level in levels, f"--level: unknown level {level!r}; levels here are {levels}"
+    return [(v, l) for v in vs for l in ([level] if level else levels)]
+
+
+def _predict_file(p: dict, name: str) -> str:
+    """runs/<mode>/_all/predict_<name>.csv, never an existing one.
+
+    Every request gets its own file and a repeat gets _2, _3: a cmax sweep
+    followed by an rcmax sweep, or the same sweep before and after retraining,
+    must both survive to be compared.
+    """
+    import re
+
+    out_dir = os.path.join(
+        _auto(p.get("out", {}).get("runs"), f"runs/{p.get('mode') or 'setup'}"), "_all")
+    os.makedirs(out_dir, exist_ok=True)
+    stem = "predict_" + re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
+    fp = os.path.join(out_dir, stem + ".csv")
+    k = 2
+    while os.path.exists(fp):
+        fp = os.path.join(out_dir, "%s_%d.csv" % (stem, k))
+        k += 1
+    return fp
+
+
+def _default_predict_name(design, temp, at, sweep, level, req) -> str:
+    parts = [x for x in (design, temp) if x]
+    if sweep:
+        lo, hi, _ = sweep.split(":")
+        parts.append("sweep_%s-%s" % (lo, hi))
+        if level:
+            parts.append(level)
+    elif len(req) <= 3:
+        parts.append("at_" + "_".join("%g%s" % (v, l) for v, l in req))
+    else:
+        parts.append("at_%dcorners" % len(req))
+    return "_".join(str(x) for x in parts)
+
+
+def _predict_one_model(m: dict, req: list):
+    """[N, K] predictions (ps) of one model at the requested corners, and what
+    kind each corner is for THIS model.
+
+    A requested corner that already exists in the grid and was measured goes
+    through the evaluation path (its own SI, its own token masked when seen);
+    anything else is a coordinate query with SI off. Voltage ranges differ per
+    circuit, so the same column can be interp for one and extrap for another.
+    """
+    import numpy as np
+
+    from si_model.parsing.keys import parse_corner
+
+    tr = _load_predictor(m)
+    prefix = str(m["cfg"]["data"].get("corner_prefix") or "TT")
+    names = list(m["cfg"]["base"]["axes"][1].get("levels") or {})
+    imap = {n: float(i) for i, n in enumerate(names)}
+    corner_lv = []
+    for lab in tr.split.corners:
+        try:
+            _, k = parse_corner(str(lab), imap, prefix)
+            k = int(round(k))
+            corner_lv.append(names[k] if 0 <= k < len(names) else None)
+        except (ValueError, KeyError):
+            corner_lv.append(None)
+    mvt = np.asarray(tr.ds["vt"], float)          # the network's frame
+    bvt = np.asarray(tr.split.vt, float)          # the base's frame
+    frame = {}
+    for ci, n in enumerate(corner_lv):
+        if n is not None and n not in frame:
+            frame[n] = (mvt[ci, 1], bvt[ci, 1])
+    meas = np.asarray(tr.measured, bool)
+    vmin, vmax = float(mvt[meas, 0].min()), float(mvt[meas, 0].max())
+
+    K = len(req)
+    vals = np.full((tr.N, K), np.nan)
+    kinds = []
+    ex_ci, ex_col, q_m, q_b, q_col = [], [], [], [], []
+    for k, (v, l) in enumerate(req):
+        if l not in frame:                         # e.g. rcmin at 125C
+            kinds.append("n/a")
+            continue
+        hit = [ci for ci in range(tr.C)
+               if corner_lv[ci] == l and abs(mvt[ci, 0] - v) < 1e-6 and meas[ci]]
+        if hit:
+            kinds.append("seen" if tr.split.seen[hit[0]] else "hidden")
+            ex_ci.append(hit[0]); ex_col.append(k)
+        else:
+            kinds.append("interp" if vmin - 1e-9 <= v <= vmax + 1e-9 else "extrap")
+            q_m.append([v, frame[l][0]]); q_b.append([v, frame[l][1]]); q_col.append(k)
+    if ex_ci:
+        vals[:, ex_col] = tr.predict_corners(np.asarray(ex_ci))
+    if q_m:
+        vals[:, q_col] = tr.predict_coords(np.asarray(q_m), np.asarray(q_b))
+    keys = [str(x) for x in tr.ds["path_keys"]]
+    return keys, vals, kinds, (vmin, vmax)
+
+
+def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
+    """Predict every model at the requested corners and write ONE file.
+
+    Layout, one schema throughout so it opens as a single table:
+
+        design,temp,path_key,worst_ps,worst_corner,<corner>,<corner>,...
+        D,T,[kind],,,seen,interp,extrap,...          <- per model, on top:
+        D,T,[min slack ps],,,...                        what each column is,
+        D,T,[TNS ps],,,...                              and its summary right
+        D,T,[violating of N],,,...                      above its values
+        D,T,<path>,<worst>,<corner>,<value>,...      <- every path of every
+                                                        model, worst first
+
+    Sorted worst-first across all models, so the top of the file is the
+    critical-path list and `head` is the useful view on a machine without a
+    spreadsheet. No truth and no error columns: this is for corners that may
+    have no measurement at all, and where one exists it is still shown as a
+    prediction.
+    """
+    import numpy as np
+
+    cols = ["%.3fV_%s" % (v, l) for v, l in req]
+    results, failed = [], []
+    for m in models:
+        print(f"\n===== predict: {m['name']} =====", flush=True)
+        if m.get("task", "slack") != "slack":
+            failed.append((f"predict:{m['name']}", "--at/--sweep supports slack models only"))
+            print("  skipped: --at/--sweep supports slack models only", flush=True)
+            continue
+        try:
+            keys, vals, kinds, (vmin, vmax) = _predict_one_model(m, req)
+        except Exception as e:
+            failed.append((f"predict:{m['name']}", repr(e)))
+            traceback.print_exc()
+            print(f"!!!!! FAILED predict: {m['name']} -- continuing", flush=True)
+            continue
+        N = len(keys)
+        mins, tns, viol = [], [], []
+        print("  %-14s %-7s %14s %12s   %s" % ("corner", "kind", "min slack ps",
+                                               "TNS ps", "violating"))
+        for k, c in enumerate(cols):
+            col = vals[:, k]
+            if kinds[k] == "n/a" or not np.isfinite(col).any():
+                mins.append(np.nan); tns.append(np.nan); viol.append(-1)
+                print("  %-14s %-7s %14s %12s   %s" % (c, kinds[k], "-", "-", "-"))
+                continue
+            mn = float(np.nanmin(col))
+            t = float(col[col < 0].sum())
+            nv = int((col < 0).sum())
+            mins.append(mn); tns.append(t); viol.append(nv)
+            print("  %-14s %-7s %14.1f %12.1f   %d / %d" % (c, kinds[k], mn, t, nv, N))
+        print("  measured range %.3f - %.3f V; extrap columns lie outside it"
+              % (vmin, vmax), flush=True)
+        results.append((m, keys, vals, kinds, mins, tns, viol))
+
+    if not results:
+        return None, failed
+
+    fp = _predict_file(p, name)
+
+    def f1(x):
+        return "%.1f" % x if np.isfinite(x) else ""
+
+    # worst-first across every model without materialising formatted rows:
+    # one float per path, one global argsort, rows formatted as they are written
+    worst, owner, local = [], [], []
+    for r, (_, keys, vals, _, _, _, _) in enumerate(results):
+        fin = np.isfinite(vals)
+        w = np.where(fin.any(1), np.nanmin(np.where(fin, vals, np.inf), 1), np.nan)
+        worst.append(w)
+        owner.append(np.full(len(keys), r))
+        local.append(np.arange(len(keys)))
+    worst, owner, local = (np.concatenate(x) for x in (worst, owner, local))
+    order = np.argsort(worst, kind="stable")       # NaN sorts last
+
+    with open(fp, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["design", "temp", "path_key", "worst_ps", "worst_corner"] + cols)
+        for m, keys, vals, kinds, mins, tns, viol in results:
+            d, t = m["design"], str(m["temp"])
+            w.writerow([d, t, "[kind]", "", ""] + kinds)
+            w.writerow([d, t, "[min slack ps]", "", ""] + [f1(x) for x in mins])
+            w.writerow([d, t, "[TNS ps]", "", ""] + [f1(x) for x in tns])
+            # the count alone per cell: "52/33412" is read as a date by Excel
+            w.writerow([d, t, "[violating of %d]" % len(keys), "", ""]
+                       + ["" if x < 0 else str(x) for x in viol])
+        for g in order:
+            m, keys, vals = results[owner[g]][0], results[owner[g]][1], results[owner[g]][2]
+            i = local[g]
+            row = vals[i]
+            if np.isfinite(row).any():
+                j = int(np.nanargmin(row))
+                wv, wc = row[j], cols[j]
+            else:
+                wv, wc = np.nan, ""
+            w.writerow([m["design"], str(m["temp"]), keys[i], f1(wv), wc]
+                       + [f1(x) for x in row])
+    n_paths = sum(len(r[1]) for r in results)
+    print(f"\n[PREDICT] base replayed from training; SI off at interp/extrap corners",
+          flush=True)
+    print(f"[PREDICT] wrote {fp}  ({n_paths} paths x {len(cols)} corners, "
+          f"{len(results)} model(s))", flush=True)
+    return fp, failed
 
 
 def stage_merge(models: list, p: dict, corners: str) -> str:
@@ -1966,7 +2239,22 @@ def main(argv=None):
     ap.add_argument("--file", default=None,
                     help="report file to inspect in the check stage "
                          "(omit to use the first file from the config)")
+    ap.add_argument("--at", default=None,
+                    help="predict: these corners, measured or not, e.g. "
+                         "0.57:cmax,0.62:rcmax")
+    ap.add_argument("--sweep", default=None,
+                    help="predict: voltages start:stop:step, e.g. 0.48:0.70:0.02 "
+                         "(measured voltages inside the range are added)")
+    ap.add_argument("--level", default=None,
+                    help="predict --sweep: this level only (default: every level)")
+    ap.add_argument("--name", default=None,
+                    help="predict --at/--sweep: output file name "
+                         "(default: made from the request)")
     args = ap.parse_args(argv)
+    if (args.at or args.sweep) and args.stage != "predict":
+        ap.error("--at / --sweep only apply to the predict stage")
+    if args.at and args.sweep:
+        ap.error("use --at or --sweep, not both")
     os.environ["SI_STAGE"] = args.stage
 
     os.chdir(REPO_ROOT)
@@ -2009,6 +2297,17 @@ def main(argv=None):
                 stage_merge(models, p, args.corners)
             except Exception as e:
                 failed.append(("merge", repr(e)))
+                traceback.print_exc()
+            continue
+        if stage == "predict" and (args.at or args.sweep):
+            try:
+                req = _predict_request(p, models, args.at, args.sweep, args.level)
+                name = args.name or _default_predict_name(
+                    args.design, args.temp, args.at, args.sweep, args.level, req)
+                _, fails = stage_predict_at(models, p, req, name)
+                failed += fails
+            except Exception as e:
+                failed.append(("predict", repr(e)))
                 traceback.print_exc()
             continue
         for m in models:
