@@ -660,6 +660,12 @@ def main():
 
     # 비교용: 지금 방식(앞에서부터 N개 = idx 오름차순)이면 어떻게 되나
     naive = set(sorted(cand)[:keep])
+    # 예전 방식에는 '누가 뽑았나' 가 없지만, 경로마다 **제일 나쁜 코너**는 있다.
+    # 1_union 의 idx 순서가 그 worst slack 순서라, 이 개수가 곧 그 코너가 앞자리를
+    # 얼마나 차지했는지다. 한 코너가 대부분을 먹고 있으면 그게 편향이다.
+    worst_of = {}
+    for i in naive:
+        worst_of[i] = min(corners, key=lambda c, i=i: slack_of[c][i])
 
     cov_new = coverage(order, chosen)
     cov_old = coverage(order, naive)
@@ -682,10 +688,15 @@ def main():
     print("  " + "-" * 74)
     for c in corners:
         deep, got = cov_old[c]
-        print("  %-22s %6s %10d   %s"
-              % (c[:22], "-", deep,
+        n_worst = sum(1 for i in naive if worst_of[i] == c)
+        print("  %-22s %6d %10d   %s"
+              % (c[:22], n_worst, deep,
                  "  ".join("%-7d" % got[d] for d in DEPTHS)))
     print("")
+    print("  'picks'    = paths the corner brought in. round-robin above; below, "
+          "paths whose")
+    print("               worst corner it is -- which is what the plain cut "
+          "sorts by.")
     print("  'deepest'  = lowest rank that made it in, by that corner's own slack.")
     print("  'topK'     = how many of that corner's own worst K paths are in the list.")
 
