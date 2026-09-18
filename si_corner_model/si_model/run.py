@@ -1988,27 +1988,31 @@ def _predict_one_model(m: dict, req: list):
     if q_m:
         vals[:, q_col] = tr.predict_coords(np.asarray(q_m), np.asarray(q_b))
     keys = [str(x) for x in tr.ds["path_keys"]]
-    return keys, vals, kinds, (vmin, vmax)
+    # The report's own path number -- `### FIXED_PATH idx=<n>` -- which is how
+    # a path is looked up by hand. The cache already holds paths in ascending
+    # idx order, so writing rows in cache order IS writing them by idx.
+    pidx = tr.ds.get("path_idx")
+    pidx = (np.arange(len(keys)) if pidx is None
+            else np.asarray(pidx, np.int64))
+    return keys, pidx, vals, kinds, (vmin, vmax)
 
 
 def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE file.
 
-    Layout, one schema throughout so it opens as a single table:
+        design,temp,path_idx,path_key,<corner>,<corner>,...
+        D,T,1,<key>,<ps>,<ps>,...
+        D,T,2,<key>,<ps>,<ps>,...
 
-        design,temp,path_key,worst_ps,worst_corner,<corner>,<corner>,...
-        D,T,[kind],,,seen,interp,extrap,...          <- per model, on top:
-        D,T,[min slack ps],,,...                        what each column is,
-        D,T,[TNS ps],,,...                              and its summary right
-        D,T,[violating of N],,,...                      above its values
-        D,T,<path>,<worst>,<corner>,<value>,...      <- every path of every
-                                                        model, worst first
+    One row per path, in the report's own path order -- path_idx is the n of
+    `### FIXED_PATH idx=<n>` and path_key is its key= -- and nothing else in the
+    file, so it lines up with the reports and opens as a plain table.
 
-    Sorted worst-first across all models, so the top of the file is the
-    critical-path list and `head` is the useful view on a machine without a
-    spreadsheet. No truth and no error columns: this is for corners that may
-    have no measurement at all, and where one exists it is still shown as a
-    prediction.
+    It first carried per-model summary rows on top and sorted paths worst-first.
+    That read as noise: the reader asked what the extra rows were and why the
+    paths were not in index order. The summary stays, on the screen only.
+
+    Every value is a prediction, including at corners that were measured.
     """
     import numpy as np
 
@@ -2021,31 +2025,33 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             print("  skipped: --at/--sweep supports slack models only", flush=True)
             continue
         try:
-            keys, vals, kinds, (vmin, vmax) = _predict_one_model(m, req)
+            keys, pidx, vals, kinds, (vmin, vmax) = _predict_one_model(m, req)
         except Exception as e:
             failed.append((f"predict:{m['name']}", repr(e)))
             traceback.print_exc()
             print(f"!!!!! FAILED predict: {m['name']} -- continuing", flush=True)
             continue
         N = len(keys)
-        mins, tns, viol = [], [], []
-        print("  %-14s %-7s %14s %12s   %s" % ("corner", "kind", "min slack ps",
-                                               "TNS ps", "violating"))
+        print("  %-14s %-7s %12s %16s %15s" % (
+            "corner", "kind", "worst slack", "sum of negative", "paths below 0"))
         for k, c in enumerate(cols):
             col = vals[:, k]
             if kinds[k] == "n/a" or not np.isfinite(col).any():
-                mins.append(np.nan); tns.append(np.nan); viol.append(-1)
-                print("  %-14s %-7s %14s %12s   %s" % (c, kinds[k], "-", "-", "-"))
+                print("  %-14s %-7s %12s %16s %15s" % (c, kinds[k], "-", "-", "-"))
                 continue
-            mn = float(np.nanmin(col))
-            t = float(col[col < 0].sum())
-            nv = int((col < 0).sum())
-            mins.append(mn); tns.append(t); viol.append(nv)
-            print("  %-14s %-7s %14.1f %12.1f   %d / %d" % (c, kinds[k], mn, t, nv, N))
-        print("  measured range %.3f - %.3f V; extrap columns lie outside it"
-              % (vmin, vmax), flush=True)
-        results.append((m, keys, vals, kinds, mins, tns, viol))
+            print("  %-14s %-7s %9.1f ps %13.1f ps %9d / %d" % (
+                c, kinds[k], float(np.nanmin(col)), float(col[col < 0].sum()),
+                int((col < 0).sum()), N))
+        print("  measured voltages here: %.3f - %.3f V" % (vmin, vmax), flush=True)
+        results.append((m, keys, pidx, vals))
 
+    print("\n  kind: seen   = measured, used in training\n"
+          "        hidden = measured, held out of training\n"
+          "        interp = not measured, inside the measured voltage range\n"
+          "        extrap = not measured, OUTSIDE that range -- do not trust\n"
+          "        n/a    = this temperature has no such level (left blank)\n"
+          "  SI (crosstalk) is off at interp/extrap corners: there is no report "
+          "for them.", flush=True)
     if not results:
         return None, failed
 
@@ -2054,44 +2060,15 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
     def f1(x):
         return "%.1f" % x if np.isfinite(x) else ""
 
-    # worst-first across every model without materialising formatted rows:
-    # one float per path, one global argsort, rows formatted as they are written
-    worst, owner, local = [], [], []
-    for r, (_, keys, vals, _, _, _, _) in enumerate(results):
-        fin = np.isfinite(vals)
-        w = np.where(fin.any(1), np.nanmin(np.where(fin, vals, np.inf), 1), np.nan)
-        worst.append(w)
-        owner.append(np.full(len(keys), r))
-        local.append(np.arange(len(keys)))
-    worst, owner, local = (np.concatenate(x) for x in (worst, owner, local))
-    order = np.argsort(worst, kind="stable")       # NaN sorts last
-
     with open(fp, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["design", "temp", "path_key", "worst_ps", "worst_corner"] + cols)
-        for m, keys, vals, kinds, mins, tns, viol in results:
+        w.writerow(["design", "temp", "path_idx", "path_key"] + cols)
+        for m, keys, pidx, vals in results:
             d, t = m["design"], str(m["temp"])
-            w.writerow([d, t, "[kind]", "", ""] + kinds)
-            w.writerow([d, t, "[min slack ps]", "", ""] + [f1(x) for x in mins])
-            w.writerow([d, t, "[TNS ps]", "", ""] + [f1(x) for x in tns])
-            # the count alone per cell: "52/33412" is read as a date by Excel
-            w.writerow([d, t, "[violating of %d]" % len(keys), "", ""]
-                       + ["" if x < 0 else str(x) for x in viol])
-        for g in order:
-            m, keys, vals = results[owner[g]][0], results[owner[g]][1], results[owner[g]][2]
-            i = local[g]
-            row = vals[i]
-            if np.isfinite(row).any():
-                j = int(np.nanargmin(row))
-                wv, wc = row[j], cols[j]
-            else:
-                wv, wc = np.nan, ""
-            w.writerow([m["design"], str(m["temp"]), keys[i], f1(wv), wc]
-                       + [f1(x) for x in row])
+            for i in np.argsort(pidx, kind="stable"):
+                w.writerow([d, t, int(pidx[i]), keys[i]] + [f1(x) for x in vals[i]])
     n_paths = sum(len(r[1]) for r in results)
-    print(f"\n[PREDICT] base replayed from training; SI off at interp/extrap corners",
-          flush=True)
-    print(f"[PREDICT] wrote {fp}  ({n_paths} paths x {len(cols)} corners, "
+    print(f"\n[PREDICT] wrote {fp}  ({n_paths} paths x {len(cols)} corners, "
           f"{len(results)} model(s))", flush=True)
     return fp, failed
 

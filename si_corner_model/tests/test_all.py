@@ -1092,7 +1092,8 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     assert np.abs(a - base).max() > 1.0, "the residual must be large enough to matter"
     np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-3)
 
-    # (2) one file for both temperatures, summaries on top, worst first
+    # (2) one file for both temperatures: one row per path, in the report's
+    # FIXED_PATH idx order, and nothing but paths in it
     p = project()
     models = select(expand(p), design="boomcore")
     req = _predict_request(p, models, None, "0.46:0.72:0.04", "cmax")
@@ -1100,15 +1101,15 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     fp, fails = stage_predict_at(models, p, req, "t")
     assert not fails
     rows = list(_csv.reader(open(fp, encoding="utf-8")))
-    assert rows[0][:5] == ["design", "temp", "path_key", "worst_ps", "worst_corner"]
-    labels = [r[2] for r in rows[1:9]]
-    assert labels == ["[kind]", "[min slack ps]", "[TNS ps]"] + [labels[3]] + \
-        ["[kind]", "[min slack ps]", "[TNS ps]"] + [labels[7]]
-    assert {r[1] for r in rows[1:9]} == {"125", "m25"}
-    kinds = set(rows[1][5:]) | set(rows[5][5:])
-    assert {"seen", "hidden", "interp", "extrap"} <= kinds
-    worst = [float(r[3]) for r in rows[9:]]
-    assert worst == sorted(worst) and len(worst) == 24
+    assert rows[0][:4] == ["design", "temp", "path_idx", "path_key"]
+    assert len(rows) == 1 + 24 and all(not r[2].startswith("[") for r in rows[1:])
+    for temp in ("125", "m25"):
+        idx = [int(r[2]) for r in rows[1:] if r[1] == temp]
+        assert len(idx) == 12 and idx == sorted(idx), "paths must be in idx order"
+    ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
+                      ["cfg"]["data"]["cache"]))
+    got = {int(r[2]): r[3] for r in rows[1:] if r[1] == "m25"}
+    assert got == {int(i): str(k) for i, k in zip(ds["path_idx"], ds["path_keys"])}
 
     # (3) a repeat never overwrites
     fp2, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "t")
@@ -1118,5 +1119,5 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     req = _predict_request(p, models, "0.58:rcmin", None, None)
     fp3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
     rows = list(_csv.reader(open(fp3, encoding="utf-8")))
-    by = {(r[1], r[2]): r[5] for r in rows[1:9]}
-    assert by[("125", "[kind]")] == "n/a" and by[("m25", "[kind]")] == "interp"
+    assert {r[4] for r in rows[1:] if r[1] == "125"} == {""}
+    assert all(r[4] for r in rows[1:] if r[1] == "m25")

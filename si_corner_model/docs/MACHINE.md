@@ -406,14 +406,16 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
 요청을 다시 돌리면 `_2`, `_3` 이 붙은 새 파일이 생기고 앞의 것은 그대로 남는다
 (`--name` 으로 이름 지정 가능).
 
-- 맨 위: 회로·온도마다 요약 4줄 — `[kind]` / `[min slack ps]` / `[TNS ps]` / `[violating of N]`
-- 그 아래: 모든 경로, **가장 나쁜 slack 순서**로. 서버에서는 이렇게 본다:
-  ```
-  head -40 runs/setup/_all/predict_*.csv | column -s, -t
-  ```
-- `kind`: `seen`(학습에 쓴 코너) · `hidden`(측정했지만 가려둔 코너) ·
-  `interp`(새 코너, 측정 전압 범위 안) · `extrap`(범위 밖 — 믿지 말 것) ·
-  `n/a`(그 온도에 없는 레벨, 예: 125C 의 rcmin — 빈칸)
+- 한 줄 = 경로 하나, **리포트의 path 인덱스 순서대로**. 열은
+  `design, temp, path_idx, path_key, <코너>, <코너>, ...`
+  - `path_idx` = 리포트의 `### FIXED_PATH idx=<n>` 의 n
+  - `path_key` = 같은 줄의 `key=` (시작점->끝점)
+  - 값 = 예측 slack (ps). 그 온도에 없는 레벨(예: 125C 의 rcmin)은 빈칸
+- 서버에서 보기: `column -s, -t runs/setup/_all/predict_*.csv | less -S`
+- 요약(코너별 worst slack, 음수 slack 합, 음수 경로 수)과 각 코너의 종류는
+  **화면에만** 나온다. 종류: `seen`(학습에 쓴 코너) · `hidden`(측정했지만 가려둔
+  코너) · `interp`(측정 안 한 코너, 측정 전압 범위 안) · `extrap`(범위 밖 — 믿지
+  말 것)
 - 스윕 범위 안의 **측정 전압은 자동으로 들어간다** — 곡선이 실측점을 지나는지 보라고
 - 모든 값은 모델 예측이다. 새 코너(interp/extrap)에서는 **SI 보정을 끈다** —
   크로스토크 리포트가 없기 때문
