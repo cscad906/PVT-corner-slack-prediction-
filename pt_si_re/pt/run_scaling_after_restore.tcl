@@ -837,7 +837,11 @@ proc auto_scaling::run_after_restore {cfg} {
         puts "GROUND SUPPLY NETS: [get_object_name $ground_supply]"
         check_status set_ground [list set_voltage 0.0 -object_list $ground_supply]
     }
-    check_status update_timing {update_timing -full}
+    # restore_session에는 기존 timing 상태가 들어 있으므로 변경된 V/T와
+    # scaling group의 영향만 갱신합니다. -full은 fixed path와 무관한
+    # macro/IO net까지 처음부터 다시 계산하여 RC fallback과 실행 시간을
+    # 불필요하게 늘릴 수 있습니다.
+    check_status update_timing {update_timing}
 
     set paths [get_timing_paths -delay_type $dt -max_paths 1]
     if {![sizeof_collection $paths]} {
