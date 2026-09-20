@@ -636,8 +636,99 @@ class Trainer:
         self.model.si.hard = prev_hard
         return pred
 
+    def _si_norm(self) -> np.ndarray:
+        """[5, 2] per-channel (mean, std) of the SI features over SEEN corners.
+
+        _prep_tensors computes these while standardising si_x and keeps
+        nothing, so a run that loads a cached si_x has no record of them. They
+        are recoverable from the cached hat arrays by the same formula, and
+        saved next to them the first time they are needed.
+        """
+        fp = os.path.join(self.sf_dir, "si_x_stats.npy")
+        if os.path.exists(fp):
+            return np.load(fp)
+        ds = np.load(self.cfg["data"]["cache"])
+        mm = lambda n: np.load(os.path.join(self.sf_dir, n + ".npy"), mmap_mode="r")
+        S_, A_, C_ = mm("bump_hat").shape
+        seen_, pres = self.split.seen_idx, self.si_present
+
+        def chan(i):
+            if i == 0:
+                return np.broadcast_to(np.nan_to_num(ds["acc"])[:, :, None], (S_, A_, C_))
+            if i == 1:
+                return mm("bump_hat")
+            if i == 2:
+                return mm("overlap")
+            if i == 3:
+                return mm("aslew_hat")
+            vw = mm("vwin_hat")
+            return np.broadcast_to((vw[:, :, 1] - vw[:, :, 0])[:, None, :], (S_, A_, C_))
+
+        out = np.empty((5, 2), np.float64)
+        for i in range(5):
+            x = np.nan_to_num(np.asarray(chan(i), np.float32))
+            mi = x[:, :, seen_][pres]
+            out[i] = (float(mi.mean()), float(mi.std()) + 1e-8)
+            del x, mi
+        np.save(fp, out)
+        return out
+
+    def _si_at(self, phi_aug, seen_aug, idx):
+        """SI branch inputs at the new corners ``idx`` (columns C.. of phi_aug).
+
+        The same interpolation the pipeline uses at a HIDDEN corner. The
+        windows, bumps and slews are not read from that corner's report even
+        when one exists: si_features fits a low-order polynomial in the corner
+        coordinates on anchors within the SEEN corners and evaluates it at the
+        target, replacing a seen corner's own value by its leave-one-out one.
+        So a corner with no report at all is not a different case -- it is the
+        same evaluation at a coordinate that happens to have no measurement,
+        and zeroing the SI branch there (the first version did) made --at
+        predictions inconsistent with the hidden-corner ones the model is
+        judged on.
+
+        Returns the five standardised channels plus the raw windows and bump
+        the branch needs, for these corners only. Callers pass a few corners at
+        a time: these arrays are [stages x aggressors x corners], the largest
+        thing in the pipeline, which is why the training copy lives on disk.
+        """
+        from si_model.features.si_features import build_si_features
+
+        ds = np.load(self.cfg["data"]["cache"])
+        q = len(idx)
+
+        def pad(a, axis):
+            a = np.asarray(a)
+            shp = list(a.shape)
+            shp[axis] = q
+            return np.concatenate([a, np.full(shp, np.nan, a.dtype)], axis)
+
+        ext = {"vwin": pad(ds["vwin"], 1), "abump": pad(ds["abump"], 2),
+               "awin": pad(ds["awin"], 2), "aslew": pad(ds["aslew"], 2)}
+        phi = np.concatenate([phi_aug[:self.C], phi_aug[idx]], 0)
+        seen = np.concatenate([np.asarray(seen_aug[:self.C], bool), np.zeros(q, bool)])
+        sf = build_si_features(ext, phi, seen)
+        del ext
+        C = self.C
+        bump = np.asarray(sf["bump_hat"][:, :, C:], np.float32)
+        aslew = np.asarray(sf["aslew_hat"][:, :, C:], np.float32)
+        over = np.asarray(sf["overlap"][:, :, C:], np.float32)
+        awin = np.asarray(sf["awin_hat"][:, :, C:, :], np.float32)
+        vwin = np.asarray(sf["vwin_hat"][:, C:, :], np.float32)
+        del sf
+        S_, A_, _ = bump.shape
+        acc = np.broadcast_to(np.nan_to_num(ds["acc"])[:, :, None], (S_, A_, q))
+        vw = np.broadcast_to((vwin[:, :, 1] - vwin[:, :, 0])[:, None, :], (S_, A_, q))
+        stats = self._si_norm()
+        x = np.empty((S_, A_, q, 5), np.float32)
+        for i, ch in enumerate((acc, bump, over, aslew, vw)):
+            x[..., i] = (np.nan_to_num(np.asarray(ch, np.float32)) - stats[i, 0]) / stats[i, 1]
+        return {"x": x, "awin": np.nan_to_num(awin), "vwin": np.nan_to_num(vwin),
+                "bump": np.nan_to_num(bump)}
+
     @torch.no_grad()
-    def predict_coords(self, model_vt, base_vt, bs: int = 512) -> np.ndarray:
+    def predict_coords(self, model_vt, base_vt, bs: int = 512,
+                       corner_chunk: int = 4) -> np.ndarray:
         """[N, Q] model predictions (ps) at corners that are NOT in the dataset.
 
         A corner nobody measured has no report to parse, so nothing about it
@@ -663,11 +754,13 @@ class Trainer:
         Residual: the query is encoded by _query_vec, the same code make_batch
         uses, with every seen corner visible (there is no own token to mask).
 
-        No SI. An unmeasured corner has no crosstalk report, so the SI branch
-        has no input; it is given nothing present, which makes its output
-        exactly zero. It models jumps -- glitches, toggles -- that the base
-        cannot represent, and interpolating a jump from neighbouring corners
-        would be wrong rather than approximate.
+        SI: the same interpolation a hidden corner gets -- see _si_at. The
+        first version zeroed the SI branch here, on the reasoning that an
+        unmeasured corner has no crosstalk report. That reasoning was wrong
+        about this pipeline: no corner uses its own report for these inputs,
+        hidden ones included, so a corner without one is not a special case.
+        Corners are processed ``corner_chunk`` at a time because the SI arrays
+        are the largest in the pipeline.
         """
         from si_model.config import fit_scales
         from si_model.model.base_ols import design_matrix
@@ -701,28 +794,49 @@ class Trainer:
         Smax = self.stage_pad.shape[1]
         Aa = self.si_x.shape[1]
         resid = np.empty((self.N, Q))
-        for k in range(Q):
-            for i in range(0, self.N, bs):
-                P = np.arange(i, min(i + bs, self.N))
-                Pt = torch.as_tensor(P, dtype=torch.long, device=dev)
-                B = len(P)
-                tmask = seen_t[None, :].expand(B, -1).clone()
-                zeros = lambda *shape: torch.zeros(*shape, device=dev)
-                b = {
-                    "tokens": self.tokens[Pt], "token_mask": tmask,
-                    "query_vt": self._query_vec(qs[k], tmask),
-                    "fam": self.node_fam[Pt], "node": self.node_feat[Pt],
-                    "edge": self.edge_feat[Pt], "nmask": self.node_mask[Pt],
-                    "crit": self.critical[Pt], "sig_feats": self.sig[Pt],
-                    "si_x_raw": zeros(B, Smax, Aa, 5),
-                    "si_awin": zeros(B, Smax, Aa, 2),
-                    "si_vwin": zeros(B, Smax, 2),
-                    "si_bump": zeros(B, Smax, Aa),
-                    "si_present": torch.zeros(B, Smax, Aa, dtype=torch.bool,
-                                              device=dev),
-                    "si_stage_mask": self.stage_mask[Pt],
-                }
-                resid[P, k] = self.forward(b)["resid"].cpu().numpy()
+        for lo in range(0, Q, max(1, corner_chunk)):
+            hi = min(lo + max(1, corner_chunk), Q)
+            sfq = (self._si_at(phi, seen, np.arange(self.C + lo, self.C + hi))
+                   if self.has_si else None)
+            for k in range(lo, hi):
+                j = k - lo
+                for i in range(0, self.N, bs):
+                    P = np.arange(i, min(i + bs, self.N))
+                    Pt = torch.as_tensor(P, dtype=torch.long, device=dev)
+                    B = len(P)
+                    tmask = seen_t[None, :].expand(B, -1).clone()
+                    spn = self.stage_pad[Pt].detach().cpu().numpy()
+
+                    def mt(a, dt=torch.float32):
+                        return torch.as_tensor(np.ascontiguousarray(a), dtype=dt,
+                                               device=dev)
+
+                    if sfq is None:
+                        z = lambda *shape: torch.zeros(*shape, device=dev)
+                        si = {"si_x_raw": z(B, Smax, Aa, 5),
+                              "si_awin": z(B, Smax, Aa, 2),
+                              "si_vwin": z(B, Smax, 2),
+                              "si_bump": z(B, Smax, Aa),
+                              "si_present": torch.zeros(B, Smax, Aa,
+                                                        dtype=torch.bool, device=dev)}
+                    else:
+                        si = {"si_x_raw": mt(sfq["x"][spn][:, :, :, j, :]),
+                              "si_awin": mt(sfq["awin"][spn][:, :, :, j, :]),
+                              "si_vwin": mt(sfq["vwin"][spn][:, :, j, :]),
+                              "si_bump": mt(sfq["bump"][spn][..., j]),
+                              "si_present": (mt(self.si_present[spn], torch.bool)
+                                             & self.stage_mask[Pt][:, :, None])}
+                    b = {
+                        "tokens": self.tokens[Pt], "token_mask": tmask,
+                        "query_vt": self._query_vec(qs[k], tmask),
+                        "fam": self.node_fam[Pt], "node": self.node_feat[Pt],
+                        "edge": self.edge_feat[Pt], "nmask": self.node_mask[Pt],
+                        "crit": self.critical[Pt], "sig_feats": self.sig[Pt],
+                        "si_stage_mask": self.stage_mask[Pt],
+                    }
+                    b.update(si)
+                    resid[P, k] = self.forward(b)["resid"].cpu().numpy()
+            del sfq
         self.model.si.hard = prev_hard
         return base + resid
 

@@ -1963,8 +1963,10 @@ def _predict_one_model(m: dict, req: list):
     kind each corner is for THIS model.
 
     A requested corner that already exists in the grid and was measured goes
-    through the evaluation path (its own SI, its own token masked when seen);
-    anything else is a coordinate query with SI off. Voltage ranges differ per
+    through the evaluation path (its own token masked when seen); anything else
+    is a coordinate query. Both get the same SI treatment -- no corner uses its
+    own crosstalk report for the SI inputs, they are a fit on the seen corners
+    evaluated at the target. Voltage ranges differ per
     circuit, so the same column can be interp for one and extrap for another.
     """
     import numpy as np

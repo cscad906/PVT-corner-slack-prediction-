@@ -1156,3 +1156,86 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
         _predict_request(p, only125, "0.58:rcmn", None, None)
     with pytest.raises(AssertionError, match="nothing to predict"):
         _predict_request(p, only125, None, "0.5:0.6:0.1", "rcmin")
+
+
+def _with_synthetic_si(cache: str, out: str, seed: int = 0) -> str:
+    """Copy a built dataset and give it crosstalk, so the SI branch is live.
+
+    The report fixture produces no stage rows at all (stages are parsed only
+    alongside crosstalk), so every test above runs with the SI branch disabled
+    -- which is how a bug in the SI half of predict --at reached a real run.
+    Rather than inventing a crosstalk report format, this fills the SI arrays
+    the build would have produced: two aggressors per stage, bumps and windows
+    varying smoothly with the corner, and one aggressor inactive at two corners
+    so the anchor-subset path is taken as well.
+    """
+    d = dict(np.load(cache))
+    N, C = d["slack"].shape
+    A, K = 2, 2
+    S = N * K
+    rng = np.random.RandomState(seed)
+    vt = d["vt"]
+    dv = (vt[:, 0] - 0.685)[None, None, :]
+    dl = vt[:, 1][None, None, :]
+    d["stage_path"] = np.repeat(np.arange(N, dtype=np.int32), K)
+    d["stage_seg"] = np.zeros(S, np.int8)
+    d["n_aggr"] = np.full(S, A, np.int16)
+    d["acc"] = np.full((S, A), 0.30, np.float32)
+    d["abump"] = (rng.uniform(0.02, 0.08, (S, A, 1))
+                  * (1 - 1.5 * dv + 0.2 * dl)).astype(np.float32)
+    d["aslew"] = (rng.uniform(0.02, 0.05, (S, A, 1)) * (1 - 1.2 * dv)).astype(np.float32)
+    lo = rng.uniform(0.0, 0.2, (S, A, 1)) + 0.1 * dv
+    d["awin"] = np.stack([lo, lo + 0.15], -1).astype(np.float32)
+    vlo = rng.uniform(0.05, 0.15, (S, 1)) + 0.1 * dv[0]
+    d["vwin"] = np.stack([vlo, vlo + 0.2], -1).astype(np.float32)
+    d["arc_delta"] = np.zeros((S, C), np.float32)
+    d["abump"][0, 0, [1, 5]] = np.nan
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    np.savez_compressed(out, **d)
+    return out
+
+
+def test_predict_at_new_corners_carries_si(real_tree, tmp_path, monkeypatch):
+    """With crosstalk present, a coordinate query must reproduce the evaluation
+    path at a hidden corner -- SI included.
+
+    No corner uses its own crosstalk report for these inputs: si_features fits
+    the windows, bumps and slews on anchors within the SEEN corners and
+    evaluates that fit at the target, leave-one-out at a seen corner. A corner
+    with no report is therefore the same evaluation at another coordinate, not
+    a special case, and --at must get it too. The first version zeroed the SI
+    branch instead, and then passed the coordinates where the design matrix was
+    expected -- neither of which any SI-free fixture could notice.
+    """
+    pytest.importorskip("torch")
+    import torch
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import expand, load_project, select
+    from si_model.tasks.slack.train import Trainer
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    p["designs"] = ["boomcore"]
+    p["files"]["crosstalk_subdir"] = None
+    p["train"]["device"] = "cpu"
+    m = select(expand(p), design="boomcore", temp="m25")[0]
+    build(m["cfg"])
+    m["cfg"]["data"]["cache"] = _with_synthetic_si(
+        m["cfg"]["data"]["cache"], str(tmp_path / "si" / "dataset.npz"))
+
+    tr = Trainer(m["cfg"])
+    assert tr.has_si, "this test is pointless without the SI branch live"
+    torch.manual_seed(0)
+    for prm in list(tr.model.parameters()) + list(tr.enc.parameters()):
+        prm.data.normal_(0.0, 0.3)
+
+    H = tr.split.hidden_idx
+    assert len(H) >= 2
+    a = tr.predict_corners(H)
+    assert np.abs(a - tr.base_hat.cpu().numpy()[:, H]).max() > 1.0, \
+        "the residual must be large enough for a mismatch to show"
+    for chunk in (4, 1):            # one chunk, then several
+        b = tr.predict_coords(tr.ds["vt"][H], tr.split.vt[H], corner_chunk=chunk)
+        np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-3)
