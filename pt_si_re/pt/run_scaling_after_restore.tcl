@@ -353,14 +353,68 @@ proc auto_scaling::report_operating_condition {lib path} {
     return [lindex $rows 0]
 }
 
-proc auto_scaling::report_family {lib path process} {
+# library 이름에 주 전압과 보조 rail 전압이 함께 들어갈 수 있습니다. 이름의
+# 모든 전압을 지우면 보조 rail 전압이 다른 library들이 한 family로 합쳐지므로,
+# report_lib Operating Conditions와 일치하는 token 위치만 family 후보로 만듭니다.
+proc auto_scaling::replace_matching_pvt_tokens {text pattern target replacement} {
+    set result ""
+    set cursor 0
+    foreach range [regexp -all -inline -indices $pattern $text] {
+        lassign $range first last
+        append result [string range $text $cursor [expr {$first-1}]]
+        set token [string range $text $first $last]
+        set numeric [string range $token 0 end-1]
+        if {![catch {set value [number $numeric]}] && [same $value $target]} {
+            append result $replacement
+        } else {
+            append result $token
+        }
+        set cursor [expr {$last+1}]
+    }
+    append result [string range $text $cursor end]
+    return $result
+}
+
+proc auto_scaling::replace_one_token {text range replacement} {
+    lassign $range first last
+    return "[string range $text 0 [expr {$first-1}]]${replacement}[string range $text [expr {$last+1}] end]"
+}
+
+proc auto_scaling::matching_pvt_ranges {text pattern target} {
+    set matches {}
+    foreach range [regexp -all -inline -indices $pattern $text] {
+        lassign $range first last
+        set token [string range $text $first $last]
+        set numeric [string range $token 0 end-1]
+        if {![catch {set value [number $numeric]}] && [same $value $target]} {
+            lappend matches $range
+        }
+    }
+    return $matches
+}
+
+proc auto_scaling::report_family_info {lib path process voltage temperature} {
     set family [get_attribute $lib full_name]
     if {$family eq ""} { set family [file rootname [file tail $path]] }
     set family [string tolower $family]
     set family [string map [list [string tolower $process] PROCESS] $family]
-    regsub -all {[0-9]+(?:[p.][0-9]+)?v} $family {VOLTAGE} family
-    regsub -all {(?:m|-)?[0-9]+(?:[p.][0-9]+)?c} $family {TEMPERATURE} family
-    return $family
+    set voltage_pattern {[0-9]+(?:[p.][0-9]+)?v}
+    set voltage_tokens [regexp -all -inline $voltage_pattern $family]
+    set family [replace_matching_pvt_tokens $family \
+        {(?:m|-)?[0-9]+(?:[p.][0-9]+)?c} $temperature TEMPERATURE]
+    set candidates {}
+    foreach range [matching_pvt_ranges $family $voltage_pattern $voltage] {
+        set candidate [replace_one_token $family $range VOLTAGE]
+        if {[lsearch -exact $candidates $candidate] < 0} { lappend candidates $candidate }
+    }
+    if {![llength $candidates]} {
+        # 이름의 전압 표기가 Operating Conditions 값과 직접 대응하지 않는
+        # 구형 naming은 기존 방식으로만 후보를 만들고 이후 exact-grid 검증에 맡깁니다.
+        set fallback $family
+        regsub -all $voltage_pattern $fallback {VOLTAGE} fallback
+        lappend candidates $fallback
+    }
+    return [dict create candidates $candidates voltage_tokens $voltage_tokens]
 }
 
 # 먼저 기존 파일명 규칙을 사용하고, 파일명에서 P/V/T를 못 찾을 때에는
@@ -387,12 +441,101 @@ proc auto_scaling::corner {lib path overrides} {
             }
             set v [dict get $condition v]
             set t [dict get $condition t]
-            set family [report_family $lib $path $process]
+            set family_info [report_family_info $lib $path $process \
+                [dict get $condition v] [dict get $condition t]]
+            set family [lindex [dict get $family_info candidates] 0]
         }
     }
     set lib_name [get_attribute $lib full_name]
-    return [dict create file $path process [string toupper $process] \
+    set result [dict create file $path process [string toupper $process] \
         v [number $v] t [number $t] family $family lib_name $lib_name]
+    if {[info exists family_info]} {
+        dict set result family_candidates [dict get $family_info candidates]
+        dict set result voltage_tokens [dict get $family_info voltage_tokens]
+    }
+    return $result
+}
+
+# 두 전압 token이 같은 값이 되는 코너에서는 한 row만 보고 어느 위치가 PVT
+# 축인지 알 수 없습니다. 전체 loaded grid에서 각 후보가 이어지는 V/T 점 수를
+# 비교하여 결정하고, 여전히 동률이면 임의 선택 대신 그 library를 한 점 static
+# family로 보존합니다.
+proc auto_scaling::resolve_family_candidates {rows mode} {
+    set support [dict create]
+    set multi_rail_rows 0
+    foreach row $rows {
+        if {[dict exists $row family_candidates]} {
+            set candidates [dict get $row family_candidates]
+        } else {
+            set candidates [list [dict get $row family]]
+        }
+        if {[dict exists $row voltage_tokens] && \
+            [llength [dict get $row voltage_tokens]] > 1} {
+            incr multi_rail_rows
+        }
+        foreach candidate $candidates {
+            set key [list [dict get $row process] $candidate]
+            dict lappend support $key [list [dict get $row v] [dict get $row t]]
+        }
+    }
+
+    set resolved {}
+    set grid_resolved 0
+    set static_ambiguous 0
+    foreach row $rows {
+        if {[dict exists $row family_candidates]} {
+            set candidates [dict get $row family_candidates]
+        } else {
+            set candidates [list [dict get $row family]]
+        }
+        if {[llength $candidates] <= 1} {
+            lappend resolved $row
+            continue
+        }
+        set best_score -1
+        set winners {}
+        foreach candidate $candidates {
+            set key [list [dict get $row process] $candidate]
+            set vs {}
+            set ts {}
+            set points {}
+            foreach point [dict get $support $key] {
+                lassign $point pv pt
+                lappend vs $pv
+                lappend ts $pt
+                lappend points "$pv,$pt"
+            }
+            set nv [llength [lsort -real -unique $vs]]
+            set nt [llength [lsort -real -unique $ts]]
+            set np [llength [lsort -unique $points]]
+            switch -- $mode {
+                V  { set score [expr {$nv * 100000 + $np}] }
+                T  { set score [expr {$nt * 100000 + $np}] }
+                VT { set score [expr {$np * 100000 + $nv * 100 + $nt}] }
+                default { set score $np }
+            }
+            if {$score > $best_score} {
+                set best_score $score
+                set winners [list $candidate]
+            } elseif {$score == $best_score} {
+                lappend winners $candidate
+            }
+        }
+        if {[llength $winners] == 1} {
+            dict set row family [lindex $winners 0]
+            incr grid_resolved
+        } else {
+            dict set row family "__MULTIRAIL_STATIC__/[string tolower [dict get $row lib_name]]"
+            dict set row family_resolution ambiguous_static
+            incr static_ambiguous
+            puts "MULTI-RAIL AMBIGUOUS -> STATIC: LIB=[dict get $row lib_name] voltage_tokens=[dict get $row voltage_tokens]"
+        }
+        lappend resolved $row
+    }
+    if {$multi_rail_rows} {
+        puts "MULTI-RAIL NAME ANALYSIS: rows=$multi_rail_rows grid_resolved=$grid_resolved ambiguous_static=$static_ambiguous"
+    }
+    return $resolved
 }
 
 # restore session의 현재 design 인스턴스들이 실제로 참조하는 library 이름입니다.
@@ -763,6 +906,7 @@ proc auto_scaling::catalog {cfg} {
         }
         lappend rows $row
     }
+    set rows [resolve_family_candidates $rows [string toupper [option $cfg mode V]]]
     if {![llength $rows]} {
         set detail ""
         foreach item [lrange $ignored 0 2] {

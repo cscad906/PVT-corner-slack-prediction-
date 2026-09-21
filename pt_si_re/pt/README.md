@@ -91,6 +91,11 @@ fixed path는 최종 timing report 대상을 정하는 데만 사용합니다. S
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
 
+library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rail library는
+`report_lib` Operating Conditions의 주 전압만 scaling 축으로 인식합니다. 이름의
+다른 rail 전압은 family 구분값으로 유지하므로, 보조 전압이 다른 library를 같은
+scaling group에 섞지 않습니다.
+
 전원 rail은 이름으로 추측하지 않습니다. 스크립트가 instantiated cell의 정확한
 library 객체와 `lib_scaling_group`을 따라가서 자동 분류합니다. scaling group의
 cell만 사용하는 rail에는 target voltage를 적용하고, static SRAM/macro만 사용하는
