@@ -1114,6 +1114,10 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
     if {![sizeof_collection $used_lib_cells]} {
         error "Design cell이 참조하는 library cell을 찾지 못해 supply rail을 자동 분류할 수 없습니다."
     }
+    set used_libs [get_libs -quiet -of_objects $used_lib_cells]
+    if {![sizeof_collection $used_libs]} {
+        error "Design cell이 참조하는 owning library를 찾지 못해 supply rail을 자동 분류할 수 없습니다."
+    }
 
     set scaled_cells ""
     set static_cells ""
@@ -1125,21 +1129,27 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
     set scaled_count 0
     set static_count 0
 
-    # 같은 library 이름의 PVT DB가 여러 개 올라올 수 있으므로 이름으로 다시
-    # 찾지 않습니다. 실제 instantiated lib_cell의 owning library를 직접 따라갑니다.
-    foreach_in_collection active_lib_cell $used_lib_cells {
-        set lib [get_libs -quiet -of_objects $active_lib_cell]
-        if {[sizeof_collection $lib] != 1} {
-            error "사용 중인 lib_cell '[get_attribute $active_lib_cell full_name]'의 owning library를 하나로 식별하지 못했습니다."
-        }
+    # lib_cell마다 get_cells/get_supply_nets를 호출하면 큰 설계에서 수천 번의
+    # collection query가 발생합니다. scaling group은 owning library 단위로
+    # 동일하므로, 실제 사용 library별로 모든 instance를 한꺼번에 처리합니다.
+    set lib_index 0
+    set lib_total [sizeof_collection $used_libs]
+    foreach_in_collection lib $used_libs {
+        incr lib_index
         set lib_name [get_object_name $lib]
         set source_name ""
         catch { set source_name [file tail [get_attribute $lib source_file_name]] }
         set lib_label $lib_name
         if {$source_name ne ""} { append lib_label "($source_name)" }
 
-        set design_cells [get_cells -quiet -of_objects $active_lib_cell]
+        set library_cells [get_lib_cells -quiet -of_objects $lib]
+        set design_cells [get_cells -quiet -of_objects $library_cells]
         if {![sizeof_collection $design_cells]} { continue }
+
+        if {$lib_index == 1 || $lib_index % 10 == 0 || $lib_index == $lib_total} {
+            puts "POWER RAIL PROGRESS: library=$lib_index/$lib_total instances=[sizeof_collection $design_cells]"
+            flush stdout
+        }
 
         set scaling_group [get_attribute -quiet $lib lib_scaling_group]
         set is_scaled [expr {$scaling_group ne "" && [sizeof_collection $scaling_group]}]

@@ -257,6 +257,9 @@ POWER SUPPLY NETS TO SCALE: VDD_CORE ...
 `AUTO POWER CLASSIFICATION`은 실제 instantiated scaled/static cell 개수를
 보여줍니다. operating condition 또는 family를 해석하지 못한 instantiated
 library는 `UNCLASSIFIED INSTANTIATED LIBRARIES (not scaled)`로 별도 출력합니다.
+power rail 분류는 cell type별 반복 조회를 하지 않고 owning library 단위로
+instance와 PG net을 묶어 조회하며, `POWER RAIL PROGRESS: library=N/TOTAL`로
+진행 상태를 표시합니다.
 
 다음 오류는 이름 인식 실패가 아니라 실제 공유 rail 충돌입니다. static SRAM DB를
 그대로 둔 채 같은 물리 rail의 core만 다른 전압으로 만들 수 없으므로, target
