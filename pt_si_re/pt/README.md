@@ -441,6 +441,7 @@ column -s, -t \
 | `missing close-brace` | Tcl이 일부만 복사됐거나 구버전 사용 | Git의 최신 파일을 다시 복사하고 전체 파일을 source |
 | P/V/T library를 찾지 못함 | `TARGET_PROCESS`가 `report_lib`의 실제 이름과 다르거나 bracket DB 없음 | Operating Conditions와 loaded library 확인 |
 | library selection ambiguous | 같은 PVT의 revision/중복 library가 여러 개 | 담당자가 사용할 PDK revision 하나를 정해 session 정리 |
+| `needs exactly one library ... found N` | 같은 family/PVT로 분류된 DB가 없거나 여러 개 | 오류 아래 `MATCH: LIB=... DB=...` 목록 확인. 서로 다른 LIB면 family 분류를 수정하고, 같은 LIB의 여러 DB면 사용할 revision 하나를 결정 |
 | target corner가 기존 scaling group에 포함 | leave-one-out 조건 위반 | target이 들어 있지 않은 fresh restore session 사용 |
 | BEOL 또는 parasitic temperature 불일치 | 다른 scenario/session의 parasitic 활성 | 정확한 target BEOL/temperature session을 restore |
 | `incomplete fixed path` 또는 missing path | 원래 invalid path이거나 netlist revision 불일치 | `.missing`에서 기존 invalid 목록과 비교 |

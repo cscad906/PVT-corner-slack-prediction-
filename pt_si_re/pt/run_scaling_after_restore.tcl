@@ -561,7 +561,14 @@ proc auto_scaling::plan_one_family {rows process family tv tt mode} {
                 }
             }
             if {[llength $matches] != 1} {
-                error "library set '$family' needs exactly one library at $process/$v V/$t C; found [llength $matches]. Missing corner or duplicate revisions."
+                set detail ""
+                foreach match $matches {
+                    append detail "\n  MATCH: LIB=[dict get $match lib_name] DB=[dict get $match file]"
+                }
+                if {![llength $matches]} {
+                    append detail "\n  No library matched this exact process/voltage/temperature point."
+                }
+                error "library set '$family' needs exactly one library at $process/$v V/$t C; found [llength $matches]. Missing corner, merged library families, or duplicate revisions.$detail"
             }
             lappend selected [lindex $matches 0]
         }
