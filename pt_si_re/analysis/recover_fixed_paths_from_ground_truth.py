@@ -205,6 +205,28 @@ def main():
     if total_blocks == 0:
         parser.error("no '### FIXED_PATH idx=... key=...' blocks found")
     if not records:
+        # Every block failed. The reason table is the only way to tell a
+        # crosstalk report (no timing table at all) from a timing report whose
+        # header this parser does not recognise, so print it before leaving --
+        # erroring out first left the caller with nothing to act on.
+        print("=== Recover fixed paths from ground truth ===")
+        print("source report       : %s" % args.ground_truth_rpt)
+        print("FIXED_PATH blocks   : %d" % total_blocks)
+        print("recovered paths     : 0")
+        print("why every block was skipped:")
+        for reason, count in sorted(skipped.items(), key=lambda kv: -kv[1]):
+            print("  %-30s %d" % (reason, count))
+        print("")
+        print("What the reasons mean when EVERY block hits the same one:")
+        print("  missing_or_multiple_startpoint -> no timing table at all.")
+        print("     This is the crosstalk report (xt.*.by_path.rpt): it")
+        print("     carries the markers and nothing else. Use the annotated")
+        print("     report, report.<corner>_fixed_annotated.rpt.")
+        print("  missing_path_type -> a timing report whose header has no")
+        print("     'Path Type: max' line. Check the first block by hand:")
+        print("     awk '/### FIXED_PATH/{n++} n==1' <file> | head -40")
+        print("  missing_data_pin_chain -> report_timing ran without")
+        print("     -input_pins, so the pins between the flops are not there.")
         parser.error("no resolved fixed path could be recovered")
     path_types = set(record["path_type"] for record in records)
     if len(path_types) != 1:
