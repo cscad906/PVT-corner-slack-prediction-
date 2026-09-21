@@ -82,6 +82,11 @@ group에 0.55 V를 설정한 검사에서도 PrimeTime이 `SLG-320`과 `DEL-012`
 scaling 적용을 취소했습니다. 다른 PrimeTime major version을 사용할 때는 해당
 버전의 `man SLG-320`과 `man define_scaling_lib_group`을 다시 확인합니다.
 
+fixed path는 최종 timing report 대상을 정하는 데만 사용합니다. SI aggressor와
+그 switching window, clock/upstream timing은 fixed path 밖의 cell에도 의존하므로,
+설계에 실제 instantiated된 모든 scalable library family를 scaling group에
+포함합니다. 메모리에 load만 되고 설계에서 사용하지 않는 PDK library는 제외합니다.
+
 고정된 한 점만 있는 SRAM, macro, IO library set은 scaling group에 넣지 않고
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
@@ -184,14 +189,18 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 스크립트가 자동으로 다음 작업을 수행합니다.
 
 1. restore된 library의 process/voltage/temperature 조사
-2. fixed path가 실제 사용하는 library set 선택
+2. 전체 instantiated design이 실제 사용하는 library set 선택
 3. target library를 제외한 내삽 입력 선택
 4. 현재 parasitic의 BEOL과 온도 확인
 5. scaling library group 구성 또는 기존 group 검증
 6. instantiated library 기준으로 scaled/static supply rail 자동 분류
 7. scaled cell과 그 rail에만 target voltage/temperature 적용 후 incremental `update_timing`
-8. 동일한 fixed path 측정
+8. 동일한 fixed path만 최종 report로 측정
 9. `report_delay_calculation`에서 scaling library 사용 증거 확인
+
+restore session에 기존 scaling group이 있으면 모든 design-used scalable family의
+계획된 입력 DB가 그 group들에 실제 포함됐는지도 검사합니다. 일부 family만 있는
+group이면 `Existing scaling groups do not cover...` 오류로 중단합니다.
 
 rail 분류 로그는 다음 형태입니다.
 
@@ -201,6 +210,11 @@ AUTO POWER TARGET RAILS: VDD_CORE ...
 AUTO POWER STATIC RAILS (unchanged): VDD_MEM ...
 POWER SUPPLY NETS TO SCALE: VDD_CORE ...
 ```
+
+`SCALING COVERAGE`는 내삽 가능한 family와 한 점뿐인 static family 개수를,
+`AUTO POWER CLASSIFICATION`은 실제 instantiated scaled/static cell 개수를
+보여줍니다. operating condition 또는 family를 해석하지 못한 instantiated
+library는 `UNCLASSIFIED INSTANTIATED LIBRARIES (not scaled)`로 별도 출력합니다.
 
 다음 오류는 이름 인식 실패가 아니라 실제 공유 rail 충돌입니다. static SRAM DB를
 그대로 둔 채 같은 물리 rail의 core만 다른 전압으로 만들 수 없으므로, target

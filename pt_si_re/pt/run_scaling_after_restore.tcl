@@ -314,7 +314,8 @@ proc auto_scaling::families_matching_library_names {rows families used_names} {
 }
 
 # fixed path의 launch/capture/through pin이 실제로 참조하는 library 이름을 얻습니다.
-# 전체 PDK가 load되어 있어도 이 경로와 무관한 memory/IO library set은 제외됩니다.
+# 이 정보는 report 대상 path가 어떤 family를 쓰는지 검증/출력하는 용도입니다.
+# SI/POCV scaling family 선택 자체는 전체 instantiated design을 기준으로 합니다.
 proc auto_scaling::family_used_by_fixed_paths {rows families fixed} {
     set pin_names {}
     foreach item [dict get $fixed paths] {
@@ -475,35 +476,55 @@ proc auto_scaling::plan {cfg} {
         error "No loaded PVT library set matches process $process"
     }
 
+    # SI aggressor와 그 timing window는 fixed path 밖의 cell에도 의존합니다.
+    # 따라서 fixed path는 report 선택에만 사용하고, 실제 design에 instantiated된
+    # 모든 PVT family를 scaling/static 판정 대상으로 삼습니다. 메모리에 load만
+    # 되고 design에서 사용하지 않는 PDK library는 포함하지 않습니다.
+    set used_result [family_used_by_design $rows $families]
+    set used_matches [dict get $used_result family_matches]
+    set used_names [dict get $used_result used_library_names]
+    if {![llength $used_matches]} {
+        error "No PVT library set matches the instantiated design. PVT candidates: $families; design-used library names: $used_names"
+    }
+
     set requested_family [option $cfg family ""]
     if {$requested_family ne ""} {
         if {[lsearch -exact $families $requested_family] < 0} {
             error "Requested library set is not available: $requested_family; candidates: $families"
         }
+        if {[lsearch -exact $used_matches $requested_family] < 0} {
+            error "Requested library set is not instantiated in the design: $requested_family; design-used sets: $used_matches"
+        }
         set chosen_families [list $requested_family]
-    } elseif {[llength $families] == 1} {
-        set chosen_families $families
+        puts "EXPLICIT LIBRARY SET OVERRIDE: $chosen_families"
     } else {
-        set fixed_matches {}
-        set fixed_names {}
-        if {$fixed ne ""} {
-            set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
-            set fixed_matches [dict get $fixed_result family_matches]
-            set fixed_names [dict get $fixed_result used_library_names]
+        set chosen_families $used_matches
+        puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY ENTIRE DESIGN: $chosen_families"
+    }
+
+    if {$fixed ne ""} {
+        set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
+        set fixed_matches [dict get $fixed_result family_matches]
+        set fixed_names [dict get $fixed_result used_library_names]
+        if {![llength $fixed_matches]} {
+            error "Fixed paths do not resolve to a loaded PVT library set. fixed-path library names: $fixed_names; design-used sets: $used_matches"
         }
-        if {[llength $fixed_matches]} {
-            set chosen_families $fixed_matches
-            puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY FIXED PATHS: $chosen_families"
-        } else {
-            set used_result [family_used_by_design $rows $families]
-            set used_matches [dict get $used_result family_matches]
-            set used_names [dict get $used_result used_library_names]
-            if {![llength $used_matches]} {
-                error "No PVT library set matches the fixed paths or design. PVT candidates: $families; fixed-path library names: $fixed_names; design-used library names: $used_names"
-            }
-            set chosen_families $used_matches
-            puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY DESIGN: $chosen_families"
+        puts "FIXED-PATH LIBRARY SET(S) (report selection only): $fixed_matches"
+    }
+
+    # Operating condition/family를 해석하지 못한 library라도 design에서 실제
+    # 사용 중이면 숨기지 않습니다. scaling 가능 여부를 증명하지 못했으므로
+    # unclassified/ungrouped로 남고 rail 단계의 static cell 수에는 포함됩니다.
+    set unclassified_used {}
+    foreach ignored [dict get $cat ignored] {
+        set ignored_name [dict get $ignored lib_name]
+        if {[lsearch -exact $used_names $ignored_name] >= 0} {
+            lappend unclassified_used $ignored_name
         }
+    }
+    set unclassified_used [lsort -unique $unclassified_used]
+    if {[llength $unclassified_used]} {
+        puts "UNCLASSIFIED INSTANTIATED LIBRARIES (not scaled): $unclassified_used"
     }
 
     set groups {}
@@ -527,7 +548,7 @@ proc auto_scaling::plan {cfg} {
         foreach row [dict get $group excluded] { lappend excluded $row }
     }
     if {![llength $groups]} {
-        error "The fixed paths use no library set with a usable interpolation grid. Static sets: $static_sets"
+        error "The instantiated design uses no library set with a usable interpolation grid. Static sets: $static_sets"
     }
 
     set result [dict create]
@@ -543,6 +564,7 @@ proc auto_scaling::plan {cfg} {
     dict set result excluded $excluded
     dict set result catalog $rows
     dict set result shadows [dict get $cat shadows]
+    dict set result unclassified_used $unclassified_used
     if {$fixed ne ""} { dict set result fixed $fixed }
 
     puts "TARGET: $process  $tv V  $tt C  $beol; mode=$mode; families=[llength $chosen_families]"
@@ -578,6 +600,7 @@ proc auto_scaling::plan {cfg} {
     if {[llength $static_sets]} {
         puts "SCALING COVERAGE: static set(s) kept at their original corner: $static_sets"
     }
+    puts "SCALING COVERAGE: unclassified instantiated libraries kept unscaled: [llength $unclassified_used]"
     return $result
 }
 
@@ -601,8 +624,9 @@ proc auto_scaling::catalog {cfg} {
         set path [get_attribute $lib source_file_name]
         if {$path eq "" || [dict exists $seen $path]} { continue }
         dict set seen $path 1
+        set lib_name [get_attribute $lib full_name]
         if {[catch {set row [corner $lib $path $overrides]} reason]} {
-            lappend ignored [list $path $reason]
+            lappend ignored [dict create path $path lib_name $lib_name reason $reason]
             continue
         }
         lappend rows $row
@@ -610,7 +634,7 @@ proc auto_scaling::catalog {cfg} {
     if {![llength $rows]} {
         set detail ""
         foreach item [lrange $ignored 0 2] {
-            append detail "\n  [lindex $item 0]: [lindex $item 1]"
+            append detail "\n  [dict get $item path]: [dict get $item reason]"
         }
         error "Restore session의 파일명과 report_lib에서 P/V/T를 식별할 library를 찾지 못했습니다.$detail"
     }
@@ -618,7 +642,7 @@ proc auto_scaling::catalog {cfg} {
     if {[llength $ignored]} {
         puts "IGNORED NON-PVT LIBRARIES: [llength $ignored]"
     }
-    return [dict create rows $rows shadows {}]
+    return [dict create rows $rows shadows {} ignored $ignored]
 }
 proc auto_scaling::fixed_path_edge_opt {base_opt dir} {
   if {$dir eq "r"} {
@@ -748,6 +772,33 @@ proc auto_scaling::report_has_corner {text rail voltage temperature} {
         }
     }
     return 0
+}
+
+# 기존 scaling group을 재사용하는 경우에도 전체 design용으로 계획한 각 입력
+# DB가 실제 active group에 들어 있는지 확인합니다. 일부 family만 묶인 restore
+# group을 조용히 재사용하면 fixed path 밖 SI/POCV cell이 원래 corner에 남습니다.
+proc auto_scaling::verify_planned_group_coverage {plan} {
+    set active_paths [dict create]
+    foreach_in_collection lib [get_libs -quiet *] {
+        set scaling_group [get_attribute -quiet $lib lib_scaling_group]
+        if {$scaling_group eq "" || ![sizeof_collection $scaling_group]} { continue }
+        set path [get_attribute -quiet $lib source_file_name]
+        if {$path ne ""} { dict set active_paths [file normalize $path] 1 }
+    }
+
+    set planned 0
+    set missing {}
+    foreach group [dict get $plan groups] {
+        foreach row [dict get $group selected] {
+            incr planned
+            set path [file normalize [dict get $row file]]
+            if {![dict exists $active_paths $path]} { lappend missing $path }
+        }
+    }
+    if {[llength $missing]} {
+        error "Existing scaling groups do not cover every instantiated scalable library family. Missing planned input DB(s): [lsort -unique $missing]"
+    }
+    puts "SCALING GROUP COVERAGE: all $planned planned input DB(s) are active"
 }
 
 proc auto_scaling::write_text {path contents} {
@@ -981,6 +1032,7 @@ proc auto_scaling::run_after_restore {cfg} {
     if {[report_has_corner $groups_after $rail $target_v $target_t]} {
         error "생성된 scaling group에 목표 코너가 남아 있습니다. 결과를 사용하지 마세요: ${out}.libgroups"
     }
+    verify_planned_group_coverage $plan
 
     set cells [get_cells -hierarchical -quiet *]
     if {![sizeof_collection $cells]} { error "현재 design에 leaf cell이 없습니다." }
