@@ -82,10 +82,10 @@ group에 0.55 V를 설정한 검사에서도 PrimeTime이 `SLG-320`과 `DEL-012`
 scaling 적용을 취소했습니다. 다른 PrimeTime major version을 사용할 때는 해당
 버전의 `man SLG-320`과 `man define_scaling_lib_group`을 다시 확인합니다.
 
-fixed path는 최종 timing report 대상을 정하는 데만 사용합니다. SI aggressor와
-그 switching window, clock/upstream timing은 fixed path 밖의 cell에도 의존하므로,
-설계에 실제 instantiated된 모든 scalable library family를 scaling group에
-포함합니다. 메모리에 load만 되고 설계에서 사용하지 않는 PDK library는 제외합니다.
+현재 운영 모드는 fixed path에 포함된 cell만 scaling합니다. `1_union.py`가
+`FIXED_PATHS`에 저장한 launch/capture pin과 전체 data-pin chain으로 cell 집합을
+복원하고, 그 cell들이 사용하는 library family만 scaling group에 포함합니다.
+fixed path 밖의 cell과 SI aggressor는 restore 상태를 유지합니다.
 
 고정된 한 점만 있는 SRAM, macro, IO library set은 scaling group에 넣지 않고
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
@@ -96,14 +96,12 @@ library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rai
 다른 rail 전압은 family 구분값으로 유지하므로, 보조 전압이 다른 library를 같은
 scaling group에 섞지 않습니다.
 
-전원 rail은 이름으로 추측하지 않습니다. 스크립트가 instantiated cell의 정확한
-library 객체와 `lib_scaling_group`을 따라가서 자동 분류합니다. scaling group의
-cell에서도 PrimeTime PG pin의 `type=primary_power`에 실제 연결된 supply net에만
-target voltage를 적용합니다. multi-rail cell의 나머지 power rail, static
-SRAM/macro 전용 rail과 static cell의 temperature는 restore 상태로 유지합니다.
-primary target rail이 static cell 또는 다른 non-primary 용도와 공유되면서 현재
-rail voltage가 target과 다르면, 한 rail에 두 전압을 줄 수 없으므로 변경 전에
-중단합니다.
+네 power rail의 역할은 USER SETTINGS에 명시합니다. 레벨시프터 입력 전 rail과
+memory rail은 fixed, 나머지 두 rail은 scaling 대상으로 둡니다. 스크립트는
+fixed-path cell의 `type=primary_power` PG pin과 실제 `supply_connection`을 확인한 뒤,
+scaling rail에 연결된 PG pin만 `set_voltage -cell ... -pg_pin_name ...`으로 변경합니다.
+따라서 같은 rail에 연결된 fixed path 밖의 cell이나 fixed rail 전체에는 전압을
+적용하지 않습니다. temperature도 이 cell 집합에만 적용합니다.
 
 ## 4. Tcl에서 수정할 곳
 
@@ -128,8 +126,10 @@ set FIXED_PATH_FILE "/company/work/pt_scaling_eval/input/fixed_paths.tcl"
 set RESULT_FOLDER   "/company/work/pt_scaling_eval/scaling_output"
 set PROGRESS_INTERVAL_MINUTES 10
 
-set POWER_NET  "VDD"
-set GROUND_NET "VSS"
+set FIXED_POWER_NET_BEFORE_LS "실제_고정_rail_이름"
+set SCALING_POWER_NET_1       "실제_scaling_rail_1"
+set SCALING_POWER_NET_2       "실제_scaling_rail_2"
+set FIXED_MEMORY_POWER_NET    "실제_memory_rail_이름"
 ```
 
 각 값의 의미는 다음과 같습니다.
@@ -145,7 +145,9 @@ set GROUND_NET "VSS"
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과를 저장할 새 폴더의 절대경로 |
 | `PROGRESS_INTERVAL_MINUTES` | 실행 중 현재 단계와 경과 시간을 출력할 간격(분), 기본값 `10` |
-| `POWER_NET`, `GROUND_NET` | UPF/supply net이 전혀 없는 단일 전원 세션에서 생성할 기본 이름. 복원된 multi-supply 설계의 target rail 선택에는 사용하지 않음 |
+| `FIXED_POWER_NET_BEFORE_LS` | 레벨시프터 입력 전에 사용하는 고정 전압 supply net의 정확한 이름 |
+| `SCALING_POWER_NET_1`, `SCALING_POWER_NET_2` | fixed-path cell 중 target voltage를 적용할 두 supply net의 정확한 이름 |
+| `FIXED_MEMORY_POWER_NET` | memory에 연결되어 기존 전압을 유지할 supply net의 정확한 이름 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
 스크립트가 `ANALYSIS`와 다르면 실행을 중단합니다.
@@ -197,12 +199,12 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 스크립트가 자동으로 다음 작업을 수행합니다.
 
 1. restore된 library의 process/voltage/temperature 조사
-2. 전체 instantiated design이 실제 사용하는 library set 선택
+2. fixed path cell이 실제 사용하는 library set만 선택
 3. target library를 제외한 내삽 입력 선택
 4. 현재 parasitic의 BEOL과 온도 확인
 5. scaling library group 구성 또는 기존 group 검증
-6. instantiated library 기준으로 scaled/static supply rail 자동 분류
-7. scaled cell과 그 rail에만 target voltage/temperature 적용 후 incremental `update_timing`
+6. fixed path cell의 primary PG pin과 네 supply 역할 검증
+7. scaling rail에 연결된 fixed-path cell/PG pin에만 target voltage와 temperature 적용 후 incremental `update_timing`
 8. 동일한 fixed path만 최종 report로 측정
 9. `report_delay_calculation`에서 scaling library 사용 증거 확인
 
@@ -231,7 +233,7 @@ RUN END: status=SUCCESS | phase=VERIFY_SCALING_RESULT | section=0.01 min | total
 1. `VERIFY_PARASITICS`: restore된 BEOL과 parasitic 온도 검사
 2. `PLAN_DESIGN_LIBRARIES`: instantiated library 분류와 내삽 입력 선택
 3. `PREPARE_SCALING_GROUPS`: scaling group 생성 또는 기존 group 검증
-4. `CLASSIFY_POWER_RAILS`: scaled/static cell과 supply rail 분류
+4. `CLASSIFY_FIXED_PATH_POWER`: fixed-path cell과 설정한 supply 역할 검증
 5. `APPLY_TARGET_VOLTAGE_TEMP`: 목표 voltage/temperature 적용
 6. `UPDATE_TIMING_SI_POCV`: SI/POCV를 포함한 timing 갱신
 7. `GENERATE_TIMING_REPORT`: fixed path별 timing report 생성
@@ -241,35 +243,24 @@ RUN END: status=SUCCESS | phase=VERIFY_SCALING_RESULT | section=0.01 min | total
 비례하는 `GENERATE_TIMING_REPORT`에서 사용됩니다. 정확한 시간은 설계 크기,
 SI aggressor 수, POCV 설정, RC fallback warning 수와 서버 부하에 따라 달라집니다.
 
-restore session에 기존 scaling group이 있으면 모든 design-used scalable family의
+restore session에 기존 scaling group이 있으면 모든 fixed-path scalable family의
 계획된 입력 DB가 그 group들에 실제 포함됐는지도 검사합니다. 일부 family만 있는
 group이면 `Existing scaling groups do not cover...` 오류로 중단합니다.
 
 rail 분류 로그는 다음 형태입니다.
 
 ```text
-AUTO POWER CLASSIFICATION: scaled_cells=... static_cells=...
-AUTO POWER PRIMARY TARGET RAILS: VDD_CORE ...
-AUTO POWER NON-PRIMARY RAILS (unchanged): VDD_AUX VDD_MEM ...
-AUTO POWER STATIC RAILS (unchanged): VDD_MEM ...
-POWER SUPPLY NETS TO SCALE: VDD_CORE ...
+FIXED-PATH VOLTAGE GROUP: pg_pin=VDD cells=... rails=<scaling rail 이름>
+FIXED-PATH CELL SCOPE: all=... scalable_library=... target_voltage=... static_library=...
+FIXED POWER NETS (unchanged): <고정 rail> <memory rail>
+SCALING POWER NETS (fixed-path cell override only): <scaling rail 1> <scaling rail 2>
+APPLY CELL-LEVEL VOLTAGE: target=... pg_pin=VDD cells=... rails=...
 ```
 
 `SCALING COVERAGE`는 내삽 가능한 family와 한 점뿐인 static family 개수를,
-`AUTO POWER CLASSIFICATION`은 실제 instantiated scaled/static cell 개수를
-보여줍니다. operating condition 또는 family를 해석하지 못한 instantiated
-library는 `UNCLASSIFIED INSTANTIATED LIBRARIES (not scaled)`로 별도 출력합니다.
-power rail 분류는 cell type별 반복 조회를 하지 않고 owning library 단위로
-instance와 PG net을 묶어 조회하며, `POWER RAIL PROGRESS: library=N/TOTAL`로
-진행 상태를 표시합니다.
-
-다음 오류는 이름 인식 실패가 아니라 실제 공유 rail 충돌입니다. static SRAM DB를
-그대로 둔 채 같은 물리 rail의 core만 다른 전압으로 만들 수 없으므로, target
-전압 SRAM DB/scaling group 또는 별도 power domain이 필요합니다.
-
-```text
-Scaled cell과 static SRAM/macro가 같은 power rail을 공유하지만 현재 전압이 target과 다릅니다
-```
+`FIXED-PATH CELL SCOPE`는 path 전체 cell, scaling library 소속, 실제 target
+voltage를 받는 cell과 static library cell 개수를 보여줍니다. fixed-path scalable
+cell의 primary rail이 네 설정 중 어디에도 없으면 임의 처리하지 않고 중단합니다.
 
 정상 실행의 마지막 부분은 다음 형태입니다.
 
@@ -456,6 +447,8 @@ column -s, -t \
 | BEOL 또는 parasitic temperature 불일치 | 다른 scenario/session의 parasitic 활성 | 정확한 target BEOL/temperature session을 restore |
 | `incomplete fixed path` 또는 missing path | 원래 invalid path이거나 netlist revision 불일치 | `.missing`에서 기존 invalid 목록과 비교 |
 | power/supply net 오류 | UPF 연결 또는 multi-voltage domain이 예상과 다름 | `get_supply_nets` 확인 후 담당 STA 방법론에 맞는 domain 결정 |
+| 설정한 fixed/scaling power net을 찾지 못함 | USER SETTINGS의 이름과 restore session의 `full_name`이 다름 | `get_object_name [get_supply_nets -hierarchy *]` 결과의 정확한 이름 입력 |
+| fixed-path primary rail이 네 설정에 없음 | path cell이 다섯 번째 rail을 사용하거나 hierarchical 이름이 다름 | 오류에 나온 rail을 확인하고 네 역할 정의가 실제 설계와 맞는지 검토 |
 | scaling evidence 없음 | 실제 scaling이 cell arc에 적용되지 않음 | 결과 폐기 후 `.dcalc`, `.libgroups` 검사 |
 | `SLG-320` 또는 `DEL-012` | 외삽 또는 scaling 적용 실패 | target을 둘러싸는 interpolation DB 준비 |
 
@@ -468,6 +461,9 @@ domain을 확정한 뒤 실행해야 합니다.
 - [ ] 실행 Git commit hash를 기록했다.
 - [ ] Tcl의 target process/voltage/temperature/BEOL/axis/analysis를 기록했다.
 - [ ] `FIXED_PATH_FILE`과 `RESULT_FOLDER`를 절대경로로 지정했다.
+- [ ] 레벨시프터 전단/scaling 2개/memory rail의 정확한 supply 이름을 설정했다.
+- [ ] 로그의 `FIXED-PATH CELL SCOPE`에서 target-voltage cell 수를 확인했다.
+- [ ] `APPLY CELL-LEVEL VOLTAGE`가 설정한 scaling rail만 표시한다.
 - [ ] scaling과 ground truth가 같은 `fixed_paths.tcl`을 사용했다.
 - [ ] 두 실행이 같은 netlist revision을 사용했다.
 - [ ] restore parasitic의 BEOL/temperature가 target과 일치한다.

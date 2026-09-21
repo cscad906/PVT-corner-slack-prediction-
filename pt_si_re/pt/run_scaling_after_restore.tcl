@@ -25,15 +25,9 @@ set SCALING_AXIS        "V"       ;# V / T / VT
 # 분석 종류
 set ANALYSIS            "setup"   ;# setup / hold
 
-# 1_union.py가 만든 fixed path 파일.
-# ""(빈 문자열)로 두면 fixed path 없이 스케일링만 하고, 아래 개수만큼
-# 일반 report_timing으로 뽑습니다. 새 디자인을 처음 시험할 때 쓰세요.
-# 주의: 코너마다 자기 기준 worst 경로가 나오므로 코너 간 비교에는 못 씁니다.
-#       비교할 데이터를 만들 때는 반드시 fixed path 파일을 주세요.
+# 1_union.py가 만든 fixed path 파일. 현재 스크립트는 fixed-path-only 모드이므로
+# 반드시 같은 디자인/분석 종류에서 생성한 파일을 지정해야 합니다.
 set FIXED_PATH_FILE "fixed_paths.tcl"
-
-# FIXED_PATH_FILE이 "" 일 때만 쓰입니다. report_timing -max_paths 값.
-set FREE_REPORT_PATHS 100
 
 # 결과 폴더
 set RESULT_FOLDER "auto_scaling_output"
@@ -42,11 +36,13 @@ set RESULT_FOLDER "auto_scaling_output"
 # Tcl을 오래 점유하는 구간에서도 별도 감시 프로세스가 상태를 알려줍니다.
 set PROGRESS_INTERVAL_MINUTES 10
 
-# UPF가 없는 단일 전원 세션에서 생성할 기본 이름입니다.
-# UPF가 복원되어 있으면 이 이름으로 rail을 고르지 않고, 실제로 scaling
-# group에 속한 cell의 PG 연결을 따라 target rail을 자동 선택합니다.
-set POWER_NET  "VDD"
-set GROUND_NET "VSS"
+# 회사 설계의 실제 supply net 이름을 입력합니다. 빈 문자열로 두면 실행 전에
+# 중단합니다. fixed path cell의 PG 연결을 확인하며, SCALING 두 rail에 연결된
+# primary power pin만 cell-level로 target voltage를 적용합니다.
+set FIXED_POWER_NET_BEFORE_LS "" ;# 레벨시프터 입력 전 고정 전압 rail
+set SCALING_POWER_NET_1       "" ;# scaling 대상 rail 1
+set SCALING_POWER_NET_2       "" ;# scaling 대상 rail 2
+set FIXED_MEMORY_POWER_NET    "" ;# memory 연결 고정 전압 rail
 
 # ===================== END USER SETTINGS =====================
 # 아래 구현부는 수정하지 않아도 됩니다.
@@ -582,35 +578,24 @@ proc auto_scaling::families_matching_library_names {rows families used_names} {
 }
 
 # fixed path의 launch/capture/through pin이 실제로 참조하는 library 이름을 얻습니다.
-# 이 정보는 report 대상 path가 어떤 family를 쓰는지 검증/출력하는 용도입니다.
-# SI/POCV scaling family 선택 자체는 전체 instantiated design을 기준으로 합니다.
+# fixed-path-only 모드에서 실제 scaling할 library family를 얻습니다.
 proc auto_scaling::family_used_by_fixed_paths {rows families fixed} {
-    set pin_names {}
-    foreach item [dict get $fixed paths] {
-        lassign $item key from to through edges
-        lappend pin_names $from $to
-        foreach pin $through { lappend pin_names $pin }
-    }
-    set pin_names [lsort -unique $pin_names]
+    set cells [fixed_path_cells $fixed]
     set used_names [dict create]
-    if {[llength $pin_names]} {
-        set pins [get_pins -quiet -exact $pin_names]
-        if {[sizeof_collection $pins]} {
-            set cells [get_cells -quiet -of_objects $pins]
-            if {[sizeof_collection $cells]} {
-                set lib_cells [get_lib_cells -quiet -of_objects $cells]
-                foreach_in_collection lib_cell $lib_cells {
-                    set full_name [get_attribute $lib_cell full_name]
-                    set slash [string first "/" $full_name]
-                    if {$slash > 0} {
-                        dict set used_names \
-                            [string range $full_name 0 [expr {$slash-1}]] 1
-                    }
-                }
+    if {[sizeof_collection $cells]} {
+        set lib_cells [get_lib_cells -quiet -of_objects $cells]
+        foreach_in_collection lib_cell $lib_cells {
+            set full_name [get_attribute $lib_cell full_name]
+            set slash [string first "/" $full_name]
+            if {$slash > 0} {
+                dict set used_names \
+                    [string range $full_name 0 [expr {$slash-1}]] 1
             }
         }
     }
-    return [families_matching_library_names $rows $families $used_names]
+    set result [families_matching_library_names $rows $families $used_names]
+    dict set result cell_names [get_object_name $cells]
+    return $result
 }
 
 proc auto_scaling::bracket {values target axis} {
@@ -737,6 +722,9 @@ proc auto_scaling::plan {cfg} {
     if {[option $cfg fixed_tcl ""] ne ""} {
         set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
     }
+    if {$fixed eq ""} {
+        error "현재 fixed-path-only scaling 모드에서는 FIXED_PATH_FILE이 반드시 필요합니다."
+    }
 
     set cat [catalog $cfg]
     set rows [dict get $cat rows]
@@ -751,10 +739,8 @@ proc auto_scaling::plan {cfg} {
         error "No loaded PVT library set matches process $process"
     }
 
-    # SI aggressor와 그 timing window는 fixed path 밖의 cell에도 의존합니다.
-    # 따라서 fixed path는 report 선택에만 사용하고, 실제 design에 instantiated된
-    # 모든 PVT family를 scaling/static 판정 대상으로 삼습니다. 메모리에 load만
-    # 되고 design에서 사용하지 않는 PDK library는 포함하지 않습니다.
+    # 전체 design은 진단에만 사용합니다. 실제 scaling family와 cell은 사용자가
+    # 선택한 reg-to-reg FIXED_PATHS 안으로 제한합니다.
     set used_result [family_used_by_design $rows $families]
     set used_matches [dict get $used_result family_matches]
     set used_names [dict get $used_result used_library_names]
@@ -762,30 +748,31 @@ proc auto_scaling::plan {cfg} {
         error "No PVT library set matches the instantiated design. PVT candidates: $families; design-used library names: $used_names"
     }
 
+    set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
+    if {[dict exists $fixed_result cell_names]} {
+        dict set fixed cell_names [dict get $fixed_result cell_names]
+    }
+    set fixed_matches [dict get $fixed_result family_matches]
+    set fixed_names [dict get $fixed_result used_library_names]
+    if {![llength $fixed_matches]} {
+        error "Fixed paths do not resolve to a loaded PVT library set. fixed-path library names: $fixed_names; design-used sets: $used_matches"
+    }
+
     set requested_family [option $cfg family ""]
     if {$requested_family ne ""} {
         if {[lsearch -exact $families $requested_family] < 0} {
             error "Requested library set is not available: $requested_family; candidates: $families"
         }
-        if {[lsearch -exact $used_matches $requested_family] < 0} {
-            error "Requested library set is not instantiated in the design: $requested_family; design-used sets: $used_matches"
+        if {[lsearch -exact $fixed_matches $requested_family] < 0} {
+            error "Requested library set is not used by the fixed paths: $requested_family; fixed-path sets: $fixed_matches"
         }
         set chosen_families [list $requested_family]
         puts "EXPLICIT LIBRARY SET OVERRIDE: $chosen_families"
     } else {
-        set chosen_families $used_matches
-        puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY ENTIRE DESIGN: $chosen_families"
+        set chosen_families $fixed_matches
+        puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY FIXED PATHS ONLY: $chosen_families"
     }
-
-    if {$fixed ne ""} {
-        set fixed_result [family_used_by_fixed_paths $rows $families $fixed]
-        set fixed_matches [dict get $fixed_result family_matches]
-        set fixed_names [dict get $fixed_result used_library_names]
-        if {![llength $fixed_matches]} {
-            error "Fixed paths do not resolve to a loaded PVT library set. fixed-path library names: $fixed_names; design-used sets: $used_matches"
-        }
-        puts "FIXED-PATH LIBRARY SET(S) (report selection only): $fixed_matches"
-    }
+    puts "FIXED-PATH SCALING SCOPE: design sets=[llength $used_matches], selected sets=[llength $fixed_matches]"
 
     # Operating condition/family를 해석하지 못한 library라도 design에서 실제
     # 사용 중이면 숨기지 않습니다. scaling 가능 여부를 증명하지 못했으므로
@@ -793,13 +780,13 @@ proc auto_scaling::plan {cfg} {
     set unclassified_used {}
     foreach ignored [dict get $cat ignored] {
         set ignored_name [dict get $ignored lib_name]
-        if {[lsearch -exact $used_names $ignored_name] >= 0} {
+        if {[lsearch -exact $fixed_names $ignored_name] >= 0} {
             lappend unclassified_used $ignored_name
         }
     }
     set unclassified_used [lsort -unique $unclassified_used]
     if {[llength $unclassified_used]} {
-        puts "UNCLASSIFIED INSTANTIATED LIBRARIES (not scaled): $unclassified_used"
+        puts "UNCLASSIFIED FIXED-PATH LIBRARIES (not scaled): $unclassified_used"
     }
 
     set groups {}
@@ -875,7 +862,7 @@ proc auto_scaling::plan {cfg} {
     if {[llength $static_sets]} {
         puts "SCALING COVERAGE: static set(s) kept at their original corner: $static_sets"
     }
-    puts "SCALING COVERAGE: unclassified instantiated libraries kept unscaled: [llength $unclassified_used]"
+    puts "SCALING COVERAGE: unclassified fixed-path libraries kept unscaled: [llength $unclassified_used]"
     return $result
 }
 
@@ -928,34 +915,6 @@ proc auto_scaling::fixed_path_edge_opt {base_opt dir} {
     return "-fall_$base_opt"
   }
   return "-$base_opt"
-}
-
-# fixed path 없이 그 코너의 worst 경로를 그대로 뽑습니다. 스케일링이 걸렸는지
-# 눈으로 보려는 용도입니다. 뽑히는 경로가 코너마다 달라지므로 코너 간 비교
-# (2c/5c/7_cut/모델)에는 쓸 수 없고, 그래서 ### FIXED_PATH 마커도 안 붙입니다.
-proc auto_scaling::report_free_paths {out_file delay_type max_paths pba_mode} {
-    if {![string is integer -strict $max_paths] || $max_paths < 1} {
-        error "FREE_REPORT_PATHS must be a positive integer: $max_paths"
-    }
-    set cmd [list report_timing -delay_type $delay_type -path_type full_clock_expanded \
-        -max_paths $max_paths -nworst 1 -sort_by slack -nets -input_pins \
-        -capacitance -transition_time -nosplit -significant_digits 6]
-    if {$pba_mode ne ""} { lappend cmd -pba_mode $pba_mode }
-    set text ""
-    if {[catch {redirect -variable text {eval $cmd}} problem]} {
-        error "report_timing failed: $problem"
-    }
-    set count [regexp -all -line {^\s*Startpoint:} $text]
-    if {$count == 0} {
-        error "No timing path was reported. Check the restored constraints and ANALYSIS."
-    }
-    redirect -append $out_file {
-        puts "### FREE REPORT max_paths=$max_paths delay_type=$delay_type"
-        puts $text
-        puts ""
-    }
-    puts "FREE REPORT RESULT: paths=$count (requested up to $max_paths)"
-    return [dict create requested $max_paths measured $count missing 0]
 }
 
 proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
@@ -1042,6 +1001,52 @@ proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
         missing [llength $missing] missing_file $missing_file]
 }
 
+proc auto_scaling::find_scaling_fixed_path {fixed delay_type pba_mode scaled_cells} {
+    set scaled_names [dict create]
+    foreach name [get_object_name $scaled_cells] { dict set scaled_names $name 1 }
+    foreach item [dict get $fixed paths] {
+        lassign $item key from to through edges
+        set pins [concat [list $from] $through [list $to]]
+        set objects {}
+        set valid 1
+        foreach pin $pins {
+            set obj [get_pins -quiet -exact $pin]
+            if {[sizeof_collection $obj] != 1} { set valid 0; break }
+            lappend objects $obj
+        }
+        if {!$valid} { continue }
+
+        set use_edges [expr {[llength $edges] == [llength $pins]}]
+        # get_timing_paths는 기본적으로 worst slack 순으로 반환합니다.
+        # 일부 PrimeTime 버전에는 -sort_by 옵션이 없으므로 사용하지 않습니다.
+        set cmd [list get_timing_paths -delay_type $delay_type -max_paths 1]
+        set i 0
+        foreach obj $objects {
+            if {$i == 0} { set base from } elseif {$i == [llength $objects]-1} {
+                set base to
+            } else { set base through }
+            set dir ""
+            if {$use_edges} { set dir [lindex $edges $i] }
+            lappend cmd [fixed_path_edge_opt $base $dir] $obj
+            incr i
+        }
+        if {$pba_mode ne ""} { lappend cmd -pba_mode $pba_mode }
+        if {[catch {set timing_path [eval $cmd]}] || ![sizeof_collection $timing_path]} {
+            continue
+        }
+        foreach_in_collection point [get_attribute [index_collection $timing_path 0] points] {
+            set pin [get_attribute $point object]
+            set cell [get_cells -quiet -of_objects $pin]
+            if {[sizeof_collection $cell] == 1 &&
+                [dict exists $scaled_names [get_object_name $cell]]} {
+                puts "SCALING EVIDENCE PATH: fixed_key=$key"
+                return $timing_path
+            }
+        }
+    }
+    error "Scaling 대상 fixed-path cell을 포함하면서 실제로 resolve되는 timing path를 찾지 못했습니다."
+}
+
 proc auto_scaling::report_has_corner {text rail voltage temperature} {
     foreach line [split $text "\n"] {
         if {![regexp {^\s+\S+\s+(-?[0-9]+(?:\.[0-9]+)?)\s+\{([^\n]*)\}} $line -> found_t rails]} {
@@ -1061,9 +1066,8 @@ proc auto_scaling::report_has_corner {text rail voltage temperature} {
     return 0
 }
 
-# 기존 scaling group을 재사용하는 경우에도 전체 design용으로 계획한 각 입력
-# DB가 실제 active group에 들어 있는지 확인합니다. 일부 family만 묶인 restore
-# group을 조용히 재사용하면 fixed path 밖 SI/POCV cell이 원래 corner에 남습니다.
+# 기존 scaling group을 재사용하는 경우에도 fixed path용으로 계획한 각 입력
+# DB가 실제 active group에 들어 있는지 확인합니다.
 proc auto_scaling::verify_planned_group_coverage {plan} {
     set active_paths [dict create]
     foreach_in_collection lib [get_libs -quiet *] {
@@ -1083,7 +1087,7 @@ proc auto_scaling::verify_planned_group_coverage {plan} {
         }
     }
     if {[llength $missing]} {
-        error "Existing scaling groups do not cover every instantiated scalable library family. Missing planned input DB(s): [lsort -unique $missing]"
+        error "Existing scaling groups do not cover every fixed-path scalable library family. Missing planned input DB(s): [lsort -unique $missing]"
     }
     puts "SCALING GROUP COVERAGE: all $planned planned input DB(s) are active"
 }
@@ -1094,187 +1098,184 @@ proc auto_scaling::write_text {path contents} {
     close $fp
 }
 
-# 두 collection을 합칩니다. 빈 collection handle도 안전하게 처리합니다.
-proc auto_scaling::collection_union {left right} {
-    if {$right eq "" || ![sizeof_collection $right]} { return $left }
-    if {$left eq "" || ![sizeof_collection $left]} { return $right }
-    return [add_to_collection -unique $left $right]
+proc auto_scaling::fixed_path_cells {fixed} {
+    if {[dict exists $fixed cell_names]} {
+        set cached [get_cells -quiet -exact [dict get $fixed cell_names]]
+        if {[sizeof_collection $cached] == [llength [dict get $fixed cell_names]]} {
+            return $cached
+        }
+    }
+    set cell_names {}
+    foreach item [dict get $fixed paths] {
+        lassign $item key from to through edges
+        foreach pin [concat [list $from] $through [list $to]] {
+            set slash [string last "/" $pin]
+            if {$slash <= 0} {
+                error "FIXED_PATHS pin에서 instance 이름을 분리하지 못했습니다: $pin"
+            }
+            lappend cell_names [string range $pin 0 [expr {$slash-1}]]
+        }
+    }
+    set cell_names [lsort -unique $cell_names]
+    set cells [get_cells -quiet -exact $cell_names]
+    if {[sizeof_collection $cells] != [llength $cell_names]} {
+        set missing {}
+        foreach cell_name $cell_names {
+            if {[sizeof_collection [get_cells -quiet -exact $cell_name]] != 1} {
+                lappend missing $cell_name
+            }
+        }
+        error "FIXED_PATHS의 cell을 현재 design에서 정확히 찾지 못했습니다: [lrange $missing 0 19]"
+    }
+    if {![sizeof_collection $cells]} {
+        error "FIXED_PATHS에서 scaling 범위로 사용할 cell을 찾지 못했습니다."
+    }
+    return $cells
 }
 
-# 실제 design cell이 참조하는 library가 scaling group에 속하는지 조사하고,
-# 그 cell에 연결된 power supply net을 자동 분류합니다. library 이름이나 SRAM
-# instance 이름을 사용자가 나열하지 않습니다.
-#
-# scaled-only rail : target voltage 적용
-# static-only rail : restore session의 전압 유지
-# mixed rail       : 현재 전압이 이미 target이면 허용. 다르면 같은 물리 rail에
-#                    서로 다른 전압을 줄 수 없으므로 set_voltage 전에 중단
-proc auto_scaling::classify_scaling_power {cells target_v} {
-    set used_lib_cells [get_lib_cells -quiet -of_objects $cells]
-    if {![sizeof_collection $used_lib_cells]} {
-        error "Design cell이 참조하는 library cell을 찾지 못해 supply rail을 자동 분류할 수 없습니다."
+proc auto_scaling::resolve_configured_supply_roles {cfg} {
+    set available [dict create]
+    foreach_in_collection supply [get_supply_nets -quiet -hierarchy *] {
+        set full_name [get_attribute $supply full_name]
+        dict lappend available $full_name $full_name
+        set object_name [get_object_name $supply]
+        if {$object_name ne $full_name} { dict lappend available $object_name $full_name }
     }
+    if {![dict size $available]} {
+        error "restore session에 supply net이 없습니다. 네 power-net 설정을 검증할 수 없습니다."
+    }
+
+    set roles [dict create]
+    foreach role {fixed scaling} {
+        foreach requested [dict get $cfg ${role}_power_nets] {
+            if {![dict exists $available $requested]} {
+                error "설정한 ${role} power net '$requested'을 restore session에서 찾지 못했습니다. 사용 가능한 supply net: [lsort [dict keys $available]]"
+            }
+            set matches [lsort -unique [dict get $available $requested]]
+            if {[llength $matches] != 1} {
+                error "설정한 power net '$requested'이 여러 hierarchical net과 일치합니다: $matches. full_name을 입력하세요."
+            }
+            set actual [lindex $matches 0]
+            if {[dict exists $roles $actual]} {
+                error "같은 supply net '$actual'이 fixed/scaling 설정에 중복되었습니다."
+            }
+            dict set roles $actual $role
+        }
+    }
+    return $roles
+}
+
+# fixed path의 data pin 전체에서 cell을 복원하고, scaling group이 있는 library의
+# cell 중 사용자가 지정한 scaling rail에 연결된 primary PG pin만 선택합니다.
+# rail 전체 set_voltage가 아니라 cell+pg_pin override를 만들기 위한 계획입니다.
+proc auto_scaling::plan_fixed_path_power {fixed cfg} {
+    set path_cells [fixed_path_cells $fixed]
+    # path cell과 lib_cell은 같은 순서/개수로 한 번에 얻습니다. library별 전체
+    # design instance를 다시 조회하지 않으므로 이 단계의 범위도 fixed path뿐입니다.
+    set path_lib_cells [get_attribute $path_cells lib_cell]
+    if {[sizeof_collection $path_lib_cells] != [sizeof_collection $path_cells]} {
+        error "일부 FIXED_PATHS cell의 lib_cell을 확인하지 못했습니다."
+    }
+    set used_lib_cells [get_lib_cells -quiet -of_objects $path_cells]
     set used_libs [get_libs -quiet -of_objects $used_lib_cells]
-    if {![sizeof_collection $used_libs]} {
-        error "Design cell이 참조하는 owning library를 찾지 못해 supply rail을 자동 분류할 수 없습니다."
-    }
-
-    set scaled_cells ""
-    set static_cells ""
-    set scaled_supply ""
-    set static_supply ""
-    set scaled_by_rail [dict create]
-    set static_by_rail [dict create]
-    set non_primary_by_rail [dict create]
-    set scaled_lib_labels {}
-    set static_lib_labels {}
-    set scaled_count 0
-    set static_count 0
-
-    # lib_cell마다 get_cells/get_supply_nets를 호출하면 큰 설계에서 수천 번의
-    # collection query가 발생합니다. scaling group은 owning library 단위로
-    # 동일하므로, 실제 사용 library별로 모든 instance를 한꺼번에 처리합니다.
-    set lib_index 0
-    set lib_total [sizeof_collection $used_libs]
+    set scalable_lib_names [dict create]
     foreach_in_collection lib $used_libs {
-        incr lib_index
-        set lib_name [get_object_name $lib]
-        set source_name ""
-        catch { set source_name [file tail [get_attribute $lib source_file_name]] }
-        set lib_label $lib_name
-        if {$source_name ne ""} { append lib_label "($source_name)" }
-
-        set library_cells [get_lib_cells -quiet -of_objects $lib]
-        set design_cells [get_cells -quiet -of_objects $library_cells]
-        if {![sizeof_collection $design_cells]} { continue }
-
-        if {$lib_index == 1 || $lib_index % 10 == 0 || $lib_index == $lib_total} {
-            puts "POWER RAIL PROGRESS: library=$lib_index/$lib_total instances=[sizeof_collection $design_cells]"
-            flush stdout
-        }
-
         set scaling_group [get_attribute -quiet $lib lib_scaling_group]
-        set is_scaled [expr {$scaling_group ne "" && [sizeof_collection $scaling_group]}]
-
-        if {$is_scaled} {
-            incr scaled_count [sizeof_collection $design_cells]
-            set scaled_cells [collection_union $scaled_cells $design_cells]
-            lappend scaled_lib_labels $lib_label
+        if {$scaling_group ne "" && [sizeof_collection $scaling_group]} {
+            dict set scalable_lib_names [get_attribute $lib full_name] 1
+        }
+    }
+    set scalable_names {}
+    set static_names {}
+    foreach cell_name [get_object_name $path_cells] \
+            lib_cell_name [get_object_name $path_lib_cells] {
+        set slash [string first "/" $lib_cell_name]
+        if {$slash <= 0} { error "lib_cell에서 library 이름을 분리하지 못했습니다: $lib_cell_name" }
+        set lib_name [string range $lib_cell_name 0 [expr {$slash-1}]]
+        if {[dict exists $scalable_lib_names $lib_name]} {
+            lappend scalable_names $cell_name
         } else {
-            incr static_count [sizeof_collection $design_cells]
-            set static_cells [collection_union $static_cells $design_cells]
-            lappend static_lib_labels $lib_label
+            lappend static_names $cell_name
         }
     }
-
-    if {$scaled_cells eq "" || ![sizeof_collection $scaled_cells]} {
-        error "Scaling group에 속한 instantiated cell이 없습니다. 기존/생성된 scaling group과 linked library를 확인하세요."
+    set scalable_candidates [get_cells -quiet -exact $scalable_names]
+    set static_path_cells [get_cells -quiet -exact $static_names]
+    if {$scalable_candidates eq "" || ![sizeof_collection $scalable_candidates]} {
+        error "FIXED_PATHS 안에 active scaling group을 사용하는 cell이 없습니다."
     }
 
-    # multi-rail cell에 연결된 모든 power net을 target으로 바꾸지 않습니다.
-    # PrimeTime PG pin type=primary_power인 pin의 실제 supply connection만
-    # Operating Conditions/scaling voltage가 적용될 target rail로 선택합니다.
-    puts "POWER RAIL QUERY: scaled primary_power PG pins"
-    flush stdout
-    set scaled_pg_pins [get_pg_pins -of_objects $scaled_cells]
-    set scaled_primary_pg [filter_collection $scaled_pg_pins {type == primary_power}]
-    set scaled_non_primary_pg [filter_collection $scaled_pg_pins \
-        {type != primary_power && type =~ *power*}]
-    if {$scaled_primary_pg eq "" || ![sizeof_collection $scaled_primary_pg]} {
-        error "Scaling 대상 cell에서 type=primary_power PG pin을 찾지 못했습니다. report_power_pin_info로 UPF/Liberty PG 구성을 확인하세요."
-    }
-    set scaled_supply [get_supply_nets -quiet -of_objects $scaled_primary_pg]
-    if {$scaled_supply eq "" || ![sizeof_collection $scaled_supply]} {
-        error "Scaling 대상 cell의 primary_power PG pin에 연결된 supply net이 없습니다. UPF/PG 연결을 확인하세요."
+    set roles [resolve_configured_supply_roles $cfg]
+    set pg_pins [get_pg_pins -of_objects $scalable_candidates]
+    set primary_pg [filter_collection $pg_pins {type == primary_power}]
+    if {$primary_pg eq "" || ![sizeof_collection $primary_pg]} {
+        error "FIXED_PATHS scaling cell에서 type=primary_power PG pin을 찾지 못했습니다."
     }
 
-    puts "POWER RAIL QUERY: scaled non-primary and static power rails"
-    flush stdout
-    set non_primary_supply ""
-    if {$scaled_non_primary_pg ne "" && [sizeof_collection $scaled_non_primary_pg]} {
-        set non_primary_supply [get_supply_nets -quiet -of_objects $scaled_non_primary_pg]
-    }
-    if {$static_cells ne "" && [sizeof_collection $static_cells]} {
-        set static_supply [get_supply_nets -quiet -pg_types power -of_objects $static_cells]
-    }
-
-    foreach_in_collection supply $scaled_supply {
-        dict set scaled_by_rail [get_attribute $supply full_name] $scaled_lib_labels
-    }
-    if {$non_primary_supply ne "" && [sizeof_collection $non_primary_supply]} {
-        foreach_in_collection supply $non_primary_supply {
-            set supply_name [get_attribute $supply full_name]
-            dict set non_primary_by_rail $supply_name $scaled_lib_labels
+    set target_cell_names [dict create]
+    set voltage_cells_by_pin [dict create]
+    set voltage_rails_by_pin [dict create]
+    set fixed_cell_names [dict create]
+    set unknown_rails {}
+    foreach_in_collection pg $primary_pg {
+        # supply_connection 문자열은 hierarchical UPF에서 short name일 수 있으므로
+        # 실제 supply object의 full_name을 기준으로 USER SETTINGS와 비교합니다.
+        set connected_supply [get_supply_nets -quiet -of_objects $pg]
+        if {[sizeof_collection $connected_supply] == 1} {
+            set supply_name [get_attribute $connected_supply full_name]
+        } else {
+            set supply_name [get_attribute $pg supply_connection]
         }
-    }
-    if {$static_supply ne "" && [sizeof_collection $static_supply]} {
-        foreach_in_collection supply $static_supply {
-            dict set static_by_rail [get_attribute $supply full_name] $static_lib_labels
-        }
-    }
-
-    set scaled_names [lsort [dict keys $scaled_by_rail]]
-    set static_names [lsort [dict keys $static_by_rail]]
-    set non_primary_names [lsort [dict keys $non_primary_by_rail]]
-    set mixed_bad {}
-    set mixed_ok {}
-    set scaled_only {}
-    set static_only {}
-
-    foreach supply_name $scaled_names {
-        set shared_static [dict exists $static_by_rail $supply_name]
-        set shared_non_primary [dict exists $non_primary_by_rail $supply_name]
-        if {!$shared_static && !$shared_non_primary} {
-            lappend scaled_only $supply_name
+        if {$supply_name eq "" || ![dict exists $roles $supply_name]} {
+            lappend unknown_rails $supply_name
             continue
         }
-
-        set supply [get_supply_nets -quiet $supply_name]
-        set vmin "unknown"
-        set vmax "unknown"
-        catch { set vmin [number [get_attribute $supply voltage_min]] }
-        catch { set vmax [number [get_attribute $supply voltage_max]] }
-        if {$vmin ne "unknown" && $vmax ne "unknown" &&
-            [same $vmin $target_v] && [same $vmax $target_v]} {
-            lappend mixed_ok $supply_name
+        set pin_name [get_attribute $pg pin_name]
+        set full_name [get_attribute $pg full_name]
+        set suffix "/$pin_name"
+        if {![string match "*$suffix" $full_name]} {
+            error "PG pin full_name에서 cell 이름을 분리하지 못했습니다: $full_name"
+        }
+        set cell_name [string range $full_name 0 end-[string length $suffix]]
+        if {[dict get $roles $supply_name] eq "scaling"} {
+            dict set target_cell_names $cell_name 1
+            dict lappend voltage_cells_by_pin $pin_name $cell_name
+            dict lappend voltage_rails_by_pin $pin_name $supply_name
         } else {
-            lappend mixed_bad $supply_name
-        }
-        puts "SHARED/PROTECTED POWER RAIL: $supply_name current_min=$vmin current_max=$vmax target=$target_v static_cells=$shared_static non_primary_use=$shared_non_primary"
-    }
-    foreach supply_name $static_names {
-        if {![dict exists $scaled_by_rail $supply_name]} {
-            lappend static_only $supply_name
+            dict set fixed_cell_names $cell_name 1
         }
     }
-
-    puts "AUTO POWER CLASSIFICATION: scaled_cells=$scaled_count static_cells=$static_count"
-    puts "AUTO POWER PRIMARY TARGET RAILS: $scaled_names"
-    puts "AUTO POWER SCALED-ONLY TARGET RAILS: $scaled_only"
-    puts "AUTO POWER NON-PRIMARY RAILS (unchanged): $non_primary_names"
-    puts "AUTO POWER STATIC RAILS (unchanged): $static_only"
-    if {[llength $mixed_ok]} {
-        puts "AUTO POWER SHARED RAILS already at target (allowed): $mixed_ok"
+    set unknown_rails [lsort -unique $unknown_rails]
+    if {[llength $unknown_rails]} {
+        error "FIXED_PATHS scaling cell의 primary power rail 중 네 설정에 없는 rail이 있습니다: $unknown_rails"
     }
-    if {[llength $mixed_bad]} {
-        error "Scaling primary_power rail이 static cell 또는 다른 non-primary rail 용도와 공유되지만 현재 전압이 target과 다릅니다: $mixed_bad. 같은 물리 rail을 두 전압으로 자동 분리할 수 없습니다."
+    if {![dict size $target_cell_names]} {
+        error "FIXED_PATHS에서 SCALING_POWER_NET_1/2에 연결된 scalable cell을 찾지 못했습니다."
     }
 
-    return [dict create \
-        scaled_cells $scaled_cells \
-        static_cells $static_cells \
-        target_supply $scaled_supply \
-        scaled_only $scaled_only \
-        non_primary_unchanged $non_primary_names \
-        static_only $static_only \
-        mixed_at_target $mixed_ok]
+    set target_cells [get_cells -quiet -exact [dict keys $target_cell_names]]
+    set voltage_groups {}
+    foreach pin_name [lsort [dict keys $voltage_cells_by_pin]] {
+        set cell_names [lsort -unique [dict get $voltage_cells_by_pin $pin_name]]
+        set rails [lsort -unique [dict get $voltage_rails_by_pin $pin_name]]
+        lappend voltage_groups [dict create pin_name $pin_name \
+            cell_names $cell_names rails $rails]
+        puts "FIXED-PATH VOLTAGE GROUP: pg_pin=$pin_name cells=[llength $cell_names] rails=$rails"
+    }
+    set static_path_count 0
+    if {$static_path_cells ne ""} { set static_path_count [sizeof_collection $static_path_cells] }
+    puts "FIXED-PATH CELL SCOPE: all=[sizeof_collection $path_cells] scalable_library=[sizeof_collection $scalable_candidates] target_voltage=[sizeof_collection $target_cells] static_library=$static_path_count"
+    puts "FIXED POWER NETS (unchanged): [dict get $cfg fixed_power_nets]"
+    puts "SCALING POWER NETS (fixed-path cell override only): [dict get $cfg scaling_power_nets]"
+
+    return [dict create path_cells $path_cells scaled_cells $target_cells \
+        voltage_groups $voltage_groups fixed_cell_names [dict keys $fixed_cell_names]]
 }
 
 proc auto_scaling::run_after_restore {cfg} {
     foreach command {
         get_designs get_libs get_lib_cells current_design define_scaling_lib_group
-        report_lib_groups get_supply_nets get_pg_pins get_cells filter_collection set_temperature
-        set_voltage update_timing get_timing_paths add_to_collection
+        report_lib_groups get_supply_nets get_pg_pins get_cells filter_collection
+        set_temperature set_voltage update_timing get_timing_paths
     } {
         if {![llength [info commands ::$command]]} {
             error "이 파일은 restore_session을 완료한 pt_shell에서만 실행할 수 있습니다."
@@ -1314,8 +1315,7 @@ proc auto_scaling::run_after_restore {cfg} {
     file mkdir [file dirname $out]
     phase_done PLAN_DESIGN_LIBRARIES $phase_started
 
-    set rail [option $cfg rail_name VDD]
-    set gnd [option $cfg ground_name VSS]
+    set rail [lindex [dict get $cfg scaling_power_nets] 0]
     set target_v [dict get $plan v]
     set target_t [dict get $plan t]
     set scaling_sets {}
@@ -1369,45 +1369,24 @@ proc auto_scaling::run_after_restore {cfg} {
     verify_planned_group_coverage $plan
     phase_done PREPARE_SCALING_GROUPS $phase_started
 
-    set phase_started [phase_start CLASSIFY_POWER_RAILS]
-    set cells [get_cells -hierarchical -quiet *]
-    if {![sizeof_collection $cells]} { error "현재 design에 leaf cell이 없습니다." }
-    set all_supply [get_supply_nets -quiet -hierarchy *]
-    set ground_supply ""
-    if {![sizeof_collection $all_supply]} {
-        puts "RESTORE MODE: supply net이 없어 단일 전원 domain을 생성합니다."
-        create_power_domain AUTO_SCALING_TOP
-        create_supply_net $rail -domain AUTO_SCALING_TOP
-        create_supply_net $gnd -domain AUTO_SCALING_TOP
-        set_domain_supply_net AUTO_SCALING_TOP \
-            -primary_power_net $rail -primary_ground_net $gnd
-        set ground_supply [get_supply_nets -quiet $gnd]
-    } else {
-        # Ground는 모든 domain에서 0V이므로 실제 cell 연결을 따라 자동 선택합니다.
-        set ground_supply [get_supply_nets -quiet -hierarchy $gnd]
-        if {![sizeof_collection $ground_supply]} {
-            set ground_supply [get_supply_nets -quiet -pg_types ground -of_objects $cells]
-        }
-        if {![sizeof_collection $ground_supply]} {
-            set ground_supply [get_supply_nets -quiet -hierarchy -pg_types ground *]
-        }
-    }
-
-    # Scaling group이 실제로 적용되는 cell/library를 기준으로 target rail을
-    # 고릅니다. static SRAM/macro 전용 rail과 그 cell의 온도는 복원 상태를
-    # 유지합니다. 공유 rail의 전압 충돌은 변경 전에 검출합니다.
-    set power_plan [classify_scaling_power $cells $target_v]
+    set phase_started [phase_start CLASSIFY_FIXED_PATH_POWER]
+    set power_plan [plan_fixed_path_power $fixed $cfg]
     set scaled_cells [dict get $power_plan scaled_cells]
-    set power_supply [dict get $power_plan target_supply]
-    puts "POWER SUPPLY NETS TO SCALE: [get_object_name $power_supply]"
-    phase_done CLASSIFY_POWER_RAILS $phase_started
+    set voltage_groups [dict get $power_plan voltage_groups]
+    phase_done CLASSIFY_FIXED_PATH_POWER $phase_started
 
     set phase_started [phase_start APPLY_TARGET_VOLTAGE_TEMP]
     check_status set_temperature [list set_temperature $target_t -object_list $scaled_cells]
-    check_status set_voltage [list set_voltage $target_v -object_list $power_supply]
-    if {[sizeof_collection $ground_supply]} {
-        puts "GROUND SUPPLY NETS: [get_object_name $ground_supply]"
-        check_status set_ground [list set_voltage 0.0 -object_list $ground_supply]
+    foreach voltage_group $voltage_groups {
+        set pin_name [dict get $voltage_group pin_name]
+        set cell_names [dict get $voltage_group cell_names]
+        puts "APPLY CELL-LEVEL VOLTAGE: target=$target_v pg_pin=$pin_name cells=[llength $cell_names] rails=[dict get $voltage_group rails]"
+        # PrimeTime의 set_voltage -cell은 한 번에 정확히 한 cell만 받습니다.
+        foreach cell_name $cell_names {
+            set voltage_cell [get_cells -quiet -exact $cell_name]
+            check_status "set_voltage($cell_name/$pin_name)" [list set_voltage $target_v \
+                -cell $voltage_cell -pg_pin_name $pin_name]
+        }
     }
     phase_done APPLY_TARGET_VOLTAGE_TEMP $phase_started
 
@@ -1420,7 +1399,7 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done UPDATE_TIMING_SI_POCV $phase_started
 
     set phase_started [phase_start GENERATE_TIMING_REPORT]
-    set paths [get_timing_paths -delay_type $dt -max_paths 1]
+    set paths [find_scaling_fixed_path $fixed $dt [option $cfg pba_mode ""] $scaled_cells]
     if {![sizeof_collection $paths]} {
         error "목표 조건에서 timing path가 없습니다. 복원된 constraint와 analysis type을 확인하세요."
     }
@@ -1429,7 +1408,12 @@ proc auto_scaling::run_after_restore {cfg} {
     puts $fp "# restore_session 기반 scaling 선택 기록"
     set record $plan
     dict unset record fixed paths
+    if {[dict exists $record fixed cell_names]} { dict unset record fixed cell_names }
     dict set record restored_design [get_object_name [current_design]]
+    dict set record scaling_scope fixed_path_cells_only
+    dict set record fixed_power_nets [dict get $cfg fixed_power_nets]
+    dict set record scaling_power_nets [dict get $cfg scaling_power_nets]
+    dict set record scaled_cell_count [sizeof_collection $scaled_cells]
     puts $fp [list set scaling_selection $record]
     close $fp
 
@@ -1439,13 +1423,8 @@ proc auto_scaling::run_after_restore {cfg} {
     puts $fp ""
     close $fp
 
-    if {$fixed ne ""} {
-        set fixed_result [report_fixed_paths $out [dict get $fixed paths] \
-            $dt [option $cfg pba_mode ""]]
-    } else {
-        set fixed_result [report_free_paths $out $dt [option $cfg free_paths 100] \
-            [option $cfg pba_mode ""]]
-    }
+    set fixed_result [report_fixed_paths $out [dict get $fixed paths] \
+        $dt [option $cfg pba_mode ""]]
     if {![file exists $out] || [file size $out] == 0} {
         error "Timing report가 생성되지 않았습니다: $out"
     }
@@ -1454,6 +1433,8 @@ proc auto_scaling::run_after_restore {cfg} {
     set phase_started [phase_start VERIFY_SCALING_RESULT]
     set dcalc_text ""
     set arc_found 0
+    set scaled_cell_names [dict create]
+    foreach name [get_object_name $scaled_cells] { dict set scaled_cell_names $name 1 }
     foreach_in_collection point [get_attribute [index_collection $paths 0] points] {
         set pin [get_attribute $point object]
         if {[info exists prev_pin]} {
@@ -1461,6 +1442,7 @@ proc auto_scaling::run_after_restore {cfg} {
             set b [get_cells -quiet -of_objects $pin]
             if {[sizeof_collection $a] == 1 && [sizeof_collection $b] == 1 &&
                 [get_object_name $a] eq [get_object_name $b] &&
+                [dict exists $scaled_cell_names [get_object_name $a]] &&
                 [get_attribute $prev_pin direction] eq "in" &&
                 [get_attribute $pin direction] eq "out"} {
                 redirect -variable dcalc_text {
@@ -1483,11 +1465,7 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done VERIFY_SCALING_RESULT $phase_started
 
     puts "DONE: restore-session scaling report = $out"
-    if {$fixed ne ""} {
-        puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
-    } else {
-        puts "FREE REPORT SUMMARY: measured=[dict get $fixed_result measured] (no fixed path file; corners are NOT comparable)"
-    }
+    puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
     puts "VERIFY: scaling library evidence = ${out}.dcalc"
     return $out
 }
@@ -1509,7 +1487,9 @@ proc auto_scaling::run_after_restore_monitored {cfg} {
 proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
-        ANALYSIS FIXED_PATH_FILE FREE_REPORT_PATHS RESULT_FOLDER POWER_NET GROUND_NET
+        ANALYSIS FIXED_PATH_FILE RESULT_FOLDER
+        FIXED_POWER_NET_BEFORE_LS SCALING_POWER_NET_1 SCALING_POWER_NET_2
+        FIXED_MEMORY_POWER_NET
     } {
         if {![info exists ::$name]} { error "USER SETTINGS에 $name 항목이 없습니다." }
     }
@@ -1531,6 +1511,20 @@ proc auto_scaling::build_restore_config {} {
     }
     set filename "scaled_[string toupper $::TARGET_PROCESS]_${vtag}V_${ttag}C_${beol}_[string toupper $::SCALING_AXIS]_${analysis}.rpt"
 
+    set fixed_power_nets [list $::FIXED_POWER_NET_BEFORE_LS $::FIXED_MEMORY_POWER_NET]
+    set scaling_power_nets [list $::SCALING_POWER_NET_1 $::SCALING_POWER_NET_2]
+    foreach {label value} [list \
+        FIXED_POWER_NET_BEFORE_LS $::FIXED_POWER_NET_BEFORE_LS \
+        SCALING_POWER_NET_1 $::SCALING_POWER_NET_1 \
+        SCALING_POWER_NET_2 $::SCALING_POWER_NET_2 \
+        FIXED_MEMORY_POWER_NET $::FIXED_MEMORY_POWER_NET] {
+        if {[string trim $value] eq ""} { error "USER SETTINGS의 $label에 실제 supply net 이름을 입력하세요." }
+    }
+    set all_power_nets [concat $fixed_power_nets $scaling_power_nets]
+    if {[llength [lsort -unique $all_power_nets]] != 4} {
+        error "네 power-net 설정은 서로 다른 이름이어야 합니다: $all_power_nets"
+    }
+
     return [dict create \
         target_process $::TARGET_PROCESS \
         target_v $voltage \
@@ -1539,9 +1533,8 @@ proc auto_scaling::build_restore_config {} {
         mode $::SCALING_AXIS \
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
-        free_paths $::FREE_REPORT_PATHS \
-        rail_name $::POWER_NET \
-        ground_name $::GROUND_NET \
+        fixed_power_nets $fixed_power_nets \
+        scaling_power_nets $scaling_power_nets \
         progress_minutes $::PROGRESS_INTERVAL_MINUTES \
         out_rpt [file join $::RESULT_FOLDER $filename]]
 }
