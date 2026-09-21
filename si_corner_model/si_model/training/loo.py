@@ -4,6 +4,7 @@ The corner grid is (voltage, second-axis); the second axis is RC or temperature
 (see parsing/keys.py). The OLS basis and its fit mode come from the config via
 ``config.expand_terms`` and ``base.weighting`` -- this module is axis-agnostic.
 """
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -193,9 +194,17 @@ def make_split(corners, vt: np.ndarray, cfg: dict,
     # the basis order to match -- see docs/COMPANY.md.
     min_seen = int(cfg["split"].get("min_seen", 8))
     n_seen = int((~hidden).sum())
-    assert hidden.any(), ("degenerate split: no hidden corners -- give split a "
-                          "holdout (hidden_voltages / seen_voltages) or add "
-                          "data.query_corners for pure inference")
+    # A holdout is what training and `base` are scored on, so those need one.
+    # `predict --at/--sweep` does not: it is asked for corners by coordinate,
+    # and a circuit that has just arrived -- everything it measured is seen,
+    # the point is to predict what it did not -- has no holdout to give. That
+    # is the deployment case, and it used to be refused here.
+    if os.environ.get("SI_STAGE") != "predict":
+        assert hidden.any(), (
+            "degenerate split: no hidden corners -- give split a holdout "
+            "(hidden_voltages / seen_voltages) or add data.query_corners for "
+            "pure inference. (Only `predict` runs without one, by naming the "
+            "corners it wants: predict --at / --sweep.)")
     assert n_seen >= min_seen, (
         f"degenerate split: {n_seen} seen corners < min_seen={min_seen}. "
         f"Widen the split, or lower split.min_seen if the deliverable really is "

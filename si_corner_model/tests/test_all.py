@@ -1409,3 +1409,56 @@ def test_model_carries_to_a_different_corner_set(real_tree, tmp_path, monkeypatc
     assert np.isfinite(pred).all()
     assert np.abs(pred - tr.base_hat.cpu().numpy()[:, H]).max() > 1.0, \
         "the correction must reach the output, on this corner set too"
+
+
+def test_predict_runs_on_a_circuit_with_no_holdout(real_tree, tmp_path, monkeypatch):
+    """A circuit that has just arrived has no hidden corners to give.
+
+    Everything it measured is seen; the point is to predict what it did not
+    measure. make_split refused that -- the holdout assert is what training and
+    `base` are scored on, and it fired for every stage -- so the deployment
+    case could not run at all. predict names the corners it wants, so it does
+    not need one; the other stages still do.
+    """
+    pytest.importorskip("torch")
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import (_predict_request, expand, load_project, select,
+                              stage_predict_at, stage_train)
+    from si_model.training.loo import make_split
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def project(holdout=True):
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        if not holdout:
+            for t in p["temps"]:
+                t["hidden_corners"] = []
+        return p
+
+    m = select(expand(project()), design="boomcore", temp="m25")[0]
+    build(m["cfg"])
+    monkeypatch.setenv("SI_STAGE", "train")
+    stage_train(m)
+
+    p = project(holdout=False)
+    fresh = select(expand(p), design="boomcore", temp="m25")
+    ds = dict(np.load(fresh[0]["cfg"]["data"]["cache"]))
+
+    monkeypatch.setenv("SI_STAGE", "base")
+    with pytest.raises(AssertionError, match="degenerate split"):
+        make_split(ds["corners"].tolist(), ds["vt"], fresh[0]["cfg"])
+
+    monkeypatch.setenv("SI_STAGE", "predict")
+    sp = make_split(ds["corners"].tolist(), ds["vt"], fresh[0]["cfg"])
+    assert not sp.hidden.any() and sp.seen.all()
+    req = _predict_request(p, fresh, "0.57:cmax", None, None)
+    fps, fails = stage_predict_at(fresh, p, req, "fresh")
+    assert not fails and len(fps) == 1
+    rows = list(__import__("csv").reader(open(fps[0], encoding="utf-8")))
+    assert len(rows[1:rows.index([])]) == 12 and all(r[3] for r in rows[1:rows.index([])])

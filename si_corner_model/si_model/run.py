@@ -1885,6 +1885,11 @@ def stage_predict(m: dict, corners: str, weights: "str | None" = None) -> None:
     tr = _load_predictor(m, weights)
     idx = {"hidden": tr.split.hidden_idx, "seen": tr.split.seen_idx,
            "all": np.arange(tr.C)}[corners]
+    if not len(idx):
+        print(f"  no {corners} corners in this grid -- nothing to write. "
+              f"Name the corners you want instead: predict --at / --sweep.",
+              flush=True)
+        return
     tr.export_predictions(m["cfg"]["train"]["out_dir"], idx, tag=corners)
 
 
