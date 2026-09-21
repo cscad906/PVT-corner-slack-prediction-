@@ -36,7 +36,14 @@ from pathlib import Path
 MARK_RE = re.compile(r"^\ufeff?\s*### FIXED_PATH idx=(\d+)\s+key=(.*)$")
 START_RE = re.compile(r"^\s*Startpoint:\s+(\S+)")
 END_RE = re.compile(r"^\s*Endpoint:\s+(\S+)")
-TYPE_RE = re.compile(r"^\s*Path Type:\s*(max|min)\s*$", re.IGNORECASE)
+TYPE_RE = re.compile(r"^\s*Path Type:\s*(max|min)\b", re.IGNORECASE)
+# Not every report carries a "Path Type:" line, so two fallbacks in order of
+# directness. The option echo repeats the command that made the report, and a
+# setup path ends on a library setup time while a hold path ends on a library
+# hold time -- which is what max/min means.
+DTYPE_ECHO_RE = re.compile(r"-delay_type\s+(max|min)\b", re.IGNORECASE)
+SETUP_MARK_RE = re.compile(r"^\s*library setup time", re.IGNORECASE)
+HOLD_MARK_RE = re.compile(r"^\s*library hold time", re.IGNORECASE)
 SLACK_RE = re.compile(
     r"^\s*slack\s*\((?:MET|VIOLATED)[^)]*\)\s*"
     r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -95,6 +102,14 @@ def recover_block(index, key, lines):
     starts = [match.group(1) for line in lines for match in [START_RE.match(line)] if match]
     ends = [match.group(1) for line in lines for match in [END_RE.match(line)] if match]
     types = [match.group(1).lower() for line in lines for match in [TYPE_RE.match(line)] if match]
+    if not types:
+        types = [match.group(1).lower()
+                 for line in lines for match in [DTYPE_ECHO_RE.search(line)] if match]
+    if not types:
+        if any(SETUP_MARK_RE.match(line) for line in lines):
+            types = ["max"]
+        elif any(HOLD_MARK_RE.match(line) for line in lines):
+            types = ["min"]
     has_slack = any(SLACK_RE.match(line) for line in lines)
 
     if len(starts) != 1:
@@ -104,7 +119,7 @@ def recover_block(index, key, lines):
     if not has_slack:
         return None, "missing_slack"
     if not types:
-        return None, "missing_path_type"
+        return None, "missing_path_type"      # no Path Type, no echo, no setup/hold line
     if len(set(types)) != 1:
         return None, "mixed_path_type_in_block"
 
