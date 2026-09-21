@@ -468,9 +468,19 @@ designs:
 - **홀드아웃(`hidden_corners`)은 비워도 된다.** 측정한 건 전부 seen 이고 안 한 걸
   예측하는 게 목적이니까. `predict --at/--sweep` 은 코너를 직접 지정하므로 홀드아웃이
   필요 없다 (`base` 와 `train` 은 채점할 대상이 있어야 하니 여전히 필요하다)
-- **`base.select_on: hidden` 을 신경 쓸 필요 없다.** `--weights` 를 쓰면 base 설정이
-  소스 모델에서 고정되므로 대상에서는 선택이 아예 안 돌아간다. 새 회로엔 정답이
-  없으니 원래 고를 수도 없고, 그래서 이게 맞는 동작이다
+- **대상 회로에서는 아무것도 측정하거나 고르지 않는다.** 레벨 좌표도, 다항식 차수도,
+  weighting 도 전부 소스 모델 것을 그대로 쓴다. 대상에서 계산하는 건 **경로별 OLS
+  계수**(그 회로 리포트로 맞춘 값)와 그 위의 보정뿐이다. 실행하면 뭘 가져오는지 찍힌다:
+
+  ```
+  [TRANSFER] from the source, not measured here: v^3 cross=True(deg3), level^2,
+             weighting local, levels rcmax=-1.000, cmax=-0.001, rcmin=+1.000
+  [TRANSFER] computed here: the per-path OLS fit on this circuit's own reports,
+             and the correction on top of it
+  ```
+
+  그래서 `base.select_on: hidden` 을 신경 쓸 필요가 없다. 새 회로엔 고를 근거(정답)가
+  없는데, 애초에 고르지 않는다
 - 온도 이름(`tag`)은 소스 모델과 같아야 한다
 
 전압 범위가 넓은 회로로 학습해서 좁은 회로에 쓰는 방향이 맞다. 반대면 학습 때 못 본

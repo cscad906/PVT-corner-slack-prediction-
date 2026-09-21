@@ -1832,9 +1832,24 @@ def _load_predictor(m: dict, weights: "str | None" = None):
             f"nor the scales its inputs were in, and without those its numbers "
             f"mean something else here. Re-run train for that circuit.")
         m["cfg"]["_transfer"] = {"fam_vocab": ck["fam_vocab"], "norm": ck["norm"]}
-        print(f"[TRANSFER] weights from {weights}; this circuit's own base, the "
-              f"source's vocabulary and input scales", flush=True)
         _pin_training_base(m, ck)
+        # Say what is in force. The recurring question about a borrowed model is
+        # what it measures on THIS circuit and what it takes from the source,
+        # and the answer is not guessable from the command line: nothing is
+        # measured or selected here. Only the per-path fit is computed, and it
+        # is computed with these.
+        b = m["cfg"]["base"]
+        lv = ", ".join(f"{k}={float(v):+.3f}" for k, v in
+                       sorted((b["axes"][1].get("levels") or {}).items(),
+                              key=lambda kv: kv[1]))
+        print(f"[TRANSFER] weights from {weights}", flush=True)
+        print(f"[TRANSFER] from the source, not measured here: v^"
+              f"{b['axes'][0]['order']} cross={b['cross_terms']}"
+              f"(deg{b['cross_max_degree']}), level^{b['axes'][1]['order']}, "
+              f"weighting {b['weighting']}, levels {lv}", flush=True)
+        print(f"[TRANSFER] computed here: the per-path OLS fit on this "
+              f"circuit's own reports, and the correction on top of it",
+              flush=True)
         tr = _trainer(m)
         _load_weights(tr, ck)
         return tr
