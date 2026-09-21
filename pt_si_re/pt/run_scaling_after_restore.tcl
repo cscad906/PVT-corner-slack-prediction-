@@ -25,8 +25,15 @@ set SCALING_AXIS        "V"       ;# V / T / VT
 # 분석 종류
 set ANALYSIS            "setup"   ;# setup / hold
 
-# 1_union.py가 만든 fixed path 파일
+# 1_union.py가 만든 fixed path 파일.
+# ""(빈 문자열)로 두면 fixed path 없이 스케일링만 하고, 아래 개수만큼
+# 일반 report_timing으로 뽑습니다. 새 디자인을 처음 시험할 때 쓰세요.
+# 주의: 코너마다 자기 기준 worst 경로가 나오므로 코너 간 비교에는 못 씁니다.
+#       비교할 데이터를 만들 때는 반드시 fixed path 파일을 주세요.
 set FIXED_PATH_FILE "fixed_paths.tcl"
+
+# FIXED_PATH_FILE이 "" 일 때만 쓰입니다. report_timing -max_paths 값.
+set FREE_REPORT_PATHS 100
 
 # 결과 폴더
 set RESULT_FOLDER "auto_scaling_output"
@@ -552,6 +559,23 @@ proc auto_scaling::plan {cfg} {
     if {[dict exists $result fixed]} {
         puts "FIXED PATHS: [dict get $result fixed count] from [dict get $result fixed file]"
     }
+
+    # 전체 DB 중 얼마를 실제로 스케일링에 썼는지 한 줄로 요약합니다.
+    # 로드된 라이브러리 대부분을 안 쓰는 것은 정상입니다(목표 전압을 양쪽에서
+    # 끼는 두 개만 필요). 봐야 할 숫자는 static 쪽입니다 -- 디자인이 쓰는
+    # library set 인데 보간 격자가 없어 원본 그대로 남은 것이므로, 그 셀이
+    # 타이밍에 기여하면 이 결과는 반쪽입니다.
+    set n_input 0
+    foreach group $groups {
+        incr n_input [llength [dict get $group selected]]
+    }
+    puts "SCALING COVERAGE: sets [llength $groups] scaled / [llength $static_sets] static\
+ / [llength $chosen_families] chosen of [llength $families] candidate(s)"
+    puts "SCALING COVERAGE: inputs $n_input DB of [llength $rows] loaded PVT librar\
+[expr {[llength $rows] == 1 ? "y" : "ies"}]"
+    if {[llength $static_sets]} {
+        puts "SCALING COVERAGE: static set(s) kept at their original corner: $static_sets"
+    }
     return $result
 }
 
@@ -602,6 +626,34 @@ proc auto_scaling::fixed_path_edge_opt {base_opt dir} {
     return "-fall_$base_opt"
   }
   return "-$base_opt"
+}
+
+# fixed path 없이 그 코너의 worst 경로를 그대로 뽑습니다. 스케일링이 걸렸는지
+# 눈으로 보려는 용도입니다. 뽑히는 경로가 코너마다 달라지므로 코너 간 비교
+# (2c/5c/7_cut/모델)에는 쓸 수 없고, 그래서 ### FIXED_PATH 마커도 안 붙입니다.
+proc auto_scaling::report_free_paths {out_file delay_type max_paths pba_mode} {
+    if {![string is integer -strict $max_paths] || $max_paths < 1} {
+        error "FREE_REPORT_PATHS must be a positive integer: $max_paths"
+    }
+    set cmd [list report_timing -delay_type $delay_type -path_type full_clock_expanded \
+        -max_paths $max_paths -nworst 1 -sort_by slack -nets -input_pins \
+        -capacitance -transition_time -nosplit -significant_digits 6]
+    if {$pba_mode ne ""} { lappend cmd -pba_mode $pba_mode }
+    set text ""
+    if {[catch {redirect -variable text {eval $cmd}} problem]} {
+        error "report_timing failed: $problem"
+    }
+    set count [regexp -all -line {^\s*Startpoint:} $text]
+    if {$count == 0} {
+        error "No timing path was reported. Check the restored constraints and ANALYSIS."
+    }
+    redirect -append $out_file {
+        puts "### FREE REPORT max_paths=$max_paths delay_type=$delay_type"
+        puts $text
+        puts ""
+    }
+    puts "FREE REPORT RESULT: paths=$count (requested up to $max_paths)"
+    return [dict create requested $max_paths measured $count missing 0]
 }
 
 proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
@@ -728,7 +780,7 @@ proc auto_scaling::run_after_restore {cfg} {
     set parasitics [verify_restored_parasitics $restored_cfg]
     set plan [plan $restored_cfg]
     dict set plan restored_parasitics $parasitics
-    set fixed [dict get $plan fixed]
+    set fixed [expr {[dict exists $plan fixed] ? [dict get $plan fixed] : ""}]
     set dt [option $cfg delay_type max]
     if {$dt ni {max min}} { error "delay_type must be max or min" }
 
@@ -862,10 +914,15 @@ proc auto_scaling::run_after_restore {cfg} {
     puts $fp ""
     close $fp
 
-    set fixed_result [report_fixed_paths $out [dict get $fixed paths] \
-        $dt [option $cfg pba_mode ""]]
+    if {$fixed ne ""} {
+        set fixed_result [report_fixed_paths $out [dict get $fixed paths] \
+            $dt [option $cfg pba_mode ""]]
+    } else {
+        set fixed_result [report_free_paths $out $dt [option $cfg free_paths 100] \
+            [option $cfg pba_mode ""]]
+    }
     if {![file exists $out] || [file size $out] == 0} {
-        error "Fixed-path timing report가 생성되지 않았습니다: $out"
+        error "Timing report가 생성되지 않았습니다: $out"
     }
 
     set dcalc_text ""
@@ -898,7 +955,11 @@ proc auto_scaling::run_after_restore {cfg} {
     }
 
     puts "DONE: restore-session scaling report = $out"
-    puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
+    if {$fixed ne ""} {
+        puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
+    } else {
+        puts "FREE REPORT SUMMARY: measured=[dict get $fixed_result measured] (no fixed path file; corners are NOT comparable)"
+    }
     puts "VERIFY: scaling library evidence = ${out}.dcalc"
     return $out
 }
@@ -908,7 +969,7 @@ proc auto_scaling::run_after_restore {cfg} {
 proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
-        ANALYSIS FIXED_PATH_FILE RESULT_FOLDER POWER_NET GROUND_NET
+        ANALYSIS FIXED_PATH_FILE FREE_REPORT_PATHS RESULT_FOLDER POWER_NET GROUND_NET
     } {
         if {![info exists ::$name]} { error "USER SETTINGS에 $name 항목이 없습니다." }
     }
@@ -938,6 +999,7 @@ proc auto_scaling::build_restore_config {} {
         mode $::SCALING_AXIS \
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
+        free_paths $::FREE_REPORT_PATHS \
         rail_name $::POWER_NET \
         ground_name $::GROUND_NET \
         out_rpt [file join $::RESULT_FOLDER $filename]]
