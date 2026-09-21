@@ -120,6 +120,7 @@ set ANALYSIS            "setup"
 
 set FIXED_PATH_FILE "/company/work/pt_scaling_eval/input/fixed_paths.tcl"
 set RESULT_FOLDER   "/company/work/pt_scaling_eval/scaling_output"
+set PROGRESS_INTERVAL_MINUTES 10
 
 set POWER_NET  "VDD"
 set GROUND_NET "VSS"
@@ -137,6 +138,7 @@ set GROUND_NET "VSS"
 | `ANALYSIS` | setup은 `setup`, hold는 `hold` |
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과를 저장할 새 폴더의 절대경로 |
+| `PROGRESS_INTERVAL_MINUTES` | 실행 중 현재 단계와 경과 시간을 출력할 간격(분), 기본값 `10` |
 | `POWER_NET`, `GROUND_NET` | UPF/supply net이 전혀 없는 단일 전원 세션에서 생성할 기본 이름. 복원된 multi-supply 설계의 target rail 선택에는 사용하지 않음 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
@@ -197,6 +199,41 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 7. scaled cell과 그 rail에만 target voltage/temperature 적용 후 incremental `update_timing`
 8. 동일한 fixed path만 최종 report로 측정
 9. `report_delay_calculation`에서 scaling library 사용 증거 확인
+
+실행 직후부터 각 단계의 시작과 완료 시간이 다음처럼 표시됩니다. 작업이 한
+단계에서 오래 걸리면 별도 감시 프로세스가 기본 10분 간격으로 현재 단계,
+그 단계의 경과 시간, 전체 경과 시간과 PrimeTime 프로세스 상태를 출력합니다.
+이 감시는 `update_timing`이 Tcl 명령 처리를 막고 있는 동안에도 동작합니다.
+
+```text
+RUN START: PT_PID=12345 | progress_interval=10 min
+PHASE START: UPDATE_TIMING_SI_POCV       | section=0.0 min | total=4.21 min
+PROGRESS: phase=UPDATE_TIMING_SI_POCV | section=10 min | total=14 min | running=yes | PT_PID=12345 | state=R | cpu=98.7%
+PROGRESS: phase=UPDATE_TIMING_SI_POCV | section=20 min | total=24 min | running=yes | PT_PID=12345 | state=R | cpu=98.9%
+PHASE DONE : UPDATE_TIMING_SI_POCV       | section=23.81 min | total=28.02 min
+FIXED PATH PROGRESS: 100/3000 | section=1.35 min | total=29.37 min
+RUN END: status=SUCCESS | phase=VERIFY_SCALING_RESULT | section=0.01 min | total=71.42 min
+```
+
+`state=R`은 실행 중, `state=S`는 PrimeTime 프로세스가 잠시 대기 중임을 뜻합니다.
+프로세스가 살아 있으면 `running=yes`가 나오며, 오류로 끝나면 마지막 줄의
+`status=FAILED`와 중단된 `phase`를 확인할 수 있습니다. fixed path report는
+첫 path, 100개마다, 마지막 path에서 처리 개수와 해당 단계 시간을 출력합니다.
+
+구간 이름은 다음 순서입니다.
+
+1. `VERIFY_PARASITICS`: restore된 BEOL과 parasitic 온도 검사
+2. `PLAN_DESIGN_LIBRARIES`: instantiated library 분류와 내삽 입력 선택
+3. `PREPARE_SCALING_GROUPS`: scaling group 생성 또는 기존 group 검증
+4. `CLASSIFY_POWER_RAILS`: scaled/static cell과 supply rail 분류
+5. `APPLY_TARGET_VOLTAGE_TEMP`: 목표 voltage/temperature 적용
+6. `UPDATE_TIMING_SI_POCV`: SI/POCV를 포함한 timing 갱신
+7. `GENERATE_TIMING_REPORT`: fixed path별 timing report 생성
+8. `VERIFY_SCALING_RESULT`: scaling library 적용 증거 검사
+
+일반적으로 전체 시간의 대부분은 `UPDATE_TIMING_SI_POCV`와 fixed path 수에
+비례하는 `GENERATE_TIMING_REPORT`에서 사용됩니다. 정확한 시간은 설계 크기,
+SI aggressor 수, POCV 설정, RC fallback warning 수와 서버 부하에 따라 달라집니다.
 
 restore session에 기존 scaling group이 있으면 모든 design-used scalable family의
 계획된 입력 DB가 그 group들에 실제 포함됐는지도 검사합니다. 일부 family만 있는

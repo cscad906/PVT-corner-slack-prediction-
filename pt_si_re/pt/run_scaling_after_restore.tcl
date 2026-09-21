@@ -38,6 +38,10 @@ set FREE_REPORT_PATHS 100
 # 결과 폴더
 set RESULT_FOLDER "auto_scaling_output"
 
+# 실행 상태를 이 간격마다 터미널에 출력합니다. update_timing처럼 PrimeTime이
+# Tcl을 오래 점유하는 구간에서도 별도 감시 프로세스가 상태를 알려줍니다.
+set PROGRESS_INTERVAL_MINUTES 10
+
 # UPF가 없는 단일 전원 세션에서 생성할 기본 이름입니다.
 # UPF가 복원되어 있으면 이 이름으로 rail을 고르지 않고, 실제로 scaling
 # group에 속한 cell의 PG 연결을 따라 target rail을 자동 선택합니다.
@@ -46,7 +50,14 @@ set GROUND_NET "VSS"
 
 # ===================== END USER SETTINGS =====================
 # 아래 구현부는 수정하지 않아도 됩니다.
-namespace eval auto_scaling {}
+namespace eval auto_scaling {
+    variable progress_file ""
+    variable progress_monitor_pids {}
+    variable progress_total_epoch 0
+    variable progress_total_ms 0
+    variable progress_current_phase STARTING
+    variable progress_phase_epoch 0
+}
 proc auto_scaling::need {cfg key} {
     if {![dict exists $cfg $key] || [dict get $cfg $key] eq ""} {
         error "Missing setting: $key"
@@ -68,6 +79,120 @@ proc auto_scaling::same {a b} { return [expr {abs($a-$b) < 1e-8}] }
 proc auto_scaling::readable {path} {
     if {![file isfile $path] || ![file readable $path]} { error "Cannot read file: $path" }
     return [file normalize $path]
+}
+
+proc auto_scaling::progress_write {phase phase_epoch} {
+    variable progress_file
+    variable progress_total_epoch
+    if {$progress_file eq ""} { return }
+    set tmp ${progress_file}.tmp
+    set fp [open $tmp w]
+    puts $fp "$phase $phase_epoch $progress_total_epoch"
+    close $fp
+    file rename -force $tmp $progress_file
+}
+
+proc auto_scaling::phase_start {label} {
+    variable progress_total_ms
+    variable progress_current_phase
+    variable progress_phase_epoch
+    set now_epoch [clock seconds]
+    set now_ms [clock milliseconds]
+    set progress_current_phase $label
+    set progress_phase_epoch $now_epoch
+    progress_write $label $now_epoch
+    set total_min [expr {($now_ms - $progress_total_ms) / 60000.0}]
+    puts [format "PHASE START: %-28s | section=0.0 min | total=%.2f min | time=%s" \
+        $label $total_min [clock format $now_epoch -format {%Y-%m-%d %H:%M:%S}]]
+    flush stdout
+    return $now_ms
+}
+
+proc auto_scaling::phase_done {label phase_started_ms} {
+    variable progress_total_ms
+    set now_ms [clock milliseconds]
+    set section_min [expr {($now_ms - $phase_started_ms) / 60000.0}]
+    set total_min [expr {($now_ms - $progress_total_ms) / 60000.0}]
+    puts [format "PHASE DONE : %-28s | section=%.2f min | total=%.2f min" \
+        $label $section_min $total_min]
+    flush stdout
+}
+
+proc auto_scaling::start_progress_monitor {interval_minutes} {
+    variable progress_file
+    variable progress_monitor_pids
+    variable progress_total_epoch
+    variable progress_total_ms
+    variable progress_current_phase
+    variable progress_phase_epoch
+
+    if {![string is integer -strict $interval_minutes] || $interval_minutes <= 0} {
+        error "PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
+    }
+    set progress_total_epoch [clock seconds]
+    set progress_total_ms [clock milliseconds]
+    set progress_current_phase STARTING
+    set progress_phase_epoch $progress_total_epoch
+    set progress_file [file join /tmp auto_scaling_progress_[pid].status]
+    progress_write STARTING $progress_total_epoch
+
+    set interval_seconds [expr {$interval_minutes * 60}]
+    set monitor_script {
+status_file=$1
+pt_pid=$2
+interval=$3
+while kill -0 "$pt_pid" 2>/dev/null; do
+    sleep "$interval"
+    kill -0 "$pt_pid" 2>/dev/null || exit 0
+    [ -r "$status_file" ] || continue
+    IFS=' ' read phase phase_started total_started < "$status_file"
+    now=$(date +%s)
+    section_seconds=$((now - phase_started))
+    total_seconds=$((now - total_started))
+    pt_state=$(ps -p "$pt_pid" -o stat= 2>/dev/null | tr -d ' ')
+    pt_cpu=$(ps -p "$pt_pid" -o %cpu= 2>/dev/null | tr -d ' ')
+    [ -n "$pt_state" ] || pt_state=unknown
+    [ -n "$pt_cpu" ] || pt_cpu=unknown
+    printf 'PROGRESS: phase=%s | section=%d min | total=%d min | running=yes | PT_PID=%s | state=%s | cpu=%s%%\n' \
+        "$phase" "$((section_seconds / 60))" "$((total_seconds / 60))" "$pt_pid" "$pt_state" "$pt_cpu"
+done
+}
+    if {[catch {
+        set progress_monitor_pids [exec /bin/sh -c $monitor_script auto_scaling_monitor \
+            $progress_file [pid] $interval_seconds >@stdout 2>/dev/null &]
+    } reason]} {
+        set progress_monitor_pids {}
+        puts "WARNING: 상태 감시 프로세스를 시작하지 못했습니다: $reason"
+    }
+    puts "RUN START: PT_PID=[pid] | progress_interval=$interval_minutes min"
+    puts "PROGRESS MONITOR: ${interval_minutes}분마다 현재 단계, 단계 경과 시간, 전체 경과 시간을 출력합니다."
+    flush stdout
+}
+
+proc auto_scaling::stop_progress_monitor {{status SUCCESS}} {
+    variable progress_file
+    variable progress_monitor_pids
+    variable progress_total_ms
+    variable progress_current_phase
+    variable progress_phase_epoch
+    foreach monitor_pid $progress_monitor_pids {
+        if {![catch {exec ps -o pid= --ppid $monitor_pid} child_text]} {
+            foreach child_pid [split [string trim $child_text]] {
+                if {$child_pid ne ""} { catch {exec kill $child_pid} }
+            }
+        }
+        catch {exec kill $monitor_pid}
+    }
+    set now_ms [clock milliseconds]
+    set now_epoch [clock seconds]
+    set total_min [expr {($now_ms - $progress_total_ms) / 60000.0}]
+    set section_min [expr {($now_epoch - $progress_phase_epoch) / 60.0}]
+    puts [format "RUN END: status=%s | phase=%s | section=%.2f min | total=%.2f min" \
+        $status $progress_current_phase $section_min $total_min]
+    flush stdout
+    if {$progress_file ne ""} { catch {file delete -force $progress_file} }
+    set progress_monitor_pids {}
+    set progress_file ""
 }
 
 # SPEF/GPD의 // CORNER_NAME은 PDK마다 RC_MAX, rcmax_model처럼 표기가
@@ -683,11 +808,22 @@ proc auto_scaling::report_free_paths {out_file delay_type max_paths pba_mode} {
 }
 
 proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
+    variable progress_total_ms
     set measured 0
     set missing {}
     set idx 0
+    set total [llength $paths]
+    set progress_started_ms [clock milliseconds]
     foreach item $paths {
         incr idx
+        if {$idx == 1 || $idx % 100 == 0 || $idx == $total} {
+            set now_ms [clock milliseconds]
+            set elapsed_min [expr {($now_ms - $progress_started_ms) / 60000.0}]
+            set total_min [expr {($now_ms - $progress_total_ms) / 60000.0}]
+            puts [format "FIXED PATH PROGRESS: %d/%d | section=%.2f min | total=%.2f min" \
+                $idx $total $elapsed_min $total_min]
+            flush stdout
+        }
         lassign $item key from to through edges
         set pins [concat [list $from] $through [list $to]]
         set objects {}
@@ -962,10 +1098,14 @@ proc auto_scaling::run_after_restore {cfg} {
     # 복원 세션의 SPEF를 그대로 사용하므로 파일 기반 SPEF 선택은 수행하지 않습니다.
     # 대신 SPEF/GPD 헤더에서 복원된 BEOL과 온도를 읽어 목표와 정확히
     # 일치하는지 확인합니다. V/T/VT는 Liberty scaling 축입니다.
+    set phase_started [phase_start VERIFY_PARASITICS]
     set restored_cfg $cfg
     if {[dict exists $restored_cfg spef_template]} { dict unset restored_cfg spef_template }
     if {[dict exists $restored_cfg spef]} { dict unset restored_cfg spef }
     set parasitics [verify_restored_parasitics $restored_cfg]
+    phase_done VERIFY_PARASITICS $phase_started
+
+    set phase_started [phase_start PLAN_DESIGN_LIBRARIES]
     set plan [plan $restored_cfg]
     dict set plan restored_parasitics $parasitics
     set fixed [expr {[dict exists $plan fixed] ? [dict get $plan fixed] : ""}]
@@ -980,6 +1120,7 @@ proc auto_scaling::run_after_restore {cfg} {
         }
     }
     file mkdir [file dirname $out]
+    phase_done PLAN_DESIGN_LIBRARIES $phase_started
 
     set rail [option $cfg rail_name VDD]
     set gnd [option $cfg ground_name VSS]
@@ -1000,6 +1141,7 @@ proc auto_scaling::run_after_restore {cfg} {
         lappend scaling_sets [dict create name [dict get $group family] dbs $dbs]
     }
 
+    set phase_started [phase_start PREPARE_SCALING_GROUPS]
     redirect -variable groups_before {
         report_lib_groups -scaling -show {voltage temperature process}
     }
@@ -1033,7 +1175,9 @@ proc auto_scaling::run_after_restore {cfg} {
         error "생성된 scaling group에 목표 코너가 남아 있습니다. 결과를 사용하지 마세요: ${out}.libgroups"
     }
     verify_planned_group_coverage $plan
+    phase_done PREPARE_SCALING_GROUPS $phase_started
 
+    set phase_started [phase_start CLASSIFY_POWER_RAILS]
     set cells [get_cells -hierarchical -quiet *]
     if {![sizeof_collection $cells]} { error "현재 design에 leaf cell이 없습니다." }
     set all_supply [get_supply_nets -quiet -hierarchy *]
@@ -1064,18 +1208,26 @@ proc auto_scaling::run_after_restore {cfg} {
     set scaled_cells [dict get $power_plan scaled_cells]
     set power_supply [dict get $power_plan target_supply]
     puts "POWER SUPPLY NETS TO SCALE: [get_object_name $power_supply]"
+    phase_done CLASSIFY_POWER_RAILS $phase_started
+
+    set phase_started [phase_start APPLY_TARGET_VOLTAGE_TEMP]
     check_status set_temperature [list set_temperature $target_t -object_list $scaled_cells]
     check_status set_voltage [list set_voltage $target_v -object_list $power_supply]
     if {[sizeof_collection $ground_supply]} {
         puts "GROUND SUPPLY NETS: [get_object_name $ground_supply]"
         check_status set_ground [list set_voltage 0.0 -object_list $ground_supply]
     }
+    phase_done APPLY_TARGET_VOLTAGE_TEMP $phase_started
+
     # restore_session에는 기존 timing 상태가 들어 있으므로 변경된 V/T와
     # scaling group의 영향만 갱신합니다. -full은 fixed path와 무관한
     # macro/IO net까지 처음부터 다시 계산하여 RC fallback과 실행 시간을
     # 불필요하게 늘릴 수 있습니다.
+    set phase_started [phase_start UPDATE_TIMING_SI_POCV]
     check_status update_timing {update_timing}
+    phase_done UPDATE_TIMING_SI_POCV $phase_started
 
+    set phase_started [phase_start GENERATE_TIMING_REPORT]
     set paths [get_timing_paths -delay_type $dt -max_paths 1]
     if {![sizeof_collection $paths]} {
         error "목표 조건에서 timing path가 없습니다. 복원된 constraint와 analysis type을 확인하세요."
@@ -1105,7 +1257,9 @@ proc auto_scaling::run_after_restore {cfg} {
     if {![file exists $out] || [file size $out] == 0} {
         error "Timing report가 생성되지 않았습니다: $out"
     }
+    phase_done GENERATE_TIMING_REPORT $phase_started
 
+    set phase_started [phase_start VERIFY_SCALING_RESULT]
     set dcalc_text ""
     set arc_found 0
     foreach_in_collection point [get_attribute [index_collection $paths 0] points] {
@@ -1134,6 +1288,7 @@ proc auto_scaling::run_after_restore {cfg} {
     if {[string first "Scaling libraries used" $dcalc_text] < 0} {
         error "report_delay_calculation에서 scaling library 사용 증거를 찾지 못했습니다. 결과를 사용하지 마세요: ${out}.dcalc"
     }
+    phase_done VERIFY_SCALING_RESULT $phase_started
 
     puts "DONE: restore-session scaling report = $out"
     if {$fixed ne ""} {
@@ -1143,6 +1298,18 @@ proc auto_scaling::run_after_restore {cfg} {
     }
     puts "VERIFY: scaling library evidence = ${out}.dcalc"
     return $out
+}
+
+proc auto_scaling::run_after_restore_monitored {cfg} {
+    start_progress_monitor [option $cfg progress_minutes 10]
+    set code [catch {run_after_restore $cfg} result options]
+    if {$code} {
+        stop_progress_monitor FAILED
+    } else {
+        stop_progress_monitor SUCCESS
+    }
+    if {$code} { return -options $options $result }
+    return $result
 }
 
 
@@ -1183,11 +1350,12 @@ proc auto_scaling::build_restore_config {} {
         free_paths $::FREE_REPORT_PATHS \
         rail_name $::POWER_NET \
         ground_name $::GROUND_NET \
+        progress_minutes $::PROGRESS_INTERVAL_MINUTES \
         out_rpt [file join $::RESULT_FOLDER $filename]]
 }
 
 if {![info exists ::auto_scaling_restored_load_only] || !$::auto_scaling_restored_load_only} {
     set scaling_config [auto_scaling::build_restore_config]
-    set scaling_result [auto_scaling::run_after_restore $scaling_config]
+    set scaling_result [auto_scaling::run_after_restore_monitored $scaling_config]
     puts "RUN 완료: 복원 세션 기반 scaling과 fixed-path report 생성이 끝났습니다."
 }
