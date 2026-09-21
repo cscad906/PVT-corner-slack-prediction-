@@ -60,10 +60,20 @@ class EMA:
         model.load_state_dict(self.backup)
 
 
-def standardize(x: np.ndarray, axis=None, eps=1e-8):
-    mu = np.nanmean(x, axis=axis, keepdims=True)
-    sd = np.nanstd(x, axis=axis, keepdims=True) + eps
-    return ((x - mu) / sd).astype(np.float32)
+def standardize(x: np.ndarray, axis=None, eps=1e-8, stats=None):
+    """Standardise, and say by what.
+
+    ``stats`` applies someone else's (mu, sd) instead of measuring new ones.
+    That is what carrying a model to another circuit needs: the network learned
+    in the units of the circuit it was trained on, so re-measuring the units on
+    the target silently feeds it a different scale.
+    """
+    if stats is not None:
+        mu, sd = (np.asarray(v) for v in stats)
+    else:
+        mu = np.nanmean(x, axis=axis, keepdims=True)
+        sd = np.nanstd(x, axis=axis, keepdims=True) + eps
+    return ((x - mu) / sd).astype(np.float32), (mu, sd)
 
 
 def _verbose() -> bool:
@@ -80,6 +90,12 @@ def _verbose() -> bool:
 class Trainer:
     def __init__(self, cfg: dict, lambda_si: "float | None" = None):
         self.cfg = cfg
+        # Weights borrowed from a model trained on ANOTHER circuit. What has to
+        # travel with them is everything the network reads its inputs through:
+        # the cell-family vocabulary (see _families) and the input scales (see
+        # standardize). The base is not in there -- it is refitted on this
+        # circuit's own measurements, because it is per path.
+        self.transfer = cfg.get("_transfer")
         if lambda_si is not None:
             cfg["train"]["lambda_si"] = lambda_si
         self.dev = torch.device(cfg["train"].get("device", "cuda")
@@ -166,6 +182,42 @@ class Trainer:
         self._prep_model()
         self._prep_splits()
 
+    def _families(self, ds):
+        """node_fam translated into the vocabulary the weights were trained on.
+
+        The vocabulary is built per dataset -- ["<pad>"] + sorted(the families
+        that occur in THIS circuit) -- so the same number means different cells
+        in two circuits, and there are a different number of them. That is the
+        "copying a param with shape [63,16] ... current [73,...]" error. Carrying
+        a model across circuits means translating by NAME.
+
+        A family this circuit has and the trained one never saw has no row to
+        map to; it goes to <unk> and the count is reported, because a large
+        count means the two circuits are not naming cells the same way and the
+        answer is to pin parsing.cell_taxonomy rather than to trust the result.
+        """
+        fam = np.asarray(ds["node_fam"])
+        src = (self.transfer or {}).get("fam_vocab")
+        if src is None:
+            return fam
+        src = [str(x) for x in src]
+        idx = {n: i for i, n in enumerate(src)}
+        unk = idx.get("<unk>", 0)
+        here = [str(x) for x in ds["fam_vocab"]]
+        lut = np.array([idx.get(n, unk) for n in here], np.int64)
+        missing = [n for n in here if n not in idx and n != "<pad>"]
+        if missing:
+            rows = [i for i, n in enumerate(here) if n in set(missing)]
+            n_slots = int(np.isin(fam, rows).sum())
+            print(f"[TRANSFER] {len(missing)} of this circuit's {len(here) - 1} cell "
+                  f"families are not in the trained vocabulary ({n_slots} stage "
+                  f"slots): {sorted(missing)[:6]}"
+                  f"{' ...' if len(missing) > 6 else ''} -> mapped to {src[unk]!r}. "
+                  f"If that count is large, pin parsing.cell_taxonomy in the "
+                  f"config so both circuits name their cells the same way.",
+                  flush=True)
+        return lut[fam]
+
     # ---------------------------------------------------------------- data
     def _prep_tensors(self, sf):
         ds, sp, dev = self.ds, self.split, self.dev
@@ -189,10 +241,14 @@ class Trainer:
         # 'library setup time' row). That channel stays NaN and is zeroed below;
         # using plain mean/std would make ITS statistics NaN and silently zero
         # the channel for every path instead of just the missing entries.
-        self.tok_mu = np.nanmean(raw[:, sp.seen_idx], axis=(0, 1))
-        self.tok_sd = np.nanstd(raw[:, sp.seen_idx], axis=(0, 1)) + 1e-8
-        self.tok_mu = np.nan_to_num(self.tok_mu)
-        self.tok_sd = np.where(np.isfinite(self.tok_sd), self.tok_sd, 1.0)
+        borrowed = (self.transfer or {}).get("norm") or {}
+        if "tok" in borrowed:
+            self.tok_mu, self.tok_sd = (np.asarray(v) for v in borrowed["tok"])
+        else:
+            self.tok_mu = np.nanmean(raw[:, sp.seen_idx], axis=(0, 1))
+            self.tok_sd = np.nanstd(raw[:, sp.seen_idx], axis=(0, 1)) + 1e-8
+            self.tok_mu = np.nan_to_num(self.tok_mu)
+            self.tok_sd = np.where(np.isfinite(self.tok_sd), self.tok_sd, 1.0)
         tok = (raw - self.tok_mu) / self.tok_sd
         tok = np.concatenate([tok, np.broadcast_to(
             self.dvdt.cpu().numpy()[None], (self.N, self.C, self.A))], -1)
@@ -201,13 +257,20 @@ class Trainer:
         tok = np.nan_to_num(tok)
         self.tokens = t(tok)                                          # [N,C,8+A]
 
-        self.sig = t(standardize(ds["path_sig"], axis=0))
+        sig, sig_st = standardize(ds["path_sig"], axis=0, stats=borrowed.get("sig"))
+        self.sig = t(sig)
         # stage sequences (the path-encoder chain -- NOT a cell/net head)
-        self.node_fam = t(ds["node_fam"], torch.long)
-        self.node_feat = t(standardize(ds["node_feat"].reshape(-1, ds["node_feat"].shape[-1]),
-                                       axis=0).reshape(ds["node_feat"].shape))
-        self.edge_feat = t(standardize(ds["edge_feat"].reshape(-1, ds["edge_feat"].shape[-1]),
-                                       axis=0).reshape(ds["edge_feat"].shape))
+        self.node_fam = t(self._families(ds), torch.long)
+        nf, nf_st = standardize(ds["node_feat"].reshape(-1, ds["node_feat"].shape[-1]),
+                                axis=0, stats=borrowed.get("node"))
+        self.node_feat = t(nf.reshape(ds["node_feat"].shape))
+        ef, ef_st = standardize(ds["edge_feat"].reshape(-1, ds["edge_feat"].shape[-1]),
+                                axis=0, stats=borrowed.get("edge"))
+        self.edge_feat = t(ef.reshape(ds["edge_feat"].shape))
+        # every scale this model reads its inputs in, so a later run on ANOTHER
+        # circuit can use these rather than measuring the target's own
+        self.norm = {"tok": (self.tok_mu, self.tok_sd), "sig": sig_st,
+                     "node": nf_st, "edge": ef_st}
         self.node_mask = t(ds["node_mask"])
         self.critical = t(ds["node_feat"][:, :, 5])                   # raw 0/1
 
@@ -330,7 +393,8 @@ class Trainer:
     def _prep_model(self):
         cfg = self.cfg["model"]
         self.enc = PathEncoder(
-            n_families=len(self.ds["fam_vocab"]),
+            n_families=len((self.transfer or {}).get("fam_vocab")
+                           if self.transfer else self.ds["fam_vocab"]),
             node_dim=self.n_node_feat,
             edge_dim=self.n_edge_feat,
             d=cfg.get("enc_dim", 128), num_blocks=cfg.get("enc_blocks", 3),
@@ -567,7 +631,9 @@ class Trainer:
             tag = ""
             if mon < best[0]:
                 best = (mon, ep)
-                torch.save({"model": self.model.state_dict(),
+                torch.save({"fam_vocab": [str(x) for x in self.ds["fam_vocab"]],
+                            "norm": self.norm,
+                            "model": self.model.state_dict(),
                             "enc": self.enc.state_dict(),
                             "cfg": self.cfg, "epoch": ep}, f"{out_dir}/best.pt")
                 tag = " *"

@@ -1239,3 +1239,94 @@ def test_predict_at_new_corners_carries_si(real_tree, tmp_path, monkeypatch):
     for chunk in (4, 1):            # one chunk, then several
         b = tr.predict_coords(tr.ds["vt"][H], tr.split.vt[H], corner_chunk=chunk)
         np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-3)
+
+
+def test_model_carries_to_another_circuit(real_tree, tmp_path, monkeypatch):
+    """--weights: another circuit's model, this circuit's base.
+
+    The family vocabulary is ["<pad>"] + sorted(the families THIS circuit
+    has), so two circuits number their cells differently and have a different
+    number of them. Carrying a model therefore has to translate by name. The
+    check plants exactly that: a second dataset identical to the first except
+    that its vocabulary gained a family that sorts first, which shifts every
+    other index by one. Translated correctly, the borrowed model must return
+    what it returned on the original -- the underlying cells are the same.
+
+    It also pins what does NOT travel: the base is refitted here, and the
+    input scales come from the source, so carrying a model to the circuit it
+    was trained on must reproduce that circuit's own prediction exactly.
+    """
+    pytest.importorskip("torch")
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import _load_predictor, expand, load_project, select, stage_train
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def model():
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        return select(expand(p), design="boomcore", temp="m25")[0]
+
+    m = model()
+    build(m["cfg"])
+    stage_train(m)
+    ckpt = os.path.join(m["cfg"]["train"]["out_dir"], "best.pt")
+    H = _load_predictor(model()).split.hidden_idx
+
+    own = _load_predictor(model()).predict_corners(H)
+    same = _load_predictor(model(), weights=ckpt).predict_corners(H)
+    np.testing.assert_allclose(same, own, rtol=1e-6, atol=1e-6)
+
+    # a second circuit that numbers its cells differently
+    d = dict(np.load(model()["cfg"]["data"]["cache"]))
+    vocab = [str(x) for x in d["fam_vocab"]]
+    assert vocab[0] == "<pad>" and len(vocab) > 2
+    d["fam_vocab"] = np.asarray([vocab[0], "AAA_only_here"] + vocab[1:])
+    fam = np.asarray(d["node_fam"])
+    d["node_fam"] = np.where(fam > 0, fam + 1, 0).astype(fam.dtype)
+    other = str(tmp_path / "other" / "dataset.npz")
+    os.makedirs(os.path.dirname(other), exist_ok=True)
+    np.savez_compressed(other, **d)
+
+    m2 = model()
+    m2["cfg"]["data"]["cache"] = other
+    carried = _load_predictor(m2, weights=ckpt).predict_corners(H)
+    np.testing.assert_allclose(carried, own, rtol=1e-6, atol=1e-6)
+
+    # the input scales come from the SOURCE, not measured on the target. A
+    # circuit whose slacks sit somewhere else entirely would otherwise be fed
+    # to the network through a different ruler than it was trained with, and
+    # on identical data (above) re-measuring is indistinguishable from
+    # borrowing -- so the target here is deliberately offset.
+    import torch
+
+    from si_model.run import _trainer
+
+    d2 = dict(np.load(model()["cfg"]["data"]["cache"]))
+    d2["slack"] = d2["slack"] + 5.0                      # ns: a far larger circuit
+    shifted = str(tmp_path / "shifted" / "dataset.npz")
+    os.makedirs(os.path.dirname(shifted), exist_ok=True)
+    np.savez_compressed(shifted, **d2)
+    src_tok = np.asarray(torch.load(ckpt, map_location="cpu")["norm"]["tok"][0])
+
+    m3 = model()
+    m3["cfg"]["data"]["cache"] = shifted
+    borrowed = _load_predictor(m3, weights=ckpt).tok_mu
+    m4 = model()
+    m4["cfg"]["data"]["cache"] = shifted
+    measured = _trainer(m4).tok_mu
+    np.testing.assert_allclose(np.asarray(borrowed), src_tok, rtol=1e-6, atol=1e-6)
+    assert not np.allclose(np.asarray(measured), src_tok), \
+        "this target must have different statistics, or the check proves nothing"
+
+    # a checkpoint from before this existed cannot be carried, and says so
+    old = str(tmp_path / "old.pt")
+    ck = torch.load(ckpt, map_location="cpu")
+    torch.save({k: v for k, v in ck.items() if k not in ("fam_vocab", "norm")}, old)
+    with pytest.raises(AssertionError, match="carried between circuits"):
+        _load_predictor(model(), weights=old)

@@ -78,6 +78,10 @@ docs/START.md top to bottom.
                              overwritten by a hold run
     --corners hidden|seen|all   corners for predict/merge (default hidden)
     --at 0.57:cmax,0.62:rcmax   predict at these corners, measured or not
+    --weights <model.pt>        predict with ANOTHER circuit's model, e.g.
+                                runs/setup/PERIC0_Timing_Report/model.pt. This
+                                circuit's base is still fitted on its own
+                                reports; only the learned correction is borrowed
     --sweep 0.48:0.70:0.02      predict over a voltage range (add --level cmax
                                 for one level). Both write one file per
                                 temperature, runs/<mode>/_all/predict_<temp>_
@@ -1736,7 +1740,12 @@ def stage_bundle(models: list) -> None:
                 continue
             ck = load_checkpoint(ck_path, map_location="cpu")
             temps[str(m["temp"])] = {"model": ck["model"], "enc": ck["enc"],
-                                     "cfg": ck["cfg"], "epoch": ck["epoch"]}
+                                     "cfg": ck["cfg"], "epoch": ck["epoch"],
+                                     # carried so the file can be used on
+                                     # another circuit: its vocabulary and the
+                                     # scales its inputs were trained in
+                                     "fam_vocab": ck.get("fam_vocab"),
+                                     "norm": ck.get("norm")}
         if not temps:
             print(f"  {design}: no trained temperature, skipped (run train first)", flush=True)
             continue
@@ -1792,11 +1801,43 @@ def _pin_training_base(m: dict, ck: dict) -> None:
     b["_pinned"] = True
 
 
-def _load_predictor(m: dict):
-    """A trainer with the trained weights loaded and the training base pinned."""
+def _load_predictor(m: dict, weights: "str | None" = None):
+    """A trainer with the trained weights loaded and the training base pinned.
+
+    ``weights`` takes them from ANOTHER circuit's file. What travels with them
+    is the cell-family vocabulary and the input scales -- the two things the
+    network reads its inputs through, both of which are measured per dataset
+    and so differ between circuits. What does not travel is the base: it is a
+    per-path polynomial, refitted here on THIS circuit's own measurements. Its
+    settings (order, cross terms, weighting, level coordinates) are pinned from
+    the source, because the correction was trained against residuals of a base
+    built that way; terms this circuit's grid cannot identify are dropped as
+    usual.
+    """
     from si_model.compat import load_checkpoint
 
     out_dir = m["cfg"]["train"]["out_dir"]
+    if weights:
+        ck = load_checkpoint(weights, map_location="cpu")
+        if "temps" in ck:                          # a bundled model.pt
+            key = str(m["temp"])
+            assert key in ck["temps"], (
+                f"{weights} has no temperature {key} (it has: "
+                f"{sorted(ck['temps'])}). Temperature is a split dimension: a "
+                f"model can only be carried to the same one.")
+            ck = ck["temps"][key]
+        assert ck.get("fam_vocab") is not None and ck.get("norm"), (
+            f"{weights} was trained before models could be carried between "
+            f"circuits: it records neither the cell-family vocabulary it used "
+            f"nor the scales its inputs were in, and without those its numbers "
+            f"mean something else here. Re-run train for that circuit.")
+        m["cfg"]["_transfer"] = {"fam_vocab": ck["fam_vocab"], "norm": ck["norm"]}
+        print(f"[TRANSFER] weights from {weights}; this circuit's own base, the "
+              f"source's vocabulary and input scales", flush=True)
+        _pin_training_base(m, ck)
+        tr = _trainer(m)
+        _load_weights(tr, ck)
+        return tr
     # Prefer the single shipped file (model.pt) when it exists; otherwise fall
     # back to the per-temperature checkpoint left by training -- the case where
     # train->predict was run without bundle. Loaded BEFORE the trainer is built,
@@ -1816,6 +1857,11 @@ def _load_predictor(m: dict):
         ck = load_checkpoint(ckpt, map_location="cpu")
     _pin_training_base(m, ck)
     tr = _trainer(m)
+    _load_weights(tr, ck)
+    return tr
+
+
+def _load_weights(tr, ck) -> None:
     try:
         tr.model.load_state_dict(ck["model"])
         tr.enc.load_state_dict(ck["enc"])
@@ -1831,13 +1877,12 @@ def _load_predictor(m: dict):
             "  different number of families, changes the model shape.\n"
             "  Re-run train for this model (its weights are stale), or restore\n"
             "  the dataset the weights were trained on." % (str(e).split("\n")[0],))
-    return tr
 
 
-def stage_predict(m: dict, corners: str) -> None:
+def stage_predict(m: dict, corners: str, weights: "str | None" = None) -> None:
     import numpy as np
 
-    tr = _load_predictor(m)
+    tr = _load_predictor(m, weights)
     idx = {"hidden": tr.split.hidden_idx, "seen": tr.split.seen_idx,
            "all": np.arange(tr.C)}[corners]
     tr.export_predictions(m["cfg"]["train"]["out_dir"], idx, tag=corners)
@@ -1942,7 +1987,7 @@ def _predict_files(p: dict, name: str, temps: list) -> dict:
     return {t: path(t, k) for t in temps}
 
 
-def _default_predict_name(design, temp, at, sweep, level, req) -> str:
+def _default_predict_name(design, temp, at, sweep, level, req, weights=None) -> str:
     # the temperature is not part of it: each per-temperature file puts its
     # own temperature in front of this
     parts = [design] if design else []
@@ -1955,10 +2000,15 @@ def _default_predict_name(design, temp, at, sweep, level, req) -> str:
         parts.append("at_" + "_".join("%g%s" % (v, l) for v, l in req))
     else:
         parts.append("at_%dcorners" % len(req))
+    if weights:
+        # whose model made these numbers, in the file name: a prediction for
+        # circuit B from circuit A's model is a different thing from B's own
+        src = os.path.basename(os.path.dirname(os.path.abspath(weights)))
+        parts.append("from_" + (src or "weights"))
     return "_".join(str(x) for x in parts)
 
 
-def _predict_one_model(m: dict, req: list):
+def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     """[N, K] predictions (ps) of one model at the requested corners, and what
     kind each corner is for THIS model.
 
@@ -1973,7 +2023,7 @@ def _predict_one_model(m: dict, req: list):
 
     from si_model.parsing.keys import parse_corner
 
-    tr = _load_predictor(m)
+    tr = _load_predictor(m, weights)
     prefix = str(m["cfg"]["data"].get("corner_prefix") or "TT")
     names = list(m["cfg"]["base"]["axes"][1].get("levels") or {})
     imap = {n: float(i) for i, n in enumerate(names)}
@@ -2024,7 +2074,8 @@ def _predict_one_model(m: dict, req: list):
     return keys, pidx, vals, kinds, (vmin, vmax)
 
 
-def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str, list]":
+def stage_predict_at(models: list, p: dict, req: list, name: str,
+                     weights: "str | None" = None) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE FILE PER
     TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.csv.
 
@@ -2061,7 +2112,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str) -> "tuple[str,
             print("  skipped: --at/--sweep supports slack models only", flush=True)
             continue
         try:
-            keys, pidx, vals, kinds, (vmin, vmax) = _predict_one_model(m, req)
+            keys, pidx, vals, kinds, (vmin, vmax) = _predict_one_model(m, req, weights)
         except Exception as e:
             failed.append((f"predict:{m['name']}", repr(e)))
             traceback.print_exc()
@@ -2287,6 +2338,10 @@ def main(argv=None):
                          "(measured voltages inside the range are added)")
     ap.add_argument("--level", default=None,
                     help="predict --sweep: this level only (default: every level)")
+    ap.add_argument("--weights", default=None,
+                    help="predict: use another circuit's trained model "
+                         "(runs/<mode>/<circuit>/model.pt). This circuit's own "
+                         "base is still fitted on its own reports")
     ap.add_argument("--name", default=None,
                     help="predict --at/--sweep: output file name "
                          "(default: made from the request)")
@@ -2295,6 +2350,8 @@ def main(argv=None):
         ap.error("--at / --sweep only apply to the predict stage")
     if args.at and args.sweep:
         ap.error("use --at or --sweep, not both")
+    if args.weights and args.stage not in ("predict", "all"):
+        ap.error("--weights only applies to the predict stage")
     os.environ["SI_STAGE"] = args.stage
 
     os.chdir(REPO_ROOT)
@@ -2349,8 +2406,9 @@ def main(argv=None):
             try:
                 req = _predict_request(p, models, args.at, args.sweep, args.level)
                 name = args.name or _default_predict_name(
-                    args.design, args.temp, args.at, args.sweep, args.level, req)
-                _, fails = stage_predict_at(models, p, req, name)
+                    args.design, args.temp, args.at, args.sweep, args.level, req,
+                    args.weights)
+                _, fails = stage_predict_at(models, p, req, name, args.weights)
                 failed += fails
             except Exception as e:
                 failed.append(("predict", repr(e)))
@@ -2368,7 +2426,7 @@ def main(argv=None):
                 elif stage == "sweep":
                     stage_sweep(m)
                 elif stage == "predict":
-                    stage_predict(m, args.corners)
+                    stage_predict(m, args.corners, args.weights)
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()
