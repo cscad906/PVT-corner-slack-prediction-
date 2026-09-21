@@ -86,6 +86,14 @@ scaling 적용을 취소했습니다. 다른 PrimeTime major version을 사용�
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
 
+전원 rail은 이름으로 추측하지 않습니다. 스크립트가 instantiated cell의 정확한
+library 객체와 `lib_scaling_group`을 따라가서 자동 분류합니다. scaling group의
+cell만 사용하는 rail에는 target voltage를 적용하고, static SRAM/macro만 사용하는
+rail과 static cell의 temperature는 restore 상태로 유지합니다. scaled cell과
+static cell이 같은 물리 rail을 공유하면서 현재 rail voltage가 target과 다르면,
+한 rail에 두 전압을 줄 수 없으므로 변경 전에 중단하고 rail/library 이름을
+출력합니다.
+
 ## 4. Tcl에서 수정할 곳
 
 작업용 Tcl을 `vi`로 엽니다.
@@ -124,7 +132,7 @@ set GROUND_NET "VSS"
 | `ANALYSIS` | setup은 `setup`, hold는 `hold` |
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과를 저장할 새 폴더의 절대경로 |
-| `POWER_NET`, `GROUND_NET` | 단일 전원 설계의 주 전원 이름 |
+| `POWER_NET`, `GROUND_NET` | UPF/supply net이 전혀 없는 단일 전원 세션에서 생성할 기본 이름. 복원된 multi-supply 설계의 target rail 선택에는 사용하지 않음 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
 스크립트가 `ANALYSIS`와 다르면 실행을 중단합니다.
@@ -180,9 +188,27 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 3. target library를 제외한 내삽 입력 선택
 4. 현재 parasitic의 BEOL과 온도 확인
 5. scaling library group 구성 또는 기존 group 검증
-6. target voltage와 temperature 적용 후 `update_timing -full`
-7. 동일한 fixed path 측정
-8. `report_delay_calculation`에서 scaling library 사용 증거 확인
+6. instantiated library 기준으로 scaled/static supply rail 자동 분류
+7. scaled cell과 그 rail에만 target voltage/temperature 적용 후 incremental `update_timing`
+8. 동일한 fixed path 측정
+9. `report_delay_calculation`에서 scaling library 사용 증거 확인
+
+rail 분류 로그는 다음 형태입니다.
+
+```text
+AUTO POWER CLASSIFICATION: scaled_cells=... static_cells=...
+AUTO POWER TARGET RAILS: VDD_CORE ...
+AUTO POWER STATIC RAILS (unchanged): VDD_MEM ...
+POWER SUPPLY NETS TO SCALE: VDD_CORE ...
+```
+
+다음 오류는 이름 인식 실패가 아니라 실제 공유 rail 충돌입니다. static SRAM DB를
+그대로 둔 채 같은 물리 rail의 core만 다른 전압으로 만들 수 없으므로, target
+전압 SRAM DB/scaling group 또는 별도 power domain이 필요합니다.
+
+```text
+Scaled cell과 static SRAM/macro가 같은 power rail을 공유하지만 현재 전압이 target과 다릅니다
+```
 
 정상 실행의 마지막 부분은 다음 형태입니다.
 

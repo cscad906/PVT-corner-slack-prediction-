@@ -38,7 +38,9 @@ set FREE_REPORT_PATHS 100
 # 결과 폴더
 set RESULT_FOLDER "auto_scaling_output"
 
-# 복원 세션의 단일 전원 이름
+# UPF가 없는 단일 전원 세션에서 생성할 기본 이름입니다.
+# UPF가 복원되어 있으면 이 이름으로 rail을 고르지 않고, 실제로 scaling
+# group에 속한 cell의 PG 연결을 따라 target rail을 자동 선택합니다.
 set POWER_NET  "VDD"
 set GROUND_NET "VSS"
 
@@ -754,11 +756,146 @@ proc auto_scaling::write_text {path contents} {
     close $fp
 }
 
+# 두 collection을 합칩니다. 빈 collection handle도 안전하게 처리합니다.
+proc auto_scaling::collection_union {left right} {
+    if {$right eq "" || ![sizeof_collection $right]} { return $left }
+    if {$left eq "" || ![sizeof_collection $left]} { return $right }
+    return [add_to_collection -unique $left $right]
+}
+
+# 실제 design cell이 참조하는 library가 scaling group에 속하는지 조사하고,
+# 그 cell에 연결된 power supply net을 자동 분류합니다. library 이름이나 SRAM
+# instance 이름을 사용자가 나열하지 않습니다.
+#
+# scaled-only rail : target voltage 적용
+# static-only rail : restore session의 전압 유지
+# mixed rail       : 현재 전압이 이미 target이면 허용. 다르면 같은 물리 rail에
+#                    서로 다른 전압을 줄 수 없으므로 set_voltage 전에 중단
+proc auto_scaling::classify_scaling_power {cells target_v} {
+    set used_lib_cells [get_lib_cells -quiet -of_objects $cells]
+    if {![sizeof_collection $used_lib_cells]} {
+        error "Design cell이 참조하는 library cell을 찾지 못해 supply rail을 자동 분류할 수 없습니다."
+    }
+
+    set scaled_cells ""
+    set static_cells ""
+    set scaled_supply ""
+    set static_supply ""
+    set scaled_by_rail [dict create]
+    set static_by_rail [dict create]
+    set no_supply_scaled {}
+    set scaled_count 0
+    set static_count 0
+
+    # 같은 library 이름의 PVT DB가 여러 개 올라올 수 있으므로 이름으로 다시
+    # 찾지 않습니다. 실제 instantiated lib_cell의 owning library를 직접 따라갑니다.
+    foreach_in_collection active_lib_cell $used_lib_cells {
+        set lib [get_libs -quiet -of_objects $active_lib_cell]
+        if {[sizeof_collection $lib] != 1} {
+            error "사용 중인 lib_cell '[get_attribute $active_lib_cell full_name]'의 owning library를 하나로 식별하지 못했습니다."
+        }
+        set lib_name [get_object_name $lib]
+        set source_name ""
+        catch { set source_name [file tail [get_attribute $lib source_file_name]] }
+        set lib_label $lib_name
+        if {$source_name ne ""} { append lib_label "($source_name)" }
+
+        set design_cells [get_cells -quiet -of_objects $active_lib_cell]
+        if {![sizeof_collection $design_cells]} { continue }
+
+        set scaling_group [get_attribute -quiet $lib lib_scaling_group]
+        set is_scaled [expr {$scaling_group ne "" && [sizeof_collection $scaling_group]}]
+        set supplies [get_supply_nets -quiet -pg_types power -of_objects $design_cells]
+
+        if {$is_scaled} {
+            incr scaled_count [sizeof_collection $design_cells]
+            set scaled_cells [collection_union $scaled_cells $design_cells]
+            set scaled_supply [collection_union $scaled_supply $supplies]
+            if {![sizeof_collection $supplies]} { lappend no_supply_scaled $lib_label }
+        } else {
+            incr static_count [sizeof_collection $design_cells]
+            set static_cells [collection_union $static_cells $design_cells]
+            set static_supply [collection_union $static_supply $supplies]
+        }
+
+        foreach_in_collection supply $supplies {
+            set supply_name [get_attribute $supply full_name]
+            if {$is_scaled} {
+                dict lappend scaled_by_rail $supply_name $lib_label
+            } else {
+                dict lappend static_by_rail $supply_name $lib_label
+            }
+        }
+    }
+
+    if {$scaled_cells eq "" || ![sizeof_collection $scaled_cells]} {
+        error "Scaling group에 속한 instantiated cell이 없습니다. 기존/생성된 scaling group과 linked library를 확인하세요."
+    }
+    if {[llength $no_supply_scaled]} {
+        error "Scaling 대상 library cell의 power supply net을 찾지 못했습니다: [lsort -unique $no_supply_scaled]"
+    }
+    if {$scaled_supply eq "" || ![sizeof_collection $scaled_supply]} {
+        error "Scaling 대상 cell에 연결된 power supply net이 없습니다. UPF/PG 연결을 확인하세요."
+    }
+
+    set scaled_names [lsort [dict keys $scaled_by_rail]]
+    set static_names [lsort [dict keys $static_by_rail]]
+    set mixed_bad {}
+    set mixed_ok {}
+    set scaled_only {}
+    set static_only {}
+
+    foreach supply_name $scaled_names {
+        if {![dict exists $static_by_rail $supply_name]} {
+            lappend scaled_only $supply_name
+            continue
+        }
+
+        set supply [get_supply_nets -quiet $supply_name]
+        set vmin "unknown"
+        set vmax "unknown"
+        catch { set vmin [number [get_attribute $supply voltage_min]] }
+        catch { set vmax [number [get_attribute $supply voltage_max]] }
+        if {$vmin ne "unknown" && $vmax ne "unknown" &&
+            [same $vmin $target_v] && [same $vmax $target_v]} {
+            lappend mixed_ok $supply_name
+        } else {
+            lappend mixed_bad $supply_name
+        }
+        puts "SHARED POWER RAIL: $supply_name current_min=$vmin current_max=$vmax target=$target_v\
+ scaled_libs=[lsort -unique [dict get $scaled_by_rail $supply_name]]\
+ static_libs=[lsort -unique [dict get $static_by_rail $supply_name]]"
+    }
+    foreach supply_name $static_names {
+        if {![dict exists $scaled_by_rail $supply_name]} {
+            lappend static_only $supply_name
+        }
+    }
+
+    puts "AUTO POWER CLASSIFICATION: scaled_cells=$scaled_count static_cells=$static_count"
+    puts "AUTO POWER TARGET RAILS: $scaled_only"
+    puts "AUTO POWER STATIC RAILS (unchanged): $static_only"
+    if {[llength $mixed_ok]} {
+        puts "AUTO POWER SHARED RAILS already at target (allowed): $mixed_ok"
+    }
+    if {[llength $mixed_bad]} {
+        error "Scaled cell과 static SRAM/macro가 같은 power rail을 공유하지만 현재 전압이 target과 다릅니다: $mixed_bad. 같은 물리 rail을 두 전압으로 자동 분리할 수 없습니다. Target-voltage macro DB/scaling group이 필요합니다."
+    }
+
+    return [dict create \
+        scaled_cells $scaled_cells \
+        static_cells $static_cells \
+        target_supply $scaled_supply \
+        scaled_only $scaled_only \
+        static_only $static_only \
+        mixed_at_target $mixed_ok]
+}
+
 proc auto_scaling::run_after_restore {cfg} {
     foreach command {
-        get_designs get_libs current_design define_scaling_lib_group
+        get_designs get_libs get_lib_cells current_design define_scaling_lib_group
         report_lib_groups get_supply_nets get_cells set_temperature
-        set_voltage update_timing get_timing_paths
+        set_voltage update_timing get_timing_paths add_to_collection
     } {
         if {![llength [info commands ::$command]]} {
             error "이 파일은 restore_session을 완료한 pt_shell에서만 실행할 수 있습니다."
@@ -848,7 +985,6 @@ proc auto_scaling::run_after_restore {cfg} {
     set cells [get_cells -hierarchical -quiet *]
     if {![sizeof_collection $cells]} { error "현재 design에 leaf cell이 없습니다." }
     set all_supply [get_supply_nets -quiet -hierarchy *]
-    set power_supply ""
     set ground_supply ""
     if {![sizeof_collection $all_supply]} {
         puts "RESTORE MODE: supply net이 없어 단일 전원 domain을 생성합니다."
@@ -857,33 +993,26 @@ proc auto_scaling::run_after_restore {cfg} {
         create_supply_net $gnd -domain AUTO_SCALING_TOP
         set_domain_supply_net AUTO_SCALING_TOP \
             -primary_power_net $rail -primary_ground_net $gnd
-        set power_supply [get_supply_nets -quiet $rail]
         set ground_supply [get_supply_nets -quiet $gnd]
     } else {
-        # UPF가 복원된 경우 이름을 추측하지 않고 design cell에 실제 연결된
-        # power/ground 타입 supply net을 사용합니다. USER SETTINGS의 이름이
-        # 실제로 존재하면 그 net을 우선하여 multi-voltage design도 지원합니다.
-        set power_supply [get_supply_nets -quiet -hierarchy $rail]
+        # Ground는 모든 domain에서 0V이므로 실제 cell 연결을 따라 자동 선택합니다.
         set ground_supply [get_supply_nets -quiet -hierarchy $gnd]
-        if {![sizeof_collection $power_supply]} {
-            set power_supply [get_supply_nets -quiet -pg_types power -of_objects $cells]
-        }
         if {![sizeof_collection $ground_supply]} {
             set ground_supply [get_supply_nets -quiet -pg_types ground -of_objects $cells]
-        }
-        if {![sizeof_collection $power_supply]} {
-            set power_supply [get_supply_nets -quiet -hierarchy -pg_types power *]
         }
         if {![sizeof_collection $ground_supply]} {
             set ground_supply [get_supply_nets -quiet -hierarchy -pg_types ground *]
         }
-        if {![sizeof_collection $power_supply]} {
-            error "복원된 UPF에서 design cell에 연결된 power-type supply net을 찾지 못했습니다. Available supply nets: [get_object_name $all_supply]"
-        }
     }
 
-    puts "POWER SUPPLY NETS: [get_object_name $power_supply]"
-    check_status set_temperature [list set_temperature $target_t -object_list $cells]
+    # Scaling group이 실제로 적용되는 cell/library를 기준으로 target rail을
+    # 고릅니다. static SRAM/macro 전용 rail과 그 cell의 온도는 복원 상태를
+    # 유지합니다. 공유 rail의 전압 충돌은 변경 전에 검출합니다.
+    set power_plan [classify_scaling_power $cells $target_v]
+    set scaled_cells [dict get $power_plan scaled_cells]
+    set power_supply [dict get $power_plan target_supply]
+    puts "POWER SUPPLY NETS TO SCALE: [get_object_name $power_supply]"
+    check_status set_temperature [list set_temperature $target_t -object_list $scaled_cells]
     check_status set_voltage [list set_voltage $target_v -object_list $power_supply]
     if {[sizeof_collection $ground_supply]} {
         puts "GROUND SUPPLY NETS: [get_object_name $ground_supply]"
