@@ -1330,3 +1330,82 @@ def test_model_carries_to_another_circuit(real_tree, tmp_path, monkeypatch):
     torch.save({k: v for k, v in ck.items() if k not in ("fam_vocab", "norm")}, old)
     with pytest.raises(AssertionError, match="carried between circuits"):
         _load_predictor(model(), weights=old)
+
+
+def test_model_carries_to_a_different_corner_set(real_tree, tmp_path, monkeypatch):
+    """The target circuit may have a different seen-corner set entirely.
+
+    Nothing in the model's shape depends on how many corners there are: the
+    correction head cross-attends over the corner tokens with a mask, and
+    training already varies the count every batch through corner and axis
+    dropout. This plants the case anyway -- a target built on three voltages
+    where the model was trained on four -- because "should be fine by
+    construction" is not a measurement.
+
+    What is NOT free is the coordinate RANGE. Corner coordinates are measured
+    from the reference corner, so a target asking about voltages the source
+    never covered is extrapolation for the correction, whatever the counts are.
+    """
+    pytest.importorskip("torch")
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import _load_predictor, expand, load_project, select, stage_train
+    from si_model.training.loo import make_split
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def model(voltages=None, min_seen=None):
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        if voltages:
+            p["corners"]["voltages"] = voltages
+        if min_seen:
+            p["split"]["min_seen"] = min_seen
+        return select(expand(p), design="boomcore", temp="m25")[0]
+
+    m = model()
+    build(m["cfg"])
+    stage_train(m)
+    ckpt = os.path.join(m["cfg"]["train"]["out_dir"], "best.pt")
+    trained_on = len(_load_predictor(model()).split.corners)
+
+    # a target with one voltage fewer: 3 x 3 corners against the model's 4 x 3
+    d = dict(np.load(model()["cfg"]["data"]["cache"]))
+    keep = np.array([i for i, c in enumerate(d["corners"]) if "0p54V" not in str(c)])
+    assert 0 < len(keep) < len(d["corners"])
+    for k, ax in (("corners", 0), ("vt", 0), ("measured", 0), ("slack", 1),
+                  ("si_label", 1), ("arrival", 1), ("required", 1),
+                  ("launch_clk", 1), ("capture_clk", 1), ("lib_check_time", 1),
+                  ("arc_delta", 1), ("vwin", 1), ("abump", 2), ("awin", 2),
+                  ("aslew", 2)):
+        if k in d and d[k].ndim > ax:
+            d[k] = np.take(d[k], keep, axis=ax)
+    fewer = str(tmp_path / "fewer" / "dataset.npz")
+    os.makedirs(os.path.dirname(fewer), exist_ok=True)
+    np.savez_compressed(fewer, **d)
+
+    m2 = model(voltages=[0.5, 0.6, 0.685], min_seen=1)
+    m2["cfg"]["data"]["cache"] = fewer
+    tr = _load_predictor(m2, weights=ckpt)
+    assert len(tr.split.corners) == len(keep) < trained_on, \
+        "the target must really have a different corner set"
+    H = tr.split.hidden_idx
+    assert len(H)
+
+    # Random weights from here on. One epoch on twelve paths leaves the
+    # correction head at ~1e-4 of its zero init, so the trained correction is
+    # 3e-5 ps and every output equals the base to float32 -- which would make
+    # this pass whatever the attention did with the mismatched corner count.
+    import torch
+
+    torch.manual_seed(0)
+    for prm in list(tr.model.parameters()) + list(tr.enc.parameters()):
+        prm.data.normal_(0.0, 0.3)
+    pred = tr.predict_corners(H)
+    assert np.isfinite(pred).all()
+    assert np.abs(pred - tr.base_hat.cpu().numpy()[:, H]).max() > 1.0, \
+        "the correction must reach the output, on this corner set too"
