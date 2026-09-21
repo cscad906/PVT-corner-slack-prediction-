@@ -1125,7 +1125,9 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
     set static_supply ""
     set scaled_by_rail [dict create]
     set static_by_rail [dict create]
-    set no_supply_scaled {}
+    set non_primary_by_rail [dict create]
+    set scaled_lib_labels {}
+    set static_lib_labels {}
     set scaled_count 0
     set static_count 0
 
@@ -1153,48 +1155,76 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
 
         set scaling_group [get_attribute -quiet $lib lib_scaling_group]
         set is_scaled [expr {$scaling_group ne "" && [sizeof_collection $scaling_group]}]
-        set supplies [get_supply_nets -quiet -pg_types power -of_objects $design_cells]
 
         if {$is_scaled} {
             incr scaled_count [sizeof_collection $design_cells]
             set scaled_cells [collection_union $scaled_cells $design_cells]
-            set scaled_supply [collection_union $scaled_supply $supplies]
-            if {![sizeof_collection $supplies]} { lappend no_supply_scaled $lib_label }
+            lappend scaled_lib_labels $lib_label
         } else {
             incr static_count [sizeof_collection $design_cells]
             set static_cells [collection_union $static_cells $design_cells]
-            set static_supply [collection_union $static_supply $supplies]
-        }
-
-        foreach_in_collection supply $supplies {
-            set supply_name [get_attribute $supply full_name]
-            if {$is_scaled} {
-                dict lappend scaled_by_rail $supply_name $lib_label
-            } else {
-                dict lappend static_by_rail $supply_name $lib_label
-            }
+            lappend static_lib_labels $lib_label
         }
     }
 
     if {$scaled_cells eq "" || ![sizeof_collection $scaled_cells]} {
         error "Scaling group에 속한 instantiated cell이 없습니다. 기존/생성된 scaling group과 linked library를 확인하세요."
     }
-    if {[llength $no_supply_scaled]} {
-        error "Scaling 대상 library cell의 power supply net을 찾지 못했습니다: [lsort -unique $no_supply_scaled]"
+
+    # multi-rail cell에 연결된 모든 power net을 target으로 바꾸지 않습니다.
+    # PrimeTime PG pin type=primary_power인 pin의 실제 supply connection만
+    # Operating Conditions/scaling voltage가 적용될 target rail로 선택합니다.
+    puts "POWER RAIL QUERY: scaled primary_power PG pins"
+    flush stdout
+    set scaled_pg_pins [get_pg_pins -of_objects $scaled_cells]
+    set scaled_primary_pg [filter_collection $scaled_pg_pins {type == primary_power}]
+    set scaled_non_primary_pg [filter_collection $scaled_pg_pins \
+        {type != primary_power && type =~ *power*}]
+    if {$scaled_primary_pg eq "" || ![sizeof_collection $scaled_primary_pg]} {
+        error "Scaling 대상 cell에서 type=primary_power PG pin을 찾지 못했습니다. report_power_pin_info로 UPF/Liberty PG 구성을 확인하세요."
     }
+    set scaled_supply [get_supply_nets -quiet -of_objects $scaled_primary_pg]
     if {$scaled_supply eq "" || ![sizeof_collection $scaled_supply]} {
-        error "Scaling 대상 cell에 연결된 power supply net이 없습니다. UPF/PG 연결을 확인하세요."
+        error "Scaling 대상 cell의 primary_power PG pin에 연결된 supply net이 없습니다. UPF/PG 연결을 확인하세요."
+    }
+
+    puts "POWER RAIL QUERY: scaled non-primary and static power rails"
+    flush stdout
+    set non_primary_supply ""
+    if {$scaled_non_primary_pg ne "" && [sizeof_collection $scaled_non_primary_pg]} {
+        set non_primary_supply [get_supply_nets -quiet -of_objects $scaled_non_primary_pg]
+    }
+    if {$static_cells ne "" && [sizeof_collection $static_cells]} {
+        set static_supply [get_supply_nets -quiet -pg_types power -of_objects $static_cells]
+    }
+
+    foreach_in_collection supply $scaled_supply {
+        dict set scaled_by_rail [get_attribute $supply full_name] $scaled_lib_labels
+    }
+    if {$non_primary_supply ne "" && [sizeof_collection $non_primary_supply]} {
+        foreach_in_collection supply $non_primary_supply {
+            set supply_name [get_attribute $supply full_name]
+            dict set non_primary_by_rail $supply_name $scaled_lib_labels
+        }
+    }
+    if {$static_supply ne "" && [sizeof_collection $static_supply]} {
+        foreach_in_collection supply $static_supply {
+            dict set static_by_rail [get_attribute $supply full_name] $static_lib_labels
+        }
     }
 
     set scaled_names [lsort [dict keys $scaled_by_rail]]
     set static_names [lsort [dict keys $static_by_rail]]
+    set non_primary_names [lsort [dict keys $non_primary_by_rail]]
     set mixed_bad {}
     set mixed_ok {}
     set scaled_only {}
     set static_only {}
 
     foreach supply_name $scaled_names {
-        if {![dict exists $static_by_rail $supply_name]} {
+        set shared_static [dict exists $static_by_rail $supply_name]
+        set shared_non_primary [dict exists $non_primary_by_rail $supply_name]
+        if {!$shared_static && !$shared_non_primary} {
             lappend scaled_only $supply_name
             continue
         }
@@ -1210,9 +1240,7 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
         } else {
             lappend mixed_bad $supply_name
         }
-        puts "SHARED POWER RAIL: $supply_name current_min=$vmin current_max=$vmax target=$target_v\
- scaled_libs=[lsort -unique [dict get $scaled_by_rail $supply_name]]\
- static_libs=[lsort -unique [dict get $static_by_rail $supply_name]]"
+        puts "SHARED/PROTECTED POWER RAIL: $supply_name current_min=$vmin current_max=$vmax target=$target_v static_cells=$shared_static non_primary_use=$shared_non_primary"
     }
     foreach supply_name $static_names {
         if {![dict exists $scaled_by_rail $supply_name]} {
@@ -1221,13 +1249,15 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
     }
 
     puts "AUTO POWER CLASSIFICATION: scaled_cells=$scaled_count static_cells=$static_count"
-    puts "AUTO POWER TARGET RAILS: $scaled_only"
+    puts "AUTO POWER PRIMARY TARGET RAILS: $scaled_names"
+    puts "AUTO POWER SCALED-ONLY TARGET RAILS: $scaled_only"
+    puts "AUTO POWER NON-PRIMARY RAILS (unchanged): $non_primary_names"
     puts "AUTO POWER STATIC RAILS (unchanged): $static_only"
     if {[llength $mixed_ok]} {
         puts "AUTO POWER SHARED RAILS already at target (allowed): $mixed_ok"
     }
     if {[llength $mixed_bad]} {
-        error "Scaled cell과 static SRAM/macro가 같은 power rail을 공유하지만 현재 전압이 target과 다릅니다: $mixed_bad. 같은 물리 rail을 두 전압으로 자동 분리할 수 없습니다. Target-voltage macro DB/scaling group이 필요합니다."
+        error "Scaling primary_power rail이 static cell 또는 다른 non-primary rail 용도와 공유되지만 현재 전압이 target과 다릅니다: $mixed_bad. 같은 물리 rail을 두 전압으로 자동 분리할 수 없습니다."
     }
 
     return [dict create \
@@ -1235,6 +1265,7 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
         static_cells $static_cells \
         target_supply $scaled_supply \
         scaled_only $scaled_only \
+        non_primary_unchanged $non_primary_names \
         static_only $static_only \
         mixed_at_target $mixed_ok]
 }
@@ -1242,7 +1273,7 @@ proc auto_scaling::classify_scaling_power {cells target_v} {
 proc auto_scaling::run_after_restore {cfg} {
     foreach command {
         get_designs get_libs get_lib_cells current_design define_scaling_lib_group
-        report_lib_groups get_supply_nets get_cells set_temperature
+        report_lib_groups get_supply_nets get_pg_pins get_cells filter_collection set_temperature
         set_voltage update_timing get_timing_paths add_to_collection
     } {
         if {![llength [info commands ::$command]]} {

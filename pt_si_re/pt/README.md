@@ -98,11 +98,12 @@ scaling group에 섞지 않습니다.
 
 전원 rail은 이름으로 추측하지 않습니다. 스크립트가 instantiated cell의 정확한
 library 객체와 `lib_scaling_group`을 따라가서 자동 분류합니다. scaling group의
-cell만 사용하는 rail에는 target voltage를 적용하고, static SRAM/macro만 사용하는
-rail과 static cell의 temperature는 restore 상태로 유지합니다. scaled cell과
-static cell이 같은 물리 rail을 공유하면서 현재 rail voltage가 target과 다르면,
-한 rail에 두 전압을 줄 수 없으므로 변경 전에 중단하고 rail/library 이름을
-출력합니다.
+cell에서도 PrimeTime PG pin의 `type=primary_power`에 실제 연결된 supply net에만
+target voltage를 적용합니다. multi-rail cell의 나머지 power rail, static
+SRAM/macro 전용 rail과 static cell의 temperature는 restore 상태로 유지합니다.
+primary target rail이 static cell 또는 다른 non-primary 용도와 공유되면서 현재
+rail voltage가 target과 다르면, 한 rail에 두 전압을 줄 수 없으므로 변경 전에
+중단합니다.
 
 ## 4. Tcl에서 수정할 곳
 
@@ -248,7 +249,8 @@ rail 분류 로그는 다음 형태입니다.
 
 ```text
 AUTO POWER CLASSIFICATION: scaled_cells=... static_cells=...
-AUTO POWER TARGET RAILS: VDD_CORE ...
+AUTO POWER PRIMARY TARGET RAILS: VDD_CORE ...
+AUTO POWER NON-PRIMARY RAILS (unchanged): VDD_AUX VDD_MEM ...
 AUTO POWER STATIC RAILS (unchanged): VDD_MEM ...
 POWER SUPPLY NETS TO SCALE: VDD_CORE ...
 ```
