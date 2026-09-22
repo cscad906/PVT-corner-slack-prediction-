@@ -1539,3 +1539,46 @@ def test_predict_at_another_clock_period(real_tree, tmp_path, monkeypatch):
     assert abs((two[0] - base[0]) - 2 * (1.8 - 2.0) * 1000.0) < 0.06, \
         "a 2-cycle path must move by twice the period change"
     assert abs((two[1] - base[1]) - (1.8 - 2.0) * 1000.0) < 0.06
+
+
+def test_clock_edge_row_column_layouts():
+    """The edge time is the LAST number on the row, however many precede it.
+
+    The deliverable is SSTA, which puts extra statistical columns on the rows,
+    and a row may carry only the Path. Reading the second number -- which the
+    first version did -- picks a sigma the moment a third column appears. The
+    cell rows in this parser already take the last value for the same reason.
+    """
+    from si_model.parsing.annotated import CLOCK_EDGE_RE, _NUM_RE
+
+    cases = [
+        ("  clock clk (rise edge)                 4.0000    4.0000", "4.0000"),
+        ("  clock clk (rise edge) (mean)   4.0000  0.0123   4.0000", "4.0000"),
+        ("  clock clk (fall edge)                           2.5000", "2.5000"),
+        ("  clock CLK' (rise edge)  4.0000  0.0100  0.0050  4.0000", "4.0000"),
+    ]
+    for row, want in cases:
+        m = CLOCK_EDGE_RE.match(row)
+        assert m, row
+        assert _NUM_RE.findall(m.group(1))[-1] == want, row
+    m = CLOCK_EDGE_RE.match("  clock clk (rise edge)")
+    assert m and not _NUM_RE.findall(m.group(1)), "a row with no number is not an edge time"
+
+    # and through the parser, on a report whose clock rows carry a statistical
+    # column in the middle -- checking the regex alone let a parser that takes
+    # the second number pass
+    import re as _re
+    import tempfile
+
+    from si_model.parsing.annotated import parse_annotated
+
+    txt = _fake_report(0.6, 0.0)
+    txt = _re.sub(r"^(\s+clock \S+ \(rise edge\))(\s+)(-?\d+\.\d+)(\s+)(-?\d+\.\d+)",
+                  r"\1\2\3\4 0.0123 \5", txt, flags=_re.M)
+    assert "0.0123" in txt
+    fp = os.path.join(tempfile.mkdtemp(), "ssta.rpt")
+    with open(fp, "w") as f:
+        f.write(txt)
+    p0 = next(iter(parse_annotated(fp).values()))
+    assert (p0.launch_edge, p0.capture_edge) == (0.0, 2.0), \
+        (p0.launch_edge, p0.capture_edge)
