@@ -1235,6 +1235,14 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
         print(f"    slack={p.slack} arrival={p.arrival} required={p.required}")
         print(f"    launch_clk={p.launch_clk} capture_clk={p.capture_clk} "
               f"lib_check={p.lib_check_time}")
+        # the two clock-edge times, and their gap -- one period for a
+        # single-cycle setup check, N for a multicycle one, 0 for hold. This is
+        # what `predict --period` scales, and whether a vendor's report states
+        # it the same way is not something to assume: read it here.
+        gap = p.capture_edge - p.launch_edge
+        print(f"    launch_edge={p.launch_edge} capture_edge={p.capture_edge} "
+              f"-> cycle gap={gap}"
+              + ("   (predict --period needs this)" if gap == gap else ""))
         print(f"    stages={len(p.stages)} {segs}")
         missing = [n for n, v in (("arrival", p.arrival), ("required", p.required),
                                   ("launch_clk", p.launch_clk),
@@ -1243,6 +1251,10 @@ def stage_check(models: list, fp: "str | None" = None) -> int:
         if missing:
             print(f"    (!) NaN fields: {missing} -- training still runs, but the token "
                   f"information is empty")
+        if p.capture_edge != p.capture_edge or p.launch_edge != p.launch_edge:
+            print("    (!) no clock-edge times -- everything else works, but "
+                  "`predict --period` cannot: it has no way to know how many "
+                  "clock periods a path spans")
         if not p.stages:
             print("    (!) 0 stages -- the path-encoder input is empty, which "
                   "makes training meaningless")

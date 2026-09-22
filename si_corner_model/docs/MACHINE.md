@@ -449,6 +449,16 @@ slack(T') = slack(T) + N x (T' - T)        N = 그 경로의 사이클 수
   성질이지 보고 주기의 성질이 아니다). 전압 스윕과 합치면 Vmin-Fmax 곡선이 된다
 - 클럭 엣지 시각을 읽는 건 새로 들어간 기능이라 **빌드를 다시 해야** 쓸 수 있다.
   안 하면 그렇다고 알려준다
+- **리포트에 그 줄이 있는지 먼저 확인할 것.** 벤더마다 형식이 다르므로 가정하지 말고
+  `bash scripts/run.sh check` 로 본다:
+
+  ```
+  clock edge         24 lines OK   e.g. clock clk (rise edge)   0.0000   0.0000
+    launch_edge=0.0 capture_edge=2.0 -> cycle gap=2.0   (predict --period needs this)
+  ```
+
+  `cycle gap` 이 나오면 `--period` 를 쓸 수 있다. `clock edge ... MISS` 이거나
+  `no clock-edge times` 가 뜨면 나머지는 다 되지만 `--period` 만 못 쓴다
 - 스윕 범위 안의 **측정 전압은 자동으로 들어간다** — 곡선이 실측점을 지나는지 보라고
 - 모든 값은 모델 예측이다. **SI(크로스토크) 항도 측정 안 한 코너에서 똑같이 계산된다** —
   어느 코너든 자기 리포트를 쓰지 않고 seen 코너에 맞춘 보간을 그 좌표에서 평가하기
