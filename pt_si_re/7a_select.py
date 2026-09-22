@@ -119,6 +119,7 @@ LEVEL_NAMES = ("rcmax", "rcmin", "cmax")
 MARK = "### FIXED_PATH"
 IDXTAG = "idx="
 ANNOT_SUFFIX = "_fixed_annotated.txt"
+XTALK_SUFFIX = ".path_context_si_compact.by_path.rpt"
 # 2c 산출물의 slack 줄.  "  slack (VIOLATED)        -0.429594"
 SLACK_RE = re.compile(r"^\s*slack\s*\(([^)]*)\)\s+(-?[\d.]+)")
 # 커버리지 표에서 보여 줄 깊이
@@ -129,9 +130,10 @@ CODE_INFO = {
                   "give --root <folder of corner folders> and --keep <N>."),
     "E-NOROOT":  ("the folder does not exist",
                   "check --root."),
-    "E-NOTHING": ("no corner holds a *_fixed_annotated.txt",
-                  "run 4_all_corners.py --phase 1 first, or point --root at the "
-                  "round-2 work folder."),
+    "E-NOTHING": ("no corner holds a *_fixed_annotated.txt or a <corner>.rpt",
+                  "point --root at the round-2 work folder. the round-2 PT "
+                  "report alone is enough -- 4_all_corners.py does not have to "
+                  "have run yet."),
     "E-ONECORNER": ("only one corner was read",
                     "balancing needs at least two corners. with one corner the "
                     "plain 7_cut.py --keep is the same thing."),
@@ -339,10 +341,26 @@ def corner_dirs(root):
     return out
 
 
-def annot_in(d):
-    """코너 폴더에서 annotated 파일 하나. 없으면 None."""
-    for n in sorted(os.listdir(d)):
+def annot_in(d, corner):
+    """코너 폴더에서 읽을 파일 하나. 없으면 None.
+
+    2c 산출물(_fixed_annotated.txt)을 먼저 보고, 없으면 2회차 PT 원본
+    <코너>.rpt 를 쓴다. 둘 다 `### FIXED_PATH` 블록과 그 안의 slack 줄이라
+    여기서 필요한 것은 똑같다.
+
+    원본을 읽을 수 있어야 **4_all 을 돌리기 전에** 고를 수 있다. 1만 경로를
+    annotate 한 뒤 3천으로 줄이면 나머지 7천에 들인 시간이 그대로 버려진다.
+    """
+    names = sorted(os.listdir(d))
+    for n in names:
         if n.endswith(ANNOT_SUFFIX):
+            return os.path.join(d, n)
+    # 크로스토크 리포트(by_path.rpt)는 타이밍 표가 없어 여기서 쓸 수 없다.
+    for n in names:
+        if n == corner + ".rpt":
+            return os.path.join(d, n)
+    for n in names:
+        if n.endswith(".rpt") and not n.endswith(XTALK_SUFFIX):
             return os.path.join(d, n)
     return None
 
@@ -517,7 +535,7 @@ def main():
     # ---- 읽을 파일 모으기 ------------------------------------------------
     jobs, missing, skipped = [], [], []
     for name, d in corner_dirs(args.root):
-        f = annot_in(d)
+        f = annot_in(d, name)
         if f is None:
             missing.append(name)
             continue
@@ -557,7 +575,7 @@ def main():
         print("           (--skip-corner: not read at all -- not even to check "
               "that a path exists there)")
     if missing:
-        print("  [ CHECK ] %d corner(s) hold no %s -- not used here:"
+        print("  [ CHECK ] %d corner(s) hold neither %s nor <corner>.rpt:"
               % (len(missing), ANNOT_SUFFIX))
         for m in missing[:10]:
             print("      %s" % m)
