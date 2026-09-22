@@ -383,7 +383,8 @@ class Trainer:
     # 30k-path drop that is 1.26 GB of awin/abump/aslew/node_feat/edge_feat kept
     # alive for the entire run, to serve a handful of small arrays that really
     # are still read later. Keep those and drop the rest.
-    _DS_KEEP = ("fam_vocab", "vt", "path_keys", "path_idx", "slack")
+    _DS_KEEP = ("fam_vocab", "vt", "path_keys", "path_idx", "slack",
+                "cycle_gap")
 
     def _release_ds(self):
         self.n_node_feat = int(self.ds["node_feat"].shape[-1])

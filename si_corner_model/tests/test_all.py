@@ -1123,7 +1123,14 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     assert [c + " slack (ps)" for c in summ[0][3:]] == head[3:]
     assert [r[2] for r in summ[1:]] == ["smallest slack (ps)",
                                         "sum of negative slacks (ps)",
-                                        "paths with negative slack (out of 12)"]
+                                        "paths with negative slack (out of 12)",
+                                        "max clock frequency (MHz)"]
+    # the fixture's reports carry a 2 ns period, and Fmax is where the worst
+    # path reaches zero slack: 1 / (2 ns - worst slack)
+    fm = [float(x) for x in summ[4][3:] if x]
+    ws = [float(x) for x in summ[1][3:] if x]
+    assert fm and len(fm) == len(ws)
+    assert all(abs(f - 1000.0 / (2.0 - w / 1000.0)) < 0.5 for f, w in zip(fm, ws))
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
                       ["cfg"]["data"]["cache"]))
     got = {int(r[1]): r[2] for r in paths_m}
@@ -1462,3 +1469,73 @@ def test_predict_runs_on_a_circuit_with_no_holdout(real_tree, tmp_path, monkeypa
     assert not fails and len(fps) == 1
     rows = list(__import__("csv").reader(open(fps[0], encoding="utf-8")))
     assert len(rows[1:rows.index([])]) == 12 and all(r[3] for r in rows[1:rows.index([])])
+
+
+def test_predict_at_another_clock_period(real_tree, tmp_path, monkeypatch):
+    """--period: exact shift, and a frequency limit that does not move.
+
+    T enters the slack equation once, as the capture edge's time, and nothing
+    in the path depends on it -- cells do not know the clock. So changing the
+    period shifts every setup slack by N*(T'-T) exactly, and the frequency a
+    corner can run at is a property of the corner, not of the period the
+    numbers happen to be quoted at. The second one was wrong first: Fmax came
+    out 626 / 557 / 716 MHz for the same corner asked at 2.0 / 1.8 / 2.2 ns,
+    because N and the zero crossing were both read against the base period.
+    """
+    pytest.importorskip("torch")
+    import csv as _csv
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import (_predict_request, expand, load_project, select,
+                              stage_predict_at, stage_train)
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def project():
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        return p
+
+    m = select(expand(project()), design="boomcore", temp="m25")[0]
+    build(m["cfg"])
+    stage_train(m)
+    assert np.nanmedian(np.load(m["cfg"]["data"]["cache"])["cycle_gap"]) == 2.0
+
+    def run(period, tag):
+        p = project()
+        models = select(expand(p), design="boomcore", temp="m25")
+        req = _predict_request(p, models, "0.57:cmax", None, None)
+        fps, fails = stage_predict_at(models, p, req, tag, None, period)
+        assert not fails and len(fps) == 1
+        rows = list(_csv.reader(open(fps[0], encoding="utf-8")))
+        b = rows.index([])
+        slack = [float(r[3]) for r in rows[1:b]]
+        summ = {r[2]: r[3] for r in rows[b + 1:]}
+        return slack, float(summ["max clock frequency (MHz)"])
+
+    base, f0 = run(None, "base")
+    for period in (1.8, 2.2, 1.5):
+        shifted, f = run(period, "T%g" % period)
+        # single-cycle paths: the shift is exactly the period change
+        np.testing.assert_allclose(
+            np.asarray(shifted), np.asarray(base) + (period - 2.0) * 1000.0,
+            rtol=0, atol=0.06)                       # the file writes 1 decimal
+        assert abs(f - f0) < 0.05, "a frequency limit cannot depend on the period asked for"
+    assert abs(f0 - 1000.0 / (2.0 - base[0] / 1000.0)) < 0.5 or base[0] != min(base)
+
+    # A MULTICYCLE path moves by N times the period change. Without it every
+    # gap is one period and gap*(T'/T - 1) is indistinguishable from (T'-T),
+    # so dropping the cycle count passes unnoticed -- it did.
+    cache = m["cfg"]["data"]["cache"]
+    d = dict(np.load(cache))
+    d["cycle_gap"] = np.array(d["cycle_gap"])
+    d["cycle_gap"][0, :] = 4.0                       # this path captures 2 cycles later
+    np.savez_compressed(cache, **d)
+    two, _ = run(1.8, "multicycle")
+    assert abs((two[0] - base[0]) - 2 * (1.8 - 2.0) * 1000.0) < 0.06, \
+        "a 2-cycle path must move by twice the period change"
+    assert abs((two[1] - base[1]) - (1.8 - 2.0) * 1000.0) < 0.06

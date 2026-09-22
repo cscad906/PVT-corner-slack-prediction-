@@ -78,6 +78,9 @@ docs/START.md top to bottom.
                              overwritten by a hold run
     --corners hidden|seen|all   corners for predict/merge (default hidden)
     --at 0.57:cmax,0.62:rcmax   predict at these corners, measured or not
+    --period 3.8                predict at another clock period (ns). Exact:
+                                slack(T') = slack(T) + N*(T'-T), since no delay
+                                depends on the period. Hold is unaffected
     --weights <model.pt>        predict with ANOTHER circuit's model, e.g.
                                 runs/setup/PERIC0_Timing_Report/model.pt. This
                                 circuit's base is still fitted on its own
@@ -2007,7 +2010,8 @@ def _predict_files(p: dict, name: str, temps: list) -> dict:
     return {t: path(t, k) for t in temps}
 
 
-def _default_predict_name(design, temp, at, sweep, level, req, weights=None) -> str:
+def _default_predict_name(design, temp, at, sweep, level, req, weights=None,
+                          period=None) -> str:
     # the temperature is not part of it: each per-temperature file puts its
     # own temperature in front of this
     parts = [design] if design else []
@@ -2020,6 +2024,8 @@ def _default_predict_name(design, temp, at, sweep, level, req, weights=None) -> 
         parts.append("at_" + "_".join("%g%s" % (v, l) for v, l in req))
     else:
         parts.append("at_%dcorners" % len(req))
+    if period is not None:
+        parts.append("T%gns" % period)
     if weights:
         # whose model made these numbers, in the file name: a prediction for
         # circuit B from circuit A's model is a different thing from B's own
@@ -2084,6 +2090,14 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
         vals[:, ex_col] = tr.predict_corners(np.asarray(ex_ci))
     if q_m:
         vals[:, q_col] = tr.predict_coords(np.asarray(q_m), np.asarray(q_b))
+    # capture edge - launch edge, per path (ns). One period for a single-cycle
+    # setup check, N for a multicycle one, 0 for hold. Changing the clock
+    # period scales it, and that is the WHOLE effect on slack: no delay in the
+    # path knows what the period is, so slack(T') = slack(T) + gap*(T'/T - 1).
+    gap = tr.ds.get("cycle_gap")
+    gap = (None if gap is None
+           else np.asarray(np.nanmedian(np.asarray(gap, float), axis=1)))
+
     keys = [str(x) for x in tr.ds["path_keys"]]
     # The report's own path number -- `### FIXED_PATH idx=<n>` -- which is how
     # a path is looked up by hand. The cache already holds paths in ascending
@@ -2091,11 +2105,85 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     pidx = tr.ds.get("path_idx")
     pidx = (np.arange(len(keys)) if pidx is None
             else np.asarray(pidx, np.int64))
-    return keys, pidx, vals, kinds, (vmin, vmax)
+    return keys, pidx, vals, kinds, (vmin, vmax), gap
+
+
+def _apply_period(m: dict, gap, vals, period: "float | None"):
+    """Shift every prediction to another clock period, in place.
+
+    T enters the slack equation once, as the capture edge's time, and no delay
+    in the path depends on it -- cells do not know the clock. So for a path
+    whose capture edge is N periods after its launch edge,
+
+        slack(T') = slack(T) + N * (T' - T)
+
+    exactly, not approximately. It costs a subtraction, not a prediction. A
+    hold check has both edges on the SAME edge, so N = 0 and nothing moves --
+    which is the right answer (hold is not frequency dependent) and needs no
+    special case.
+
+    Returns (gap, base period, effective period). The base period is read off
+    the data as the most common gap, so multicycle paths scale by their own N;
+    the effective one is the period the returned slacks belong to. Both are
+    needed: N comes from the gap measured at the BASE period, while a frequency
+    limit has to be read against the period the numbers are quoted at.
+    """
+    import numpy as np
+
+    if gap is None or not np.isfinite(gap).any():
+        assert period is None, (
+            "--period needs the clock edge times, which this cache was built "
+            "before the parser read. Re-run build for this model.")
+        return gap, None, None
+    pos = gap[np.isfinite(gap) & (gap > 1e-12)]
+    if not len(pos):                      # hold: every gap is zero
+        if period is not None:
+            print(f"  --period has no effect here: every path's launch and "
+                  f"capture edge are the same edge (a hold check is not "
+                  f"frequency dependent)", flush=True)
+        return gap, None, None
+    vals_, counts = np.unique(np.round(pos, 6), return_counts=True)
+    base_T = float(vals_[int(np.argmax(counts))])
+    if period is not None:
+        shift = np.where(np.isfinite(gap), gap, 0.0) * (period / base_T - 1.0)
+        vals += shift[:, None] * 1000.0                      # ns -> ps
+        print(f"  clock period {base_T:.4f} -> {period:.4f} ns "
+              f"({1000.0 / base_T:.1f} -> {1000.0 / period:.1f} MHz)", flush=True)
+    return gap, base_T, (period if period is not None else base_T)
+
+
+def _fmax_mhz(col, gap, base_T, eff_T):
+    """Highest clock frequency at which no path at this corner violates.
+
+    A path with N cycles reaches zero slack at T = eff_T - slack/N, where the
+    slack is the one quoted at eff_T, and the corner is limited by the largest
+    of those. The two periods are not interchangeable: N is gap/base_T, fixed
+    when the reports were written, while the zero crossing is measured from the
+    period the numbers are quoted at. Using base_T for both made the answer
+    depend on which period was asked for -- 626 / 557 / 716 MHz for the same
+    corner at 2.0 / 1.8 / 2.2 ns -- when a frequency limit cannot.
+
+    Paths with N = 0 (hold) cannot be limited by frequency and are left out.
+    """
+    import numpy as np
+
+    if base_T is None or gap is None:
+        return float("nan"), None
+    n = gap / base_T
+    ok = np.isfinite(col) & np.isfinite(n) & (n > 1e-9)
+    if not ok.any():
+        return float("nan"), None
+    t_zero = eff_T - (col[ok] / 1000.0) / n[ok]              # ps -> ns
+    i = int(np.argmax(t_zero))
+    t_min = float(t_zero[i])
+    if t_min <= 0:
+        return float("inf"), int(np.where(ok)[0][i])
+    return 1000.0 / t_min, int(np.where(ok)[0][i])
 
 
 def stage_predict_at(models: list, p: dict, req: list, name: str,
-                     weights: "str | None" = None) -> "tuple[str, list]":
+                     weights: "str | None" = None,
+                     period: "float | None" = None) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE FILE PER
     TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.csv.
 
@@ -2132,23 +2220,29 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             print("  skipped: --at/--sweep supports slack models only", flush=True)
             continue
         try:
-            keys, pidx, vals, kinds, (vmin, vmax) = _predict_one_model(m, req, weights)
+            keys, pidx, vals, kinds, (vmin, vmax), gap = _predict_one_model(
+                m, req, weights)
+            gap, base_T, eff_T = _apply_period(m, gap, vals, period)
         except Exception as e:
             failed.append((f"predict:{m['name']}", repr(e)))
             traceback.print_exc()
             print(f"!!!!! FAILED predict: {m['name']} -- continuing", flush=True)
             continue
         N = len(keys)
-        print("  %-13s  %15s  %17s  %22s" % (
-            "corner", "smallest slack", "sum of negatives", "paths with slack < 0"))
+        show_f = base_T is not None
+        print("  %-13s  %15s  %17s  %22s%s" % (
+            "corner", "smallest slack", "sum of negatives", "paths with slack < 0",
+            "   max clock" if show_f else ""))
         for k, c in enumerate(cols):
             col = vals[:, k]
             if kinds[k] == "n/a" or not np.isfinite(col).any():
                 continue                       # this model has no such corner
-            print("  %-13s  %12.1f ps  %14.1f ps  %13d / %d" % (
+            fm = _fmax_mhz(col, gap, base_T, eff_T)[0] if show_f else float("nan")
+            print("  %-13s  %12.1f ps  %14.1f ps  %13d / %-6d%s" % (
                 c, float(np.nanmin(col)), float(col[col < 0].sum()),
-                int((col < 0).sum()), N), flush=True)
-        results.append((m, keys, pidx, vals, kinds))
+                int((col < 0).sum()), N,
+                ("  %8.1f MHz" % fm) if np.isfinite(fm) else ""), flush=True)
+        results.append((m, keys, pidx, vals, kinds, gap, base_T, eff_T))
     if not results:
         return [], failed
 
@@ -2179,7 +2273,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             # its rows carry their own meaning and unit, and one is a count.
             w.writerow(["design", "path_idx", "path_key"]
                        + ["%s slack (ps)" % cols[k] for k in keep])
-            for m, keys, pidx, vals, _ in grp:
+            for m, keys, pidx, vals, _, _, _, _ in grp:
                 for i in np.argsort(pidx, kind="stable"):
                     w.writerow([m["design"], int(pidx[i]), keys[i]]
                                + [f1(vals[i, k]) for k in keep])
@@ -2188,7 +2282,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             # in path_idx it stretched that narrow column to the label's width
             # in every `column -t` view of the file
             w.writerow(["design", "", "summary"] + [cols[k] for k in keep])
-            for m, keys, _, vals, kinds in grp:
+            for m, keys, _, vals, kinds, gap, base_T, eff_T in grp:
                 fin = {k: kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
                        for k in keep}
                 worst = [float(np.nanmin(vals[:, k])) if fin[k] else np.nan for k in keep]
@@ -2201,6 +2295,11 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                 w.writerow([d, "", "sum of negative slacks (ps)"] + [f1(x) for x in neg])
                 w.writerow([d, "", "paths with negative slack (out of %d)" % len(keys)]
                            + nbad)
+                fm = [_fmax_mhz(vals[:, k], gap, base_T, eff_T)[0] if fin[k] else np.nan
+                      for k in keep]
+                if any(np.isfinite(x) for x in fm):
+                    w.writerow([d, "", "max clock frequency (MHz)"]
+                               + ["%.1f" % x if np.isfinite(x) else "" for x in fm])
         written.append(fp)
         print(f"[PREDICT] wrote {fp}  ({sum(len(g[1]) for g in grp)} paths x "
               f"{len(keep)} corners)", flush=True)
@@ -2358,6 +2457,11 @@ def main(argv=None):
                          "(measured voltages inside the range are added)")
     ap.add_argument("--level", default=None,
                     help="predict --sweep: this level only (default: every level)")
+    ap.add_argument("--period", type=float, default=None,
+                    help="predict: report slack at this clock period (ns) "
+                         "instead of the one in the reports. Exact, not a "
+                         "refit -- no delay depends on the period. A hold run "
+                         "is unaffected")
     ap.add_argument("--weights", default=None,
                     help="predict: use another circuit's trained model "
                          "(runs/<mode>/<circuit>/model.pt). This circuit's own "
@@ -2372,6 +2476,11 @@ def main(argv=None):
         ap.error("use --at or --sweep, not both")
     if args.weights and args.stage not in ("predict", "all"):
         ap.error("--weights only applies to the predict stage")
+    if args.period is not None:
+        if args.stage != "predict":
+            ap.error("--period only applies to the predict stage")
+        if args.period <= 0:
+            ap.error("--period is a clock period in ns, so it must be > 0")
     os.environ["SI_STAGE"] = args.stage
 
     os.chdir(REPO_ROOT)
@@ -2427,8 +2536,9 @@ def main(argv=None):
                 req = _predict_request(p, models, args.at, args.sweep, args.level)
                 name = args.name or _default_predict_name(
                     args.design, args.temp, args.at, args.sweep, args.level, req,
-                    args.weights)
-                _, fails = stage_predict_at(models, p, req, name, args.weights)
+                    args.weights, args.period)
+                _, fails = stage_predict_at(models, p, req, name, args.weights,
+                                            args.period)
                 failed += fails
             except Exception as e:
                 failed.append(("predict", repr(e)))

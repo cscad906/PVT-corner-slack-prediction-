@@ -70,7 +70,15 @@ CHECK_RE = re.compile(
     r"^\s+library \S+ time\b" + _GAP + r"(-?\d+\.\d+)" + _GAP + r"(-?\d+\.\d+)")
 STARTPOINT_RE = re.compile(r"^\s+Startpoint:\s+(\S+)")
 ENDPOINT_RE = re.compile(r"^\s+Endpoint:\s+(\S+)")
-CLOCK_EDGE_RE = re.compile(r"^\s+clock \S+ \(rise edge\)")
+# 'clock clk (rise edge)   4.0000   4.0000' -- Incr and Path. The LAST number
+# is the edge's absolute time. Both occurrences matter: the first is the launch
+# edge, the second the capture edge, and their gap is what a clock period
+# change scales. For a single-cycle setup path the gap IS the period; for a
+# multicycle one it is N periods; for a hold check both are the same edge and
+# the gap is zero, which is exactly why hold does not move with frequency.
+CLOCK_EDGE_RE = re.compile(
+    r"^\s+clock \S+ \((?:rise|fall) edge\)" + _GAP + r"(-?\d+\.\d+)"
+    r"(?:" + _GAP + r"(-?\d+\.\d+))?")
 # cell pin row:  <inst/pin> (<libcell>) [<-] [trans] [incr] [&] path r|f
 #
 # The report is column-aligned (Fanout Cap Trans Incr Path) and blank columns
@@ -283,6 +291,8 @@ class AnnotatedPath:
     launch_clk: float = float("nan")   # clock arrival at <startpoint>/CK
     capture_clk: float = float("nan")  # clock arrival at <endpoint>/CK
     lib_check_time: float = float("nan")  # library setup/hold time (Incr column)
+    launch_edge: float = float("nan")     # 'clock ... (rise edge)' time, 1st
+    capture_edge: float = float("nan")    #                              2nd
     stages: "list[Stage]" = field(default_factory=list)
 
 
@@ -361,9 +371,17 @@ def parse_annotated(fp: str, with_stages: bool = False) -> "dict[int, AnnotatedP
                 path.endpoint = m.group(1)
                 continue
 
-            if CLOCK_EDGE_RE.match(line):
+            m = CLOCK_EDGE_RE.match(line)
+            if m:
                 clock_edges_seen += 1
                 segment = "launch_clock" if clock_edges_seen == 1 else "capture_clock"
+                # Path column when both are there, Incr when the row carries
+                # only one number.
+                t = _val(m.group(2) if m.group(2) is not None else m.group(1))
+                if clock_edges_seen == 1:
+                    path.launch_edge = t
+                elif path.capture_edge != path.capture_edge:
+                    path.capture_edge = t
                 continue
 
             m = ARRIVAL_RE.match(line)

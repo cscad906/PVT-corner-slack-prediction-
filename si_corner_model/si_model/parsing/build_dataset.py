@@ -593,6 +593,12 @@ def build(cfg: dict) -> str:
             arrival = np.full((N, C), np.nan, np.float64)
             required = np.full((N, C), np.nan, np.float64)
             launch_clk = np.full((N, C), np.nan, np.float64)
+            # capture edge - launch edge, per path. One period for a
+            # single-cycle setup check, N for a multicycle one, ZERO for a hold
+            # check (both edges are the same edge). Scaling it is what changing
+            # the clock period does to slack, and hold coming out unchanged
+            # falls out of the zero rather than being special-cased.
+            cycle_gap = np.full((N, C), np.nan, np.float64)
             capture_clk = np.full((N, C), np.nan, np.float64)
             lib_check_time = np.full((N, C), np.nan, np.float64)
             si_label = np.full((N, C), np.nan, np.float64)
@@ -634,6 +640,7 @@ def build(cfg: dict) -> str:
             arrival[r, ci] = pa.arrival
             required[r, ci] = pa.required
             launch_clk[r, ci] = pa.launch_clk
+            cycle_gap[r, ci] = pa.capture_edge - pa.launch_edge
             capture_clk[r, ci] = pa.capture_clk
             lib_check_time[r, ci] = pa.lib_check_time
             si_label[r, ci] = px.si_total() if px is not None else 0.0
@@ -766,6 +773,7 @@ def build(cfg: dict) -> str:
         old2new[keep] = np.arange(len(keep))
         slack, arrival, required = slack[keep], arrival[keep], required[keep]
         launch_clk, capture_clk = launch_clk[keep], capture_clk[keep]
+        cycle_gap = cycle_gap[keep]
         lib_check_time, si_label = lib_check_time[keep], si_label[keep]
         path_sig = path_sig[keep]
         idx_order = [idx_order[r] for r in keep]
@@ -818,8 +826,8 @@ def build(cfg: dict) -> str:
 
         slack, arrival, required, si_label = (
             _pad(x, 1) for x in (slack, arrival, required, si_label))
-        launch_clk, capture_clk, lib_check_time = (
-            _pad(x, 1) for x in (launch_clk, capture_clk, lib_check_time))
+        launch_clk, capture_clk, lib_check_time, cycle_gap = (
+            _pad(x, 1) for x in (launch_clk, capture_clk, lib_check_time, cycle_gap))
         arc_delta, vwin = _pad(arc_delta, 1), _pad(vwin, 1)
         abump, aslew, awin = _pad(abump, 2), _pad(aslew, 2), _pad(awin, 2)
         corners = list(corners) + qlabs
@@ -844,6 +852,7 @@ def build(cfg: dict) -> str:
         path_idx=np.asarray(idx_order, np.int32),
         slack=slack, arrival=arrival, required=required, si_label=si_label,
         launch_clk=launch_clk, capture_clk=capture_clk, lib_check_time=lib_check_time,
+        cycle_gap=cycle_gap,
         path_sig=path_sig, sig_names=np.asarray(SIG_NAMES),
         stage_path=stage_path, stage_seg=stage_seg, n_aggr=n_aggr,
         vwin=vwin, arc_delta=arc_delta,
