@@ -96,7 +96,7 @@ library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rai
 다른 rail 전압은 family 구분값으로 유지하므로, 보조 전압이 다른 library를 같은
 scaling group에 섞지 않습니다.
 
-네 power rail의 역할은 `auto_scaling::run` 옵션에 명시합니다. 레벨시프터 입력 전 rail과
+네 power rail의 역할은 Tcl의 `USER SETTINGS`에 명시합니다. 레벨시프터 입력 전 rail과
 memory rail은 fixed, 나머지 두 rail은 scaling 대상으로 둡니다. 스크립트는
 fixed-path cell의 `type=primary_power` PG pin과 실제 `supply_connection`을 확인한 뒤,
 scaling rail에 연결된 PG pin만 `set_voltage -cell ... -pg_pin_name ...`으로 변경합니다.

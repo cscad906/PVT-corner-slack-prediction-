@@ -1,10 +1,54 @@
 # PrimeTime restore_session 직후 실행하는 독립형 scaling 스크립트
 #
-# 사용 순서:
+# ========================= 전체 사용 순서 =========================
+# 아래 <...> 부분만 회사 설계와 목표 corner 값으로 바꾸십시오.
+#
+# 1. PrimeTime을 열고, design/library/SDC/parasitic이 들어 있는 session을 복원합니다.
+#
 #   pt_shell
-#   restore_session /path/to/saved_session
+#   restore_session <restore_session_절대경로>
+#
+# 2. 이 Tcl을 source합니다. source만으로는 timing 상태가 바뀌지 않습니다.
+#
 #   source /home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_prediction/pt_si_re/pt/run_scaling_after_restore.tcl
-#   auto_scaling::run -target-process SSPG -target-voltage 0.75 ...
+#
+# 3. 복원된 설계의 실제 supply net 이름 네 개를 설정합니다.
+#    FIXED_POWER_NET_BEFORE_LS : level shifter 입력 전의 고정 전압 rail
+#    SCALING_POWER_NET_1/2     : target voltage로 scaling할 두 rail
+#    FIXED_MEMORY_POWER_NET    : SRAM/macro에 사용하는 고정 전압 rail
+#
+#   set auto_scaling::FIXED_POWER_NET_BEFORE_LS {<고정_rail_이름>}
+#   set auto_scaling::SCALING_POWER_NET_1       {<scaling_rail_1_이름>}
+#   set auto_scaling::SCALING_POWER_NET_2       {<scaling_rail_2_이름>}
+#   set auto_scaling::FIXED_MEMORY_POWER_NET    {<memory_rail_이름>}
+#
+# 4. 목표 corner와 입출력 경로를 넣어 실행합니다. 다음은 setup/V축 예시입니다.
+#
+#   auto_scaling::run \
+#       -target-process <예: SSPG> \
+#       -target-voltage <목표 전압 V, 예: 0.54> \
+#       -target-temperature <목표 온도 C, 예: 25 또는 -25> \
+#       -target-beol <현재 restore parasitic BEOL, 예: rcmax> \
+#       -fixed-path <setup fixed_paths.tcl 절대경로> \
+#       -result-folder <결과를 저장할 폴더 절대경로> \
+#       -axis V \
+#       -analysis setup
+#
+#    Hold는 hold용 fixed_paths.tcl을 넣고 마지막 옵션을 -analysis hold로 바꿉니다.
+#    -axis V  : 같은 process/temperature의 양쪽 voltage DB로 내삽
+#    -axis T  : 같은 process/voltage의 양쪽 temperature DB로 내삽
+#    -axis VT : target을 둘러싸는 2 voltage x 2 temperature DB로 내삽
+#
+# 5. 주요 결과 파일은 다음과 같습니다. 같은 이름의 기존 결과는 덮어쓰지 않습니다.
+#    restored_scaled_...rpt         : fixed-path timing report
+#    restored_scaled_...rpt.clocks  : restore session의 clock/scenario snapshot
+#    restored_scaled_...rpt.inputs.txt : 실제 scaling 입력 DB/PVT
+#    restored_scaled_...rpt.dcalc   : scaling library 적용 증거
+#    restored_scaled_...rpt.missing : 측정하지 못한 fixed path
+#
+# 주의: 이 Tcl은 clock/SDC/parasitic을 새로 읽거나 바꾸지 않습니다. restore session의
+# clock을 그대로 사용하고, 현재 parasitic의 BEOL/온도가 target과 다르면 중단합니다.
+# ======================= 전체 사용 순서 끝 =======================
 #
 # 현재 restore session에 이미 로드된 design/library/SDC/SPEF만 사용합니다.
 # 이 파일은 read_db/read_verilog/link_design/read_sdc/read_parasitics를 실행하지 않습니다.
@@ -14,8 +58,8 @@
 # 설계마다 고정되는 supply net과 진행 출력 간격은 아래에서 한 번만 설정합니다.
 namespace eval auto_scaling {
     # ======================= USER SETTINGS ========================
-    # 회사 설계의 실제 supply net 이름으로 바꾸십시오. 이 네 값은 source 전에
-    # 파일에서 한 번 설정하고, auto_scaling::run 명령에는 반복해서 적지 않습니다.
+    # 위 사용 순서처럼 source 후 namespace 변수를 set하거나, 아래 네 빈 문자열을
+    # 회사 설계의 실제 supply net 이름으로 직접 바꿔도 됩니다.
     variable FIXED_POWER_NET_BEFORE_LS "" ;# level shifter 입력 전 고정 rail
     variable SCALING_POWER_NET_1       "" ;# target voltage 적용 rail 1
     variable SCALING_POWER_NET_2       "" ;# target voltage 적용 rail 2
