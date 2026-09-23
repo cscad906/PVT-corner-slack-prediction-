@@ -9,9 +9,23 @@
 # 현재 restore session에 이미 로드된 design/library/SDC/SPEF만 사용합니다.
 # 이 파일은 read_db/read_verilog/link_design/read_sdc/read_parasitics를 실행하지 않습니다.
 # 현재 활성 parasitic의 BEOL/온도가 목표와 일치할 때만 scaling을 실행합니다.
-# source만 하면 명령을 정의할 뿐 design 상태를 변경하지 않습니다. 모든 실행
-# 설정은 source 이후 auto_scaling::run의 옵션으로 전달합니다.
+# source만 하면 명령을 정의할 뿐 design 상태를 변경하지 않습니다. 실험마다
+# 달라지는 target/fixed path/result folder는 auto_scaling::run으로 전달하고,
+# 설계마다 고정되는 supply net과 진행 출력 간격은 아래에서 한 번만 설정합니다.
 namespace eval auto_scaling {
+    # ======================= USER SETTINGS ========================
+    # 회사 설계의 실제 supply net 이름으로 바꾸십시오. 이 네 값은 source 전에
+    # 파일에서 한 번 설정하고, auto_scaling::run 명령에는 반복해서 적지 않습니다.
+    variable FIXED_POWER_NET_BEFORE_LS "" ;# level shifter 입력 전 고정 rail
+    variable SCALING_POWER_NET_1       "" ;# target voltage 적용 rail 1
+    variable SCALING_POWER_NET_2       "" ;# target voltage 적용 rail 2
+    variable FIXED_MEMORY_POWER_NET    "" ;# SRAM/macro 고정 rail
+
+    # 긴 작업 중 현재 단계/단계 경과 시간/총 경과 시간을 몇 분마다 출력할지
+    # 정합니다. 계산 방법이나 scaling 결과에는 영향을 주지 않습니다.
+    variable PROGRESS_INTERVAL_MINUTES 10
+    # ===================== END USER SETTINGS ======================
+
     variable progress_file ""
     variable progress_monitor_pids {}
     variable progress_total_epoch 0
@@ -88,7 +102,7 @@ proc auto_scaling::start_progress_monitor {interval_minutes} {
     variable progress_phase_epoch
 
     if {![string is integer -strict $interval_minutes] || $interval_minutes <= 0} {
-        error "-progress-minutes는 1 이상의 정수여야 합니다."
+        error "PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
     }
     set progress_total_epoch [clock seconds]
     set progress_total_ms [clock milliseconds]
@@ -1214,7 +1228,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
         error "FIXED_PATHS scaling cell의 primary power rail 중 네 설정에 없는 rail이 있습니다: $unknown_rails"
     }
     if {![dict size $target_cell_names]} {
-        error "FIXED_PATHS에서 -scaling-power-1/2에 연결된 scalable cell을 찾지 못했습니다."
+        error "FIXED_PATHS에서 SCALING_POWER_NET_1/2에 연결된 scalable cell을 찾지 못했습니다."
     }
 
     set target_cells [get_cells -quiet -exact [dict keys $target_cell_names]]
@@ -1450,11 +1464,17 @@ proc auto_scaling::run_after_restore_monitored {cfg} {
 
 
 proc auto_scaling::usage {} {
-    return "auto_scaling::run \\\n  -target-process <process> \\\n  -target-voltage <volt> \\\n  -target-temperature <celsius> \\\n  -target-beol <rcmax|cmax|rcmin|actual_name> \\\n  -fixed-path </absolute/path/fixed_paths.tcl> \\\n  -result-folder </absolute/path/output> \\\n  -fixed-power-before-ls <supply_name> \\\n  -scaling-power-1 <supply_name> \\\n  -scaling-power-2 <supply_name> \\\n  -fixed-memory-power <supply_name> \\\n  ?-axis V|T|VT? ?-analysis setup|hold? ?-progress-minutes 10?"
+    return "auto_scaling::run \\\n  -target-process <process> \\\n  -target-voltage <volt> \\\n  -target-temperature <celsius> \\\n  -target-beol <rcmax|cmax|rcmin|actual_name> \\\n  -fixed-path </absolute/path/fixed_paths.tcl> \\\n  -result-folder </absolute/path/output> \\\n  ?-axis V|T|VT? ?-analysis setup|hold?\n\nPower rail과 progress 간격은 이 TCL 맨 위의 USER SETTINGS에서 설정합니다."
 }
 
 proc auto_scaling::build_restore_config {args} {
-    set values [dict create axis V analysis setup progress_minutes 10]
+    variable FIXED_POWER_NET_BEFORE_LS
+    variable SCALING_POWER_NET_1
+    variable SCALING_POWER_NET_2
+    variable FIXED_MEMORY_POWER_NET
+    variable PROGRESS_INTERVAL_MINUTES
+
+    set values [dict create axis V analysis setup]
     set option_map [dict create \
         -target-process target_process \
         -target-voltage target_voltage \
@@ -1463,12 +1483,7 @@ proc auto_scaling::build_restore_config {args} {
         -axis axis \
         -analysis analysis \
         -fixed-path fixed_path \
-        -result-folder result_folder \
-        -progress-minutes progress_minutes \
-        -fixed-power-before-ls fixed_power_before_ls \
-        -scaling-power-1 scaling_power_1 \
-        -scaling-power-2 scaling_power_2 \
-        -fixed-memory-power fixed_memory_power]
+        -result-folder result_folder]
 
     if {[llength $args] % 2} {
         error "옵션은 이름과 값을 한 쌍으로 입력해야 합니다.\n[usage]"
@@ -1481,8 +1496,7 @@ proc auto_scaling::build_restore_config {args} {
     }
     foreach required {
         target_process target_voltage target_temperature target_beol fixed_path
-        result_folder fixed_power_before_ls scaling_power_1 scaling_power_2
-        fixed_memory_power
+        result_folder
     } {
         if {![dict exists $values $required] || [string trim [dict get $values $required]] eq ""} {
             error "필수 옵션 '$required'이 없습니다.\n[usage]"
@@ -1502,9 +1516,9 @@ proc auto_scaling::build_restore_config {args} {
     if {[lsearch -exact {V T VT} $axis] < 0} {
         error "-axis는 V, T 또는 VT여야 합니다."
     }
-    set progress_minutes [dict get $values progress_minutes]
+    set progress_minutes $PROGRESS_INTERVAL_MINUTES
     if {![string is integer -strict $progress_minutes] || $progress_minutes <= 0} {
-        error "-progress-minutes는 1 이상의 정수여야 합니다."
+        error "TCL 맨 위 USER SETTINGS의 PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
     }
     set vtag [string map {. p - m} [format %.12g $voltage]]
     set ttag [string map {. p - m} [format %.12g $temperature]]
@@ -1515,10 +1529,17 @@ proc auto_scaling::build_restore_config {args} {
     set process [dict get $values target_process]
     set filename "scaled_[string toupper $process]_${vtag}V_${ttag}C_${beol}_${axis}_${analysis}.rpt"
 
-    set fixed_power_nets [list [dict get $values fixed_power_before_ls] \
-        [dict get $values fixed_memory_power]]
-    set scaling_power_nets [list [dict get $values scaling_power_1] \
-        [dict get $values scaling_power_2]]
+    foreach {setting_name setting_value} [list \
+        FIXED_POWER_NET_BEFORE_LS $FIXED_POWER_NET_BEFORE_LS \
+        SCALING_POWER_NET_1 $SCALING_POWER_NET_1 \
+        SCALING_POWER_NET_2 $SCALING_POWER_NET_2 \
+        FIXED_MEMORY_POWER_NET $FIXED_MEMORY_POWER_NET] {
+        if {[string trim $setting_value] eq ""} {
+            error "TCL 맨 위 USER SETTINGS의 $setting_name 값을 설정해야 합니다."
+        }
+    }
+    set fixed_power_nets [list $FIXED_POWER_NET_BEFORE_LS $FIXED_MEMORY_POWER_NET]
+    set scaling_power_nets [list $SCALING_POWER_NET_1 $SCALING_POWER_NET_2]
     set all_power_nets [concat $fixed_power_nets $scaling_power_nets]
     if {[llength [lsort -unique $all_power_nets]] != 4} {
         error "네 power-net 설정은 서로 다른 이름이어야 합니다: $all_power_nets"

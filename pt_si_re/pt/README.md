@@ -105,9 +105,22 @@ scaling rail에 연결된 PG pin만 `set_voltage -cell ... -pg_pin_name ...`으�
 
 ## 4. 실행 옵션
 
-`run_scaling_after_restore.tcl` 내부는 수정하지 않습니다. `source`는 명령만
-로드하며 design이나 timing 상태를 바꾸지 않습니다. target, fixed path, 결과
-폴더와 supply 이름은 이후 `auto_scaling::run` 명령의 옵션으로 전달합니다.
+`run_scaling_after_restore.tcl` 맨 위 `USER SETTINGS`에는 설계마다 고정되는 네
+supply net 이름과 진행 출력 간격만 한 번 입력합니다. `source`는 명령만 로드하며
+design이나 timing 상태를 바꾸지 않습니다. 실험마다 달라지는 target, fixed path,
+결과 폴더는 이후 `auto_scaling::run` 명령의 옵션으로 전달합니다.
+
+```tcl
+variable FIXED_POWER_NET_BEFORE_LS "실제_고정_rail_이름"
+variable SCALING_POWER_NET_1       "실제_scaling_rail_1"
+variable SCALING_POWER_NET_2       "실제_scaling_rail_2"
+variable FIXED_MEMORY_POWER_NET    "실제_memory_rail_이름"
+variable PROGRESS_INTERVAL_MINUTES 10
+```
+
+`PROGRESS_INTERVAL_MINUTES`는 긴 작업 중 현재 단계, 해당 단계 경과 시간과 전체
+경과 시간을 몇 분마다 터미널에 출력할지만 정합니다. scaling 계산과 결과에는
+영향을 주지 않습니다.
 
 ```tcl
 auto_scaling::run \
@@ -118,12 +131,7 @@ auto_scaling::run \
   -axis V \
   -analysis setup \
   -fixed-path /company/work/pt_scaling_eval/input/fixed_paths.tcl \
-  -result-folder /company/work/pt_scaling_eval/scaling_output \
-  -fixed-power-before-ls 실제_고정_rail_이름 \
-  -scaling-power-1 실제_scaling_rail_1 \
-  -scaling-power-2 실제_scaling_rail_2 \
-  -fixed-memory-power 실제_memory_rail_이름 \
-  -progress-minutes 10
+  -result-folder /company/work/pt_scaling_eval/scaling_output
 ```
 
 각 옵션의 의미는 다음과 같습니다.
@@ -138,10 +146,6 @@ auto_scaling::run \
 | `-analysis` | setup은 `setup`, hold는 `hold`. 생략 시 `setup` |
 | `-fixed-path` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `-result-folder` | 결과를 저장할 새 폴더의 절대경로 |
-| `-progress-minutes` | 실행 상태 출력 간격(분). 생략 시 `10` |
-| `-fixed-power-before-ls` | 레벨시프터 입력 전에 사용하는 고정 전압 supply net의 정확한 이름 |
-| `-scaling-power-1`, `-scaling-power-2` | fixed-path cell 중 target voltage를 적용할 두 supply net의 정확한 이름 |
-| `-fixed-memory-power` | memory에 연결되어 기존 전압을 유지할 supply net의 정확한 이름 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
 스크립트가 `-analysis`와 다르면 실행을 중단합니다. 전체 형식은 source 후 다음
@@ -202,11 +206,7 @@ auto_scaling::run \
   -axis V \
   -analysis setup \
   -fixed-path /company/work/pt_scaling_eval/input/fixed_paths.tcl \
-  -result-folder /company/work/pt_scaling_eval/scaling_output \
-  -fixed-power-before-ls 실제_고정_rail_이름 \
-  -scaling-power-1 실제_scaling_rail_1 \
-  -scaling-power-2 실제_scaling_rail_2 \
-  -fixed-memory-power 실제_memory_rail_이름
+  -result-folder /company/work/pt_scaling_eval/scaling_output
 ```
 
 `source` 직후에는 `AUTO SCALING LOADED`만 출력되고 분석은 시작되지 않습니다.
