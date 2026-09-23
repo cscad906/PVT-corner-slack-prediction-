@@ -471,6 +471,17 @@ column -s, -t \
 
 ## 11. 자주 발생하는 오류
 
+현재 restore session의 clock period/waveform과 active scenario는 scaling 결과 옆의
+`<result>.rpt.clocks`에 자동 저장됩니다. 기존 실행에는 이 파일이 없으므로 session이
+아직 열려 있으면 Tcl을 다시 source한 뒤 scaling을 재실행하지 않고 다음처럼
+snapshot만 저장할 수 있습니다.
+
+```tcl
+auto_scaling::save_clock_snapshot /absolute/path/scaling_clock_snapshot.rpt
+```
+
+이 명령은 timing 상태를 변경하지 않습니다.
+
 | 메시지 또는 증상 | 원인 | 조치 |
 |---|---|---|
 | `missing close-brace` | Tcl이 일부만 복사됐거나 구버전 사용 | Git의 최신 파일을 다시 복사하고 전체 파일을 source |

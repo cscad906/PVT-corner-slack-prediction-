@@ -1077,6 +1077,52 @@ proc auto_scaling::write_text {path contents} {
     close $fp
 }
 
+# Save the restored session's clock constraints without changing timing state.
+# This can also be called directly after source, without rerunning scaling:
+#   auto_scaling::save_clock_snapshot /absolute/path/clock_snapshot.rpt
+proc auto_scaling::save_clock_snapshot {path} {
+    if {![llength [info commands ::get_clocks]] ||
+        ![llength [info commands ::report_clocks]]} {
+        error "Clock snapshot requires pt_shell after restore_session."
+    }
+    set path [file normalize $path]
+    file mkdir [file dirname $path]
+    if {[file exists $path]} {
+        error "Clock snapshot already exists: $path"
+    }
+    set fp [open $path w]
+    puts $fp "# Restored-session clock constraint snapshot"
+    if {[llength [info commands ::current_design]]} {
+        if {![catch {set design_name [get_object_name [current_design]]}]} {
+            puts $fp "DESIGN $design_name"
+        }
+    }
+    if {[llength [info commands ::current_scenario]]} {
+        if {![catch {set scenario_name [get_object_name [current_scenario]]}]} {
+            puts $fp "SCENARIO $scenario_name"
+        }
+    }
+    puts $fp "# Compact clock table"
+    foreach_in_collection clock_object [get_clocks -quiet *] {
+        set clock_name [get_object_name $clock_object]
+        set period unavailable
+        set waveform unavailable
+        catch {set period [get_attribute $clock_object period]}
+        catch {set waveform [get_attribute $clock_object waveform]}
+        puts $fp "CLOCK name=$clock_name period=$period waveform=$waveform"
+    }
+    puts $fp ""
+    puts $fp "# PrimeTime report_clocks"
+    close $fp
+    if {[catch {redirect -append $path { report_clocks }} reason]} {
+        set fp [open $path a]
+        puts $fp "REPORT_CLOCKS_ERROR $reason"
+        close $fp
+    }
+    puts "CLOCK CONSTRAINT SNAPSHOT: $path"
+    return $path
+}
+
 proc auto_scaling::scaling_inputs_text {plan} {
     set lines {}
     lappend lines "PrimeTime scaling input plan"
@@ -1326,12 +1372,13 @@ proc auto_scaling::run_after_restore {cfg} {
 
     set original_out [file normalize [dict get $cfg out_rpt]]
     set out [file join [file dirname $original_out] "restored_[file tail $original_out]"]
-    foreach suffix {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc} {
+    foreach suffix {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc .clocks} {
         if {[file exists ${out}${suffix}]} {
             error "Output already exists: ${out}${suffix}. 기존 결과를 보존하기 위해 덮어쓰지 않습니다."
         }
     }
     file mkdir [file dirname $out]
+    save_clock_snapshot ${out}.clocks
     set inputs_text [scaling_inputs_text $plan]
     write_text ${out}.inputs.txt $inputs_text
     puts $inputs_text
