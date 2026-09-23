@@ -390,7 +390,7 @@ python3 /path/to/repository/analysis/compare_scaling_mae.py \
 
 생성 파일은 다음과 같습니다.
 
-- `path_errors.txt`: path별 ground truth, scaling slack, signed error, absolute error와 상태
+- `path_errors.txt`: path별 ground truth, scaling slack, signed error, absolute error와 상태. absolute error 내림차순
 - `summary.txt`: 터미널에서 바로 확인하는 compared/excluded 수, MAE, RMSE, bias, worst error
 - `summary.json`: 후처리 프로그램용 전체 요약
 

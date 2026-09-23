@@ -196,14 +196,23 @@ def format_number(value):
 
 
 def write_path_text(path, rows):
-    """Write one terminal-friendly, fixed-width line for every path."""
+    """Write paths by descending absolute error; unresolved paths come last."""
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            row["abs_error_ps"] is None,
+            -(row["abs_error_ps"] or 0.0),
+            row["path_key"],
+        ),
+    )
     with path.open("w") as output:
         output.write("# Input slack unit: ns; all values below: ps\n")
+        output.write("# Order: abs_error descending; unresolved/missing paths last\n")
         output.write(
             f"{'idx':>7} {'ground_truth':>15} {'pt_scaling':>15} "
             f"{'signed_error':>15} {'abs_error':>15} {'status':<29} path_key\n"
         )
-        for row in rows:
+        for row in ordered_rows:
             output.write(
                 f"{row['idx']:>7} "
                 f"{format_number(row['ground_truth_ps']):>15} "

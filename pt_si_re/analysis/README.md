@@ -33,8 +33,9 @@ python3 analysis/recover_fixed_paths_from_ground_truth.py ground_truth.rpt
 
 `path_errors.txt`는 외부 프로그램 없이 `less -S`로 볼 수 있는 고정폭 텍스트입니다.
 모든 path의 ground-truth slack, scaling slack, signed error, absolute error와 제외
-사유를 저장합니다. 터미널에는 전체 내용을 쏟아내지 않고 absolute error가 큰
-상위 10개 path만 출력합니다.
+사유를 저장합니다. 비교 가능한 path는 absolute error가 큰 순서로 정렬하며,
+unresolved/missing path는 파일 마지막에 둡니다. 터미널에는 전체 내용을
+쏟아내지 않고 absolute error가 큰 상위 10개 path만 출력합니다.
 
 ```bash
 cat results/pt_scaling_comparison/<target-corner>/summary.txt
