@@ -3,29 +3,36 @@
 # 사용 순서:
 #   pt_shell
 #   restore_session /path/to/saved_session
+#   아래 USER SETTINGS를 실제 실행 조건에 맞게 수정
 #   source /home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_prediction/pt_si_re/pt/run_scaling_after_restore.tcl
-#   auto_scaling::run -target-process SSPG -target-voltage 0.75 ...
 #
 # 현재 restore session에 이미 로드된 design/library/SDC/SPEF만 사용합니다.
 # 이 파일은 read_db/read_verilog/link_design/read_sdc/read_parasitics를 실행하지 않습니다.
 # 현재 활성 parasitic의 BEOL/온도가 목표와 일치할 때만 scaling을 실행합니다.
-# source만 하면 명령을 정의할 뿐 design 상태를 변경하지 않습니다. 실험마다
-# 달라지는 target/fixed path/result folder는 auto_scaling::run으로 전달하고,
-# 설계마다 고정되는 supply net과 진행 출력 간격은 아래에서 한 번만 설정합니다.
+# source하면 아래 설정을 검사한 뒤 scaling을 바로 시작합니다.
+
+# ======================= USER SETTINGS ========================
+set TARGET_PROCESS      "SSPG"
+set TARGET_VOLTAGE      0.75
+set TARGET_TEMPERATURE  25
+set TARGET_BEOL         "rcmax"
+set SCALING_AXIS        "V"       ;# V, T, VT
+set ANALYSIS            "setup"   ;# setup 또는 hold
+
+set FIXED_PATH_FILE "fixed_paths.tcl"
+set RESULT_FOLDER   "auto_scaling_output"
+
+# 긴 작업의 진행 상황 출력 간격(분). 계산 결과에는 영향을 주지 않습니다.
+set PROGRESS_INTERVAL_MINUTES 10
+
+# 회사 설계의 실제 supply net 이름으로 바꾸십시오.
+set FIXED_POWER_NET_BEFORE_LS "" ;# level shifter 입력 전 고정 rail
+set SCALING_POWER_NET_1       "" ;# target voltage 적용 rail 1
+set SCALING_POWER_NET_2       "" ;# target voltage 적용 rail 2
+set FIXED_MEMORY_POWER_NET    "" ;# SRAM/macro 고정 rail
+# ===================== END USER SETTINGS ======================
+
 namespace eval auto_scaling {
-    # ======================= USER SETTINGS ========================
-    # 회사 설계의 실제 supply net 이름으로 바꾸십시오. 이 네 값은 source 전에
-    # 파일에서 한 번 설정하고, auto_scaling::run 명령에는 반복해서 적지 않습니다.
-    variable FIXED_POWER_NET_BEFORE_LS "" ;# level shifter 입력 전 고정 rail
-    variable SCALING_POWER_NET_1       "" ;# target voltage 적용 rail 1
-    variable SCALING_POWER_NET_2       "" ;# target voltage 적용 rail 2
-    variable FIXED_MEMORY_POWER_NET    "" ;# SRAM/macro 고정 rail
-
-    # 긴 작업 중 현재 단계/단계 경과 시간/총 경과 시간을 몇 분마다 출력할지
-    # 정합니다. 계산 방법이나 scaling 결과에는 영향을 주지 않습니다.
-    variable PROGRESS_INTERVAL_MINUTES 10
-    # ===================== END USER SETTINGS ======================
-
     variable progress_file ""
     variable progress_monitor_pids {}
     variable progress_total_epoch 0
@@ -702,7 +709,7 @@ proc auto_scaling::plan {cfg} {
         set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
     }
     if {$fixed eq ""} {
-        error "현재 fixed-path-only scaling 모드에서는 -fixed-path가 반드시 필요합니다."
+        error "현재 fixed-path-only scaling 모드에서는 FIXED_PATH_FILE이 반드시 필요합니다."
     }
 
     set cat [catalog $cfg]
@@ -1154,12 +1161,16 @@ proc auto_scaling::fixed_path_cells {fixed} {
 
 proc auto_scaling::resolve_configured_supply_roles {cfg} {
     set available [dict create]
+    set supply_full_names {}
     foreach_in_collection supply [get_supply_nets -quiet -hierarchy *] {
         set full_name [get_attribute $supply full_name]
+        lappend supply_full_names $full_name
         dict lappend available $full_name $full_name
         set object_name [get_object_name $supply]
         if {$object_name ne $full_name} { dict lappend available $object_name $full_name }
     }
+    set supply_full_names [lsort -unique $supply_full_names]
+    puts "RESTORED SUPPLY NETS: count=[llength $supply_full_names] names=$supply_full_names"
     if {![dict size $available]} {
         error "restore session에 supply net이 없습니다. 네 power-net 설정을 검증할 수 없습니다."
     }
@@ -1179,8 +1190,10 @@ proc auto_scaling::resolve_configured_supply_roles {cfg} {
                 error "같은 supply net '$actual'이 fixed/scaling 설정에 중복되었습니다."
             }
             dict set roles $actual $role
+            puts "CONFIGURED POWER NET MATCH: role=$role requested=$requested matched=$actual count=[llength $matches]"
         }
     }
+    puts "CONFIGURED POWER NETS: matched=[dict size $roles] expected=4"
     return $roles
 }
 
@@ -1223,7 +1236,11 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
         error "FIXED_PATHS 안에 active scaling group을 사용하는 cell이 없습니다."
     }
 
-    set roles [resolve_configured_supply_roles $cfg]
+    if {[dict exists $cfg configured_supply_roles]} {
+        set roles [dict get $cfg configured_supply_roles]
+    } else {
+        set roles [resolve_configured_supply_roles $cfg]
+    }
     set pg_pins [get_pg_pins -of_objects $scalable_candidates]
     set primary_pg [filter_collection $pg_pins {type == primary_power}]
     if {$primary_pg eq "" || ![sizeof_collection $primary_pg]} {
@@ -1237,7 +1254,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     set unknown_rails {}
     foreach_in_collection pg $primary_pg {
         # supply_connection 문자열은 hierarchical UPF에서 short name일 수 있으므로
-        # 실제 supply object의 full_name을 기준으로 실행 옵션과 비교합니다.
+        # 실제 supply object의 full_name을 기준으로 USER SETTINGS와 비교합니다.
         set connected_supply [get_supply_nets -quiet -of_objects $pg]
         if {[sizeof_collection $connected_supply] == 1} {
             set supply_name [get_attribute $connected_supply full_name]
@@ -1307,11 +1324,16 @@ proc auto_scaling::run_after_restore {cfg} {
         error "복원된 library가 없습니다. restore_session 결과를 확인하세요."
     }
 
+    # 시간이 오래 걸리는 library 계획 전에 supply net 조회/설정을 먼저 검증합니다.
+    set restored_cfg $cfg
+    set phase_started [phase_start VERIFY_POWER_NETS]
+    dict set restored_cfg configured_supply_roles [resolve_configured_supply_roles $cfg]
+    phase_done VERIFY_POWER_NETS $phase_started
+
     # 복원 세션의 SPEF를 그대로 사용하므로 파일 기반 SPEF 선택은 수행하지 않습니다.
     # 대신 SPEF/GPD 헤더에서 복원된 BEOL과 온도를 읽어 목표와 정확히
     # 일치하는지 확인합니다. V/T/VT는 Liberty scaling 축입니다.
     set phase_started [phase_start VERIFY_PARASITICS]
-    set restored_cfg $cfg
     if {[dict exists $restored_cfg spef_template]} { dict unset restored_cfg spef_template }
     if {[dict exists $restored_cfg spef]} { dict unset restored_cfg spef }
     set parasitics [verify_restored_parasitics $restored_cfg]
@@ -1506,83 +1528,58 @@ proc auto_scaling::run_after_restore_monitored {cfg} {
 
 
 
-proc auto_scaling::usage {} {
-    return "auto_scaling::run \\\n  -target-process <process> \\\n  -target-voltage <volt> \\\n  -target-temperature <celsius> \\\n  -target-beol <rcmax|cmax|rcmin|actual_name> \\\n  -fixed-path </absolute/path/fixed_paths.tcl> \\\n  -result-folder </absolute/path/output> \\\n  ?-axis V|T|VT? ?-analysis setup|hold?\n\nPower rail과 progress 간격은 이 TCL 맨 위의 USER SETTINGS에서 설정합니다."
-}
-
-proc auto_scaling::build_restore_config {args} {
-    variable FIXED_POWER_NET_BEFORE_LS
-    variable SCALING_POWER_NET_1
-    variable SCALING_POWER_NET_2
-    variable FIXED_MEMORY_POWER_NET
-    variable PROGRESS_INTERVAL_MINUTES
-
-    set values [dict create axis V analysis setup]
-    set option_map [dict create \
-        -target-process target_process \
-        -target-voltage target_voltage \
-        -target-temperature target_temperature \
-        -target-beol target_beol \
-        -axis axis \
-        -analysis analysis \
-        -fixed-path fixed_path \
-        -result-folder result_folder]
-
-    if {[llength $args] % 2} {
-        error "옵션은 이름과 값을 한 쌍으로 입력해야 합니다.\n[usage]"
-    }
-    foreach {option_name value} $args {
-        if {![dict exists $option_map $option_name]} {
-            error "알 수 없는 옵션 '$option_name'입니다.\n[usage]"
-        }
-        dict set values [dict get $option_map $option_name] $value
-    }
-    foreach required {
-        target_process target_voltage target_temperature target_beol fixed_path
-        result_folder
+proc auto_scaling::build_restore_config {} {
+    foreach name {
+        TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
+        ANALYSIS FIXED_PATH_FILE RESULT_FOLDER PROGRESS_INTERVAL_MINUTES
+        FIXED_POWER_NET_BEFORE_LS SCALING_POWER_NET_1 SCALING_POWER_NET_2
+        FIXED_MEMORY_POWER_NET
     } {
-        if {![dict exists $values $required] || [string trim [dict get $values $required]] eq ""} {
-            error "필수 옵션 '$required'이 없습니다.\n[usage]"
+        if {![info exists ::$name]} {
+            error "TCL 맨 위 USER SETTINGS에 $name 설정이 없습니다."
         }
     }
 
-    set analysis [string tolower [dict get $values analysis]]
+    set analysis [string tolower $::ANALYSIS]
     switch -- $analysis {
         setup { set delay_type max }
         hold  { set delay_type min }
-        default { error "-analysis는 setup 또는 hold여야 합니다." }
+        default { error "ANALYSIS는 setup 또는 hold여야 합니다." }
     }
 
-    set voltage [number [dict get $values target_voltage]]
-    set temperature [number [dict get $values target_temperature]]
-    set axis [string toupper [dict get $values axis]]
+    set voltage [number $::TARGET_VOLTAGE]
+    set temperature [number $::TARGET_TEMPERATURE]
+    set axis [string toupper $::SCALING_AXIS]
     if {[lsearch -exact {V T VT} $axis] < 0} {
-        error "-axis는 V, T 또는 VT여야 합니다."
+        error "SCALING_AXIS는 V, T 또는 VT여야 합니다."
     }
-    set progress_minutes $PROGRESS_INTERVAL_MINUTES
+    set progress_minutes $::PROGRESS_INTERVAL_MINUTES
     if {![string is integer -strict $progress_minutes] || $progress_minutes <= 0} {
-        error "TCL 맨 위 USER SETTINGS의 PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
+        error "PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
     }
     set vtag [string map {. p - m} [format %.12g $voltage]]
     set ttag [string map {. p - m} [format %.12g $temperature]]
-    set beol [canonical_beol [dict get $values target_beol]]
+    set beol [canonical_beol $::TARGET_BEOL]
     if {$beol eq ""} {
-        error "-target-beol이 비어 있거나 이름으로 사용할 문자가 없습니다."
+        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다."
     }
-    set process [dict get $values target_process]
+    set process $::TARGET_PROCESS
+    if {[string trim $process] eq ""} {
+        error "TARGET_PROCESS가 비어 있습니다."
+    }
     set filename "scaled_[string toupper $process]_${vtag}V_${ttag}C_${beol}_${axis}_${analysis}.rpt"
 
     foreach {setting_name setting_value} [list \
-        FIXED_POWER_NET_BEFORE_LS $FIXED_POWER_NET_BEFORE_LS \
-        SCALING_POWER_NET_1 $SCALING_POWER_NET_1 \
-        SCALING_POWER_NET_2 $SCALING_POWER_NET_2 \
-        FIXED_MEMORY_POWER_NET $FIXED_MEMORY_POWER_NET] {
+        FIXED_POWER_NET_BEFORE_LS $::FIXED_POWER_NET_BEFORE_LS \
+        SCALING_POWER_NET_1 $::SCALING_POWER_NET_1 \
+        SCALING_POWER_NET_2 $::SCALING_POWER_NET_2 \
+        FIXED_MEMORY_POWER_NET $::FIXED_MEMORY_POWER_NET] {
         if {[string trim $setting_value] eq ""} {
             error "TCL 맨 위 USER SETTINGS의 $setting_name 값을 설정해야 합니다."
         }
     }
-    set fixed_power_nets [list $FIXED_POWER_NET_BEFORE_LS $FIXED_MEMORY_POWER_NET]
-    set scaling_power_nets [list $SCALING_POWER_NET_1 $SCALING_POWER_NET_2]
+    set fixed_power_nets [list $::FIXED_POWER_NET_BEFORE_LS $::FIXED_MEMORY_POWER_NET]
+    set scaling_power_nets [list $::SCALING_POWER_NET_1 $::SCALING_POWER_NET_2]
     set all_power_nets [concat $fixed_power_nets $scaling_power_nets]
     if {[llength [lsort -unique $all_power_nets]] != 4} {
         error "네 power-net 설정은 서로 다른 이름이어야 합니다: $all_power_nets"
@@ -1595,19 +1592,14 @@ proc auto_scaling::build_restore_config {args} {
         target_beol $beol \
         mode $axis \
         delay_type $delay_type \
-        fixed_tcl [dict get $values fixed_path] \
+        fixed_tcl $::FIXED_PATH_FILE \
         fixed_power_nets $fixed_power_nets \
         scaling_power_nets $scaling_power_nets \
         progress_minutes $progress_minutes \
-        out_rpt [file join [dict get $values result_folder] $filename]]
+        out_rpt [file join $::RESULT_FOLDER $filename]]
 }
 
-proc auto_scaling::run {args} {
-    if {[llength $args] == 1 && [lindex $args 0] eq "-help"} {
-        puts [usage]
-        return ""
-    }
-    set scaling_config [build_restore_config {*}$args]
+proc auto_scaling::run_config_with_log {scaling_config} {
     set requested_out [file normalize [dict get $scaling_config out_rpt]]
     set actual_out [file join [file dirname $requested_out] \
         "restored_[file tail $requested_out]"]
@@ -1632,5 +1624,7 @@ proc auto_scaling::run {args} {
     return $scaling_result
 }
 
-puts "AUTO SCALING LOADED: source만 완료했으며 timing 상태는 변경하지 않았습니다."
-puts "실행 형식은 'auto_scaling::run -help'로 확인하세요."
+if {![info exists ::auto_scaling_restored_load_only] || !$::auto_scaling_restored_load_only} {
+    set scaling_config [auto_scaling::build_restore_config]
+    set scaling_result [auto_scaling::run_config_with_log $scaling_config]
+}
