@@ -38,9 +38,14 @@ unresolved/missing path는 파일 마지막에 둡니다. 터미널에는 전체
 쏟아내지 않고 absolute error가 큰 상위 10개 path만 출력합니다.
 
 timing report에 `data arrival time`과 `data required time`이 있으면 각 항목의
-scaling-GT 오차도 함께 기록합니다. `arrival diagnostic`이 크면 launch clock과
-data path의 library/scaling/SI 조건을 먼저 확인하고, `required diagnostic`이 크면
-capture clock path, uncertainty, derate와 constraint 조건을 먼저 확인합니다.
+scaling-GT 오차도 함께 기록합니다. setup은 path별로
+`slack error = required error - arrival error`이므로 arrival와 required가 같은
+방향과 비슷한 크기로 이동하면 둘의 개별 MAE가 커도 slack MAE는 작을 수 있습니다.
+예를 들어 arrival MAE 283 ps, required MAE 268 ps, slack MAE 15 ps는 공통 이동이
+slack에서 상쇄된 가능한 조합입니다. 개별 component MAE만으로 실패를 판정하지
+말고 `path_errors.txt`에서 두 signed error의 부호와 차이를 함께 확인합니다.
+둘이 비슷하게 움직이지 않으면서 slack MAE도 크면 launch/data 또는
+capture/constraint 조건 차이를 조사합니다.
 비교 프로그램이 정상 종료된 것만으로 두 PrimeTime session의 분석 조건이 같다고
 판정할 수는 없습니다.
 

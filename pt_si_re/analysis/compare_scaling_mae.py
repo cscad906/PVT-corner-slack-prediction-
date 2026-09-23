@@ -53,9 +53,18 @@ Hold 결과 실행 방법
     MAE   = path별 absolute error 평균
     bias  = signed error 평균. 양수면 scaling slack이 GT보다 크게 나온 것이다.
 
-    arrival diagnostic이 크면 launch clock, data path, SI 조건을 확인한다.
-    required diagnostic이 크면 capture clock, uncertainty, derate, constraint를
-    확인한다. req_source가 direct면 report 값을 직접 읽었고,
+    Setup에서는 path마다 다음 관계가 성립한다.
+
+        slack error = required error - arrival error
+
+    따라서 arrival/required MAE가 각각 커도 두 signed error가 path별로 같은
+    방향과 비슷한 크기로 이동하면 slack에서는 상쇄된다. 예를 들어 arrival
+    MAE=283 ps, required MAE=268 ps, slack MAE=15 ps는 가능한 정상 조합이다.
+    이때 개별 MAE만 보고 scaling 실패로 판정하면 안 되고 path_errors.txt에서
+    arrival_err와 required_err의 부호와 차이를 함께 확인한다.
+
+    arrival과 required가 비슷하게 움직이지 않으면서 slack MAE도 크면 launch/data
+    또는 capture/constraint 조건 차이를 조사한다. req_source가 direct면 report 값을 직접 읽었고,
     derived_setup/derived_hold면 slack과 arrival 관계식으로 계산한 것이다.
 
 required diagnostic이 unavailable일 때
