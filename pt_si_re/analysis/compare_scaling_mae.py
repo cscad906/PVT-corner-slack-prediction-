@@ -44,6 +44,12 @@ Hold 결과 실행 방법
         MAE/RMSE/bias, 비교 및 제외 path 수, arrival/required 진단,
         실제 scaling 입력 P/V/T/DB 정보를 보여 준다.
 
+    별도 grep 없이 터미널과 summary.txt의 CLOCK VALIDATION을 확인한다.
+        PASS    : 두 report의 clock 이름/edge/cycle 및 path 조건이 일치함
+        INVALID : 서로 다른 clock 조건을 비교했으므로 현재 MAE를 scaling 오차로 쓰면 안 됨
+        REVIEW  : generated-clock 후보가 여러 개이거나 clock 정보가 없어 원문 확인 필요
+    worst launch/capture edge에는 차이가 가장 큰 path, 양쪽 clock 이름과 edge가 나온다.
+
     path_errors.txt
         path별 GT slack, scaling slack, signed/absolute error,
         arrival/required error를 absolute error가 큰 순서로 보여 준다.
@@ -115,6 +121,7 @@ PATH_GROUP_RE = re.compile(r"^\s*Path\s+Group\s*:\s*(.*?)\s*$", re.IGNORECASE)
 CLOCK_EDGE_RE = re.compile(
     r"^\s*clock\s+(.+?)\s+\((rise|fall)\s+edge\)\s+(.*)$", re.IGNORECASE)
 NS_TO_PS = 1000.0
+CLOCK_EDGE_TOLERANCE_PS = 0.001
 
 
 class PathResult(object):
@@ -359,6 +366,10 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
             "required_error_source": required_source,
             "launch_edge_error_ps": launch_edge_error,
             "capture_edge_error_ps": capture_edge_error,
+            "scaled_launch_clock": None if pred is None else pred.launch_clock,
+            "ground_truth_launch_clock": None if gt is None else gt.launch_clock,
+            "scaled_capture_clock": None if pred is None else pred.capture_clock,
+            "ground_truth_capture_clock": None if gt is None else gt.capture_clock,
             "path_group_mismatch": path_group_mismatch,
             "path_type_mismatch": path_type_mismatch,
             "launch_clock_mismatch": launch_clock_mismatch,
@@ -390,6 +401,16 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
     capture_edge_errors = [
         row["capture_edge_error_ps"] for row in compared_rows
         if row["capture_edge_error_ps"] is not None]
+    launch_edge_rows = [
+        row for row in compared_rows if row["launch_edge_error_ps"] is not None]
+    capture_edge_rows = [
+        row for row in compared_rows if row["capture_edge_error_ps"] is not None]
+    worst_launch_edge_row = (
+        max(launch_edge_rows, key=lambda row: abs(row["launch_edge_error_ps"]))
+        if launch_edge_rows else None)
+    worst_capture_edge_row = (
+        max(capture_edge_rows, key=lambda row: abs(row["capture_edge_error_ps"]))
+        if capture_edge_rows else None)
     status_counts = {}
     for row in rows:
         status = row["status"]
@@ -437,6 +458,8 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
         "launch_edge_max_ps": max(launch_edge_errors) if launch_edge_errors else None,
         "capture_edge_min_ps": min(capture_edge_errors) if capture_edge_errors else None,
         "capture_edge_max_ps": max(capture_edge_errors) if capture_edge_errors else None,
+        "worst_launch_edge": edge_summary(worst_launch_edge_row, "launch"),
+        "worst_capture_edge": edge_summary(worst_capture_edge_row, "capture"),
     }
     for name, values in (("arrival", arrival_errors), ("required", required_errors)):
         summary[f"{name}_compared_paths"] = len(values)
@@ -444,7 +467,74 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
             sum(abs(value) for value in values) / len(values) if values else None)
         summary[f"{name}_bias_ps"] = (
             sum(values) / len(values) if values else None)
+    status, reasons, action = clock_validation(summary)
+    summary["clock_validation_status"] = status
+    summary["clock_validation_reasons"] = reasons
+    summary["clock_validation_action"] = action
     return rows, summary
+
+
+def edge_summary(row, name):
+    """Return JSON-safe details for the path with the largest clock-edge error."""
+    if row is None:
+        return None
+    scaled = row[f"scaled_{name}_clock"]
+    truth = row[f"ground_truth_{name}_clock"]
+    return {
+        "idx": row["idx"],
+        "path_key": row["path_key"],
+        "error_ps": row[f"{name}_edge_error_ps"],
+        "scaled_clock": None if scaled is None else scaled[0],
+        "scaled_transition": None if scaled is None else scaled[1],
+        "scaled_edge_ps": None if scaled is None else scaled[2] * NS_TO_PS,
+        "ground_truth_clock": None if truth is None else truth[0],
+        "ground_truth_transition": None if truth is None else truth[1],
+        "ground_truth_edge_ps": None if truth is None else truth[2] * NS_TO_PS,
+    }
+
+
+def clock_validation(summary):
+    """Classify whether slack MAE is based on the same clock relationship."""
+    reasons = []
+    identity_mismatches = (
+        summary["path_group_mismatches"] + summary["path_type_mismatches"] +
+        summary["launch_clock_mismatches"] + summary["capture_clock_mismatches"])
+    ambiguous = (
+        summary["launch_clock_ambiguous"] + summary["capture_clock_ambiguous"])
+    edge_differences = []
+    for name in ("launch", "capture"):
+        mae = summary[f"{name}_edge_mae_ps"]
+        if mae is not None and mae > CLOCK_EDGE_TOLERANCE_PS:
+            edge_differences.append(f"{name} edge MAE={mae:.6f} ps")
+
+    if identity_mismatches:
+        reasons.append(
+            "clock/path identity mismatch가 있어 두 report의 분석 조건이 다릅니다.")
+    if edge_differences:
+        reasons.append(
+            ", ".join(edge_differences) + "로 같은 ideal edge/cycle이 아닙니다.")
+    if ambiguous:
+        reasons.append(
+            f"multi-edge block이 {ambiguous}개라 generated-clock 원문 확인이 필요합니다.")
+    if summary["clock_relation_unavailable"]:
+        reasons.append(
+            f"clock 관계를 읽지 못한 path가 {summary['clock_relation_unavailable']}개입니다.")
+
+    if ambiguous or summary["clock_relation_unavailable"]:
+        status = "REVIEW"
+        action = (
+            "worst edge path의 PrimeTime 원문에서 launch/capture clock edge와 "
+            "generated-clock 관계를 대조하세요.")
+    elif identity_mismatches or edge_differences:
+        status = "INVALID"
+        action = (
+            "현재 MAE를 scaling 오차로 사용하지 말고 두 report의 clock 정의, "
+            "선택 cycle, path group/type을 먼저 맞추세요.")
+    else:
+        status = "PASS"
+        reasons.append("비교 가능한 모든 path의 clock 이름, edge, group/type이 같습니다.")
+        action = "clock 조건이 일치하므로 slack/arrival/required scaling 오차를 분석하세요."
+    return status, reasons, action
 
 
 def format_number(value):
@@ -508,13 +598,24 @@ def write_summary_text(path, summary):
         f"worst path key      : {summary['worst_path_key']}",
         component_line("arrival", summary),
         component_line("required", summary),
+        "",
+        "Clock validation",
+        f"status              : {summary['clock_validation_status']}",
+    ]
+    for reason in summary["clock_validation_reasons"]:
+        lines.append(f"reason              : {reason}")
+    lines.extend([
         clock_line("launch", summary),
         clock_line("capture", summary),
         f"path-group mismatches : {summary['path_group_mismatches']}",
         f"path-type mismatches  : {summary['path_type_mismatches']}",
         f"clock info unavailable: {summary['clock_relation_unavailable']}",
+        edge_detail_line("worst launch edge", summary["worst_launch_edge"]),
+        edge_detail_line("worst capture edge", summary["worst_capture_edge"]),
+        f"action              : {summary['clock_validation_action']}",
+        "",
         "status counts:",
-    ]
+    ])
     for status, count in sorted(summary["status_counts"].items()):
         lines.append(f"  {status:<29} {count}")
     if summary.get("scaling_input_plan"):
@@ -565,6 +666,18 @@ def clock_line(name, summary):
     return (
         f"{name + ' clock edge':<21}: {detail} "
         f"identity_mismatches={mismatch} multi_edge_blocks={ambiguous}")
+
+
+def edge_detail_line(label, detail):
+    """Format the scaled and GT clocks of the largest edge-error path."""
+    if detail is None:
+        return f"{label:<21}: unavailable"
+    return (
+        f"{label:<21}: idx={detail['idx']} error={detail['error_ps']:+.6f} ps "
+        f"scaled={detail['scaled_clock']}/{detail['scaled_transition']}@"
+        f"{detail['scaled_edge_ps']:.6f} ps "
+        f"GT={detail['ground_truth_clock']}/{detail['ground_truth_transition']}@"
+        f"{detail['ground_truth_edge_ps']:.6f} ps key={detail['path_key']}")
 
 
 def safe_corner_name(report_path):
@@ -642,10 +755,20 @@ def main():
     print(f"worst          : {summary['worst_abs_error_ps']:.3f} ps")
     print(component_line("arrival", summary))
     print(component_line("required", summary))
+    print("")
+    print("=== CLOCK VALIDATION ===")
+    print(f"status         : {summary['clock_validation_status']}")
+    for reason in summary["clock_validation_reasons"]:
+        print(f"reason         : {reason}")
     print(clock_line("launch", summary))
     print(clock_line("capture", summary))
     print(f"path-group mismatches: {summary['path_group_mismatches']}")
     print(f"path-type mismatches : {summary['path_type_mismatches']}")
+    print(f"clock info unavailable: {summary['clock_relation_unavailable']}")
+    print(edge_detail_line("worst launch edge", summary["worst_launch_edge"]))
+    print(edge_detail_line("worst capture edge", summary["worst_capture_edge"]))
+    print(f"action         : {summary['clock_validation_action']}")
+    print("")
     if summary["scaling_input_plan_path"]:
         print(f"scaling inputs : {summary['scaling_input_plan_path']}")
     else:

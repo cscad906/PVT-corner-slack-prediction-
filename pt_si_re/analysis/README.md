@@ -49,6 +49,13 @@ capture/constraint 조건 차이를 조사합니다.
 비교 프로그램이 정상 종료된 것만으로 두 PrimeTime session의 분석 조건이 같다고
 판정할 수는 없습니다.
 
+별도 `grep` 없이 Python 실행 직후의 `CLOCK VALIDATION` 구역을 확인합니다.
+`PASS`는 clock 이름/edge와 path group/type이 모두 같다는 뜻입니다. `INVALID`는
+clock identity, 선택 cycle/edge 또는 path 조건이 달라 현재 MAE를 scaling 오차로
+사용할 수 없다는 뜻입니다. `REVIEW`는 generated-clock 후보가 여러 개이거나 clock
+정보를 읽지 못해 해당 report 원문 확인이 필요하다는 뜻입니다. 같은 판정과 원인,
+최악의 launch/capture edge path는 `summary.txt`에도 저장됩니다.
+
 `launch clock edge`, `capture clock edge`는 두 report가 사용한 clock edge time을
 비교합니다. 이 MAE가 clock period에 가까우면 서로 다른 cycle/edge 또는 다른
 constraint/session을 비교한 것입니다. `identity_mismatches`, `path-group
