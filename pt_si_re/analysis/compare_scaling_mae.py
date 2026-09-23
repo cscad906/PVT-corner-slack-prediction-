@@ -40,7 +40,8 @@ METRICS
 OUTPUT
     The target-corner name is taken from the ground-truth report filename.
     For ground_truth/SSPG_0p57V_25C_RCMAX_setup.rpt, the script creates:
-      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/path_errors.csv
+      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/path_errors.txt
+      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/summary.txt
       pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/summary.json
 
     Existing results are never overwritten. Running the same corner again
@@ -52,15 +53,14 @@ OUTPUT
     The selected directory is the common root for all corner result folders.
 
 VIEW WITHOUT VS CODE
-    cat pt_scaling_comparison/TARGET/summary.json
-    column -s, -t pt_scaling_comparison/TARGET/path_errors.csv | less -S
+    cat pt_scaling_comparison/TARGET/summary.txt
+    less -S pt_scaling_comparison/TARGET/path_errors.txt
 
 RUNTIME
     Python 3.6 or newer. No external Python package is required.
 """
 
 import argparse
-import csv
 import json
 import math
 import re
@@ -191,18 +191,53 @@ def evaluate(scaled, truth, factor):
     return rows, summary
 
 
-def write_csv(path, rows):
-    columns = ["idx", "path_key", "ground_truth_ps", "pt_scaling_ps",
-               "pt_scaling_err_ps", "abs_error_ps", "status"]
-    with path.open("w", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=columns)
-        writer.writeheader()
+def format_number(value):
+    return "-" if value is None else f"{value:.6f}"
+
+
+def write_path_text(path, rows):
+    """Write one terminal-friendly, fixed-width line for every path."""
+    with path.open("w") as output:
+        output.write("# Input slack unit: ns; all values below: ps\n")
+        output.write(
+            f"{'idx':>7} {'ground_truth':>15} {'pt_scaling':>15} "
+            f"{'signed_error':>15} {'abs_error':>15} {'status':<29} path_key\n"
+        )
         for row in rows:
-            writer.writerow({
-                key: (f"{value:.6f}" if isinstance(value, float) else
-                      "" if value is None else value)
-                for key, value in row.items()
-            })
+            output.write(
+                f"{row['idx']:>7} "
+                f"{format_number(row['ground_truth_ps']):>15} "
+                f"{format_number(row['pt_scaling_ps']):>15} "
+                f"{format_number(row['pt_scaling_err_ps']):>15} "
+                f"{format_number(row['abs_error_ps']):>15} "
+                f"{row['status']:<29} {row['path_key']}\n"
+            )
+
+
+def write_summary_text(path, summary):
+    """Write the complete metric summary as plain text for a Linux terminal."""
+    lines = [
+        "PrimeTime scaling vs ground truth",
+        f"scaled report       : {summary['scaled_report']}",
+        f"ground truth report : {summary['ground_truth_report']}",
+        f"input/output unit   : {summary['input_unit']} / {summary['output_unit']}",
+        f"scaled blocks       : {summary['scaled_blocks']}",
+        f"scaled resolved     : {summary['scaled_resolved']}",
+        f"ground truth blocks : {summary['ground_truth_blocks']}",
+        f"ground truth resolved: {summary['ground_truth_resolved']}",
+        f"shared path keys    : {summary['shared_path_keys']}",
+        f"compared paths      : {summary['compared_paths']}",
+        f"excluded paths      : {summary['excluded_paths']}",
+        f"MAE                 : {summary['mae_ps']:.6f} ps",
+        f"RMSE                : {summary['rmse_ps']:.6f} ps",
+        f"bias                : {summary['bias_ps']:+.6f} ps",
+        f"worst absolute error: {summary['worst_abs_error_ps']:.6f} ps",
+        f"worst path key      : {summary['worst_path_key']}",
+        "status counts:",
+    ]
+    for status, count in sorted(summary["status_counts"].items()):
+        lines.append(f"  {status:<29} {count}")
+    path.write_text("\n".join(lines) + "\n")
 
 
 def safe_corner_name(report_path):
@@ -250,9 +285,11 @@ def main():
 
     corner_name = safe_corner_name(args.ground_truth_rpt)
     result_dir = create_result_dir(args.output_dir, corner_name)
-    csv_path = result_dir / "path_errors.csv"
+    path_text_path = result_dir / "path_errors.txt"
+    summary_text_path = result_dir / "summary.txt"
     json_path = result_dir / "summary.json"
-    write_csv(csv_path, rows)
+    write_path_text(path_text_path, rows)
+    write_summary_text(summary_text_path, summary)
     with json_path.open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
 
@@ -267,8 +304,17 @@ def main():
     print(f"RMSE           : {summary['rmse_ps']:.3f} ps")
     print(f"bias           : {summary['bias_ps']:+.3f} ps")
     print(f"worst          : {summary['worst_abs_error_ps']:.3f} ps")
-    print(f"CSV            : {csv_path}")
-    print(f"summary        : {json_path}")
+    print("worst paths    :")
+    compared_rows = [row for row in rows if row["abs_error_ps"] is not None]
+    for rank, row in enumerate(
+            sorted(compared_rows, key=lambda item: item["abs_error_ps"], reverse=True)[:10], 1):
+        print(
+            f"  {rank:>2}. idx={row['idx']} abs={row['abs_error_ps']:.3f} ps "
+            f"err={row['pt_scaling_err_ps']:+.3f} ps key={row['path_key']}"
+        )
+    print(f"path details   : {path_text_path}")
+    print(f"summary text   : {summary_text_path}")
+    print(f"summary JSON   : {json_path}")
 
 
 if __name__ == "__main__":

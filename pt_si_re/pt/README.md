@@ -390,8 +390,18 @@ python3 /path/to/repository/analysis/compare_scaling_mae.py \
 
 생성 파일은 다음과 같습니다.
 
-- `path_errors.csv`: path별 ground truth, scaling slack, signed error, absolute error
-- `summary.json`: compared/excluded path 수, MAE, RMSE, bias, worst error
+- `path_errors.txt`: path별 ground truth, scaling slack, signed error, absolute error와 상태
+- `summary.txt`: 터미널에서 바로 확인하는 compared/excluded 수, MAE, RMSE, bias, worst error
+- `summary.json`: 후처리 프로그램용 전체 요약
+
+기업 Linux 환경에서는 별도 프로그램 없이 다음처럼 확인합니다. 터미널에는
+absolute error가 큰 상위 10개 path만 출력하고, 전체 path는 텍스트 파일에만
+저장하므로 출력이 과도하게 길어지지 않습니다.
+
+```bash
+cat /company/work/pt_scaling_eval/analysis_output/SSPG_0p57_rcmax/<코너이름>/summary.txt
+less -S /company/work/pt_scaling_eval/analysis_output/SSPG_0p57_rcmax/<코너이름>/path_errors.txt
+```
 
 `--output-dir`은 코너별 결과 폴더가 들어갈 상위 폴더입니다. 생략하면 실행
 위치의 `pt_scaling_comparison/<ground-truth-report-name>/`에 두 파일이
@@ -402,7 +412,7 @@ python3 /path/to/repository/analysis/compare_scaling_mae.py \
 확인합니다. known-invalid path 외에 새로 제외된 path가 있으면 MAE를 승인하지
 않습니다.
 
-터미널의 `status counts`와 `summary.json`은 제외 원인을 보여줍니다.
+터미널의 `status counts`와 `summary.txt`는 제외 원인을 보여줍니다.
 `missing_*_block`이 많으면 서로 다른 `fixed_paths.tcl` 또는 잘못 선택한 report를
 의심하고, `unresolved_*_path`가 많으면 해당 report에서 실제 timing path가
 생성되지 않은 것이므로 scaling의 `.missing`과 PrimeTime 로그를 확인합니다.

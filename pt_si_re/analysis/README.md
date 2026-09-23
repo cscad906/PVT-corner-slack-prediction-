@@ -27,9 +27,19 @@ python3 analysis/recover_fixed_paths_from_ground_truth.py ground_truth.rpt
 없는 실패 block은 복원할 수 없으며, 스크립트가 제외 개수와 사유를 출력합니다.
 
 `--output-dir`을 생략하면 ground-truth report의 파일명을 target corner 이름으로
-사용해 `pt_scaling_comparison/<target-corner>/` 아래에 `path_errors.csv`와
-`summary.json`을 생성합니다. 같은 코너를 다시 실행하면 기존 결과를 덮어쓰지
-않고 `<target-corner>_run2`, `_run3` 폴더를 자동으로 만듭니다.
+사용해 `pt_scaling_comparison/<target-corner>/` 아래에 `path_errors.txt`,
+`summary.txt`, `summary.json`을 생성합니다. 같은 코너를 다시 실행하면 기존 결과를
+덮어쓰지 않고 `<target-corner>_run2`, `_run3` 폴더를 자동으로 만듭니다.
+
+`path_errors.txt`는 외부 프로그램 없이 `less -S`로 볼 수 있는 고정폭 텍스트입니다.
+모든 path의 ground-truth slack, scaling slack, signed error, absolute error와 제외
+사유를 저장합니다. 터미널에는 전체 내용을 쏟아내지 않고 absolute error가 큰
+상위 10개 path만 출력합니다.
+
+```bash
+cat results/pt_scaling_comparison/<target-corner>/summary.txt
+less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt
+```
 
 두 스크립트 모두 입력 `.rpt`의 slack을 항상 ns로 읽고 결과를 ps로 저장합니다.
 
