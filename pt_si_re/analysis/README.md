@@ -4,12 +4,16 @@
 PrimeTime에서 `source`하는 Tcl 파일은 `pt/` 디렉토리에 있습니다.
 
 - `compare_scaling_mae.py`: PT scaling report와 target-corner ground truth의 path별 오차 및 MAE 계산
+- `compare_point_delays.py`: 동일 timing point의 `Incr` delay를 cell/net 및 path 구간별로 비교
 - `plot_ground_truth_slack.py`: 여러 ground-truth report의 slack 통계, CSV, SVG 및 터미널 histogram 생성
 - `recover_fixed_paths_from_ground_truth.py`: 남아 있는 ground-truth report에서 scaling용 fixed path 목록 복원
 
 ```bash
 python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt \
     --output-dir results/pt_scaling_comparison
+
+python3 analysis/compare_point_delays.py scaled.rpt ground_truth.rpt \
+    --output-dir results/point_delay_comparison
 
 python3 analysis/plot_ground_truth_slack.py ground_truth/*.rpt \
     --output-dir results/ground_truth_slack
@@ -85,7 +89,16 @@ cat results/pt_scaling_comparison/<target-corner>/summary.txt
 less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt
 ```
 
-두 스크립트 모두 입력 `.rpt`의 slack을 항상 ns로 읽고 결과를 ps로 저장합니다.
+`compare_scaling_mae.py`는 입력 `.rpt`의 slack을 항상 ns로 읽고 결과를 ps로
+저장합니다.
+
+`compare_point_delays.py`는 ideal clock edge 차이가 누적되는 `Path` 열을 사용하지
+않고 각 timing point의 `Incr` 열만 비교합니다. 같은 instance의 연속 pin 사이
+증분은 `cell`, 새로운 instance의 sink pin에 도달하는 증분은 `net`으로 분류합니다.
+여기서 `net`은 timing report에 표시되는 sink-pin 증분이며 SPEF의 순수 RC delay를
+직접 추출한 값은 아닙니다. `point_delay_errors.txt`는 absolute error가 큰 순서이고,
+터미널 마지막 `POINT_SHARE` 한 줄에는 회사의 point/path 이름을 넣지 않습니다.
+`cell`, `net`, `data`의 세 숫자는 각각 `MAE/P95/최대 absolute error` 순서입니다.
 
 MAE 실행 결과의 `status counts`는 제외 원인을 다음처럼 구분합니다.
 
