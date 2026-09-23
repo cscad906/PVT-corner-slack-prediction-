@@ -1,63 +1,80 @@
 #!/usr/bin/env python3
-# -*- coding: ascii -*-
-"""Compare PrimeTime scaling slack with target-corner ground truth.
+# -*- coding: euc-kr -*-
+"""PrimeTime scaling 결과를 실제 target-corner ground truth와 비교한다.
 
-QUICK START (run from the pt_si_re directory)
-    python3 analysis/compare_scaling_mae.py \
-        auto_scaling_output/scaled_TARGET.rpt \
-        ground_truth/TARGET.rpt
+가장 먼저 할 일
+    이 파일이 들어 있는 pt_si_re 디렉토리로 이동한다.
 
-INPUT ORDER
-    1) scaled_rpt       : scaled_*.rpt from run_scaling_after_restore.tcl
-    2) ground_truth_rpt : fixed-path report measured with the real target DB/lib
+        cd /home/KNUEEhdd1/sogang1/hyunss/PVT/PVT_prediction/pt_si_re
 
-    Do not reverse the files because error and bias signs would be reversed.
+Setup 결과 실행 방법
+    아래 두 경로만 실제 파일의 절대경로로 바꿔서 실행한다.
 
-REQUIRED REPORT FORMAT
-    Both reports must come from the same fixed_paths.tcl and contain this marker
-    before every path:
+        python3 analysis/compare_scaling_mae.py \
+            /절대경로/restored_scaled_MFC_target.rpt \
+            /절대경로/MFC_ground_truth_target.rpt \
+            --analysis setup \
+            --output-dir mfc_scaling_comparison
+
+Hold 결과 실행 방법
+
+        python3 analysis/compare_scaling_mae.py \
+            /절대경로/restored_scaled_MFC_target_hold.rpt \
+            /절대경로/MFC_ground_truth_target_hold.rpt \
+            --analysis hold \
+            --output-dir mfc_scaling_comparison_hold
+
+입력 파일 순서
+    첫 번째 파일: run_scaling_after_restore.tcl이 만든 PT scaling 결과 .rpt
+    두 번째 파일: 실제 target DB/lib session에서 만든 ground-truth .rpt
+
+    순서를 바꾸면 signed error와 bias 부호가 반대로 나오므로 바꾸지 않는다.
+    두 report는 반드시 같은 fixed_paths.tcl로 만들고 setup끼리 또는 hold끼리
+    비교해야 한다. 각 path 앞에는 다음 marker가 있어야 한다.
 
         ### FIXED_PATH idx=... key=...
 
-    Paths are matched by key, not idx. Compare setup with setup or hold with
-    hold, using the same constraints and report time unit.
+실행이 끝난 뒤 확인 방법
+    ground-truth 파일명을 기준으로 결과 하위 폴더가 자동 생성된다.
 
-TIME UNIT
-    Both input reports are always interpreted as ns. All reported slack and
-    error values are converted to ps (1 ns = 1000 ps).
+        cat  mfc_scaling_comparison/*/summary.txt
+        less -S mfc_scaling_comparison/*/path_errors.txt
 
-METRICS
+    summary.txt
+        MAE/RMSE/bias, 비교 및 제외 path 수, arrival/required 진단,
+        실제 scaling 입력 P/V/T/DB 정보를 보여 준다.
+
+    path_errors.txt
+        path별 GT slack, scaling slack, signed/absolute error,
+        arrival/required error를 absolute error가 큰 순서로 보여 준다.
+
+결과 해석
     error = PT scaling slack - ground-truth slack
-    MAE   = mean absolute error
-    RMSE  = root mean square error
-    bias  = signed mean error; positive means scaling slack is larger than GT
-    worst = largest absolute error
+    MAE   = path별 absolute error 평균
+    bias  = signed error 평균. 양수면 scaling slack이 GT보다 크게 나온 것이다.
 
-    Only paths with readable slack in both reports enter the metrics. Missing
-    or unresolved paths remain in the CSV with a status and are excluded from
-    MAE, RMSE, and bias.
+    arrival diagnostic이 크면 launch clock, data path, SI 조건을 확인한다.
+    required diagnostic이 크면 capture clock, uncertainty, derate, constraint를
+    확인한다. req_source가 direct면 report 값을 직접 읽었고,
+    derived_setup/derived_hold면 slack과 arrival 관계식으로 계산한 것이다.
 
-OUTPUT
-    The target-corner name is taken from the ground-truth report filename.
-    For ground_truth/SSPG_0p57V_25C_RCMAX_setup.rpt, the script creates:
-      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/path_errors.txt
-      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/summary.txt
-      pt_scaling_comparison/SSPG_0p57V_25C_RCMAX_setup/summary.json
+required diagnostic이 unavailable일 때
+    report에 Path Type 또는 data required time 줄이 없을 수 있다. Setup이면
+    --analysis setup, hold면 --analysis hold를 붙여 다시 실행한다. 기존 PT report를
+    그대로 사용하므로 이 진단 때문에 PrimeTime scaling을 다시 돌릴 필요는 없다.
 
-    Existing results are never overwritten. Running the same corner again
-    creates SSPG_0p57V_25C_RCMAX_setup_run2, then _run3, and so on.
+Scaling에 사용한 입력 DB 확인
+    최신 run_scaling_after_restore.tcl 결과 옆에는 다음 파일이 생긴다.
 
-    To select another result directory, add:
-      --output-dir results/TARGET
+        <scaling-result>.rpt.inputs.txt
 
-    The selected directory is the common root for all corner result folders.
+    compare script가 이 파일을 찾으면 내용을 summary.txt 아래에 자동 복사한다.
+    예전 scaling 결과에는 이 파일이 없으므로 input plan만 unavailable로 표시된다.
 
-VIEW WITHOUT VS CODE
-    cat pt_scaling_comparison/TARGET/summary.txt
-    less -S pt_scaling_comparison/TARGET/path_errors.txt
-
-RUNTIME
-    Python 3.6 or newer. No external Python package is required.
+단위와 재실행
+    입력 report의 slack/arrival/required 단위는 항상 ns로 읽고 결과는 ps로 쓴다.
+    같은 명령을 다시 실행해도 기존 결과를 덮어쓰지 않고 _run2, _run3 폴더를
+    만든다. Python 3.6 이상에서 동작하며 외부 package는 필요하지 않다.
 """
 
 import argparse
