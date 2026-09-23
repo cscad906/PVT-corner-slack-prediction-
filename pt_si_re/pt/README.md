@@ -63,7 +63,7 @@ git rev-parse HEAD
 
 ## 3. 내삽 조건
 
-`SCALING_AXIS`에 따라 필요한 Liberty grid가 다릅니다.
+`-axis`에 따라 필요한 Liberty grid가 다릅니다.
 
 | 값 | 필요한 scaling 입력 |
 |---|---|
@@ -96,61 +96,60 @@ library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rai
 다른 rail 전압은 family 구분값으로 유지하므로, 보조 전압이 다른 library를 같은
 scaling group에 섞지 않습니다.
 
-네 power rail의 역할은 USER SETTINGS에 명시합니다. 레벨시프터 입력 전 rail과
+네 power rail의 역할은 `auto_scaling::run` 옵션에 명시합니다. 레벨시프터 입력 전 rail과
 memory rail은 fixed, 나머지 두 rail은 scaling 대상으로 둡니다. 스크립트는
 fixed-path cell의 `type=primary_power` PG pin과 실제 `supply_connection`을 확인한 뒤,
 scaling rail에 연결된 PG pin만 `set_voltage -cell ... -pg_pin_name ...`으로 변경합니다.
 따라서 같은 rail에 연결된 fixed path 밖의 cell이나 fixed rail 전체에는 전압을
 적용하지 않습니다. temperature도 이 cell 집합에만 적용합니다.
 
-## 4. Tcl에서 수정할 곳
+## 4. 실행 옵션
 
-작업용 Tcl을 `vi`로 엽니다.
-
-```bash
-vi /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
-```
-
-파일 앞부분의 `USER SETTINGS`와 `END USER SETTINGS` 사이만 수정합니다.
+`run_scaling_after_restore.tcl` 내부는 수정하지 않습니다. `source`는 명령만
+로드하며 design이나 timing 상태를 바꾸지 않습니다. target, fixed path, 결과
+폴더와 supply 이름은 이후 `auto_scaling::run` 명령의 옵션으로 전달합니다.
 
 ```tcl
-set TARGET_PROCESS      "SSPG"
-set TARGET_VOLTAGE      0.57
-set TARGET_TEMPERATURE  25
-set TARGET_BEOL         "rcmax"
-set SCALING_AXIS        "V"
-
-set ANALYSIS            "setup"
-
-set FIXED_PATH_FILE "/company/work/pt_scaling_eval/input/fixed_paths.tcl"
-set RESULT_FOLDER   "/company/work/pt_scaling_eval/scaling_output"
-set PROGRESS_INTERVAL_MINUTES 10
-
-set FIXED_POWER_NET_BEFORE_LS "실제_고정_rail_이름"
-set SCALING_POWER_NET_1       "실제_scaling_rail_1"
-set SCALING_POWER_NET_2       "실제_scaling_rail_2"
-set FIXED_MEMORY_POWER_NET    "실제_memory_rail_이름"
+auto_scaling::run \
+  -target-process SSPG \
+  -target-voltage 0.57 \
+  -target-temperature 25 \
+  -target-beol rcmax \
+  -axis V \
+  -analysis setup \
+  -fixed-path /company/work/pt_scaling_eval/input/fixed_paths.tcl \
+  -result-folder /company/work/pt_scaling_eval/scaling_output \
+  -fixed-power-before-ls 실제_고정_rail_이름 \
+  -scaling-power-1 실제_scaling_rail_1 \
+  -scaling-power-2 실제_scaling_rail_2 \
+  -fixed-memory-power 실제_memory_rail_이름 \
+  -progress-minutes 10
 ```
 
-각 값의 의미는 다음과 같습니다.
+각 옵션의 의미는 다음과 같습니다.
 
-| 설정 | 입력 방법 |
+| 옵션 | 입력 방법 |
 |---|---|
-| `TARGET_PROCESS` | `report_lib`의 Operating Conditions에 표시되는 실제 process 이름 |
-| `TARGET_VOLTAGE` | 목표 voltage, V 단위 |
-| `TARGET_TEMPERATURE` | 목표 온도, 섭씨. 영하 25도는 `-25` |
-| `TARGET_BEOL` | `rcmax`, `rcmin`, `cmax` 또는 회사 고유 `CORNER_NAME` |
-| `SCALING_AXIS` | `V`, `T`, `VT` 중 하나 |
-| `ANALYSIS` | setup은 `setup`, hold는 `hold` |
-| `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
-| `RESULT_FOLDER` | 결과를 저장할 새 폴더의 절대경로 |
-| `PROGRESS_INTERVAL_MINUTES` | 실행 중 현재 단계와 경과 시간을 출력할 간격(분), 기본값 `10` |
-| `FIXED_POWER_NET_BEFORE_LS` | 레벨시프터 입력 전에 사용하는 고정 전압 supply net의 정확한 이름 |
-| `SCALING_POWER_NET_1`, `SCALING_POWER_NET_2` | fixed-path cell 중 target voltage를 적용할 두 supply net의 정확한 이름 |
-| `FIXED_MEMORY_POWER_NET` | memory에 연결되어 기존 전압을 유지할 supply net의 정확한 이름 |
+| `-target-process` | `report_lib`의 Operating Conditions에 표시되는 실제 process 이름 |
+| `-target-voltage` | 목표 voltage, V 단위 |
+| `-target-temperature` | 목표 온도, 섭씨. 영하 25도는 `-25` |
+| `-target-beol` | `rcmax`, `rcmin`, `cmax` 또는 회사 고유 `CORNER_NAME` |
+| `-axis` | `V`, `T`, `VT` 중 하나. 생략 시 `V` |
+| `-analysis` | setup은 `setup`, hold는 `hold`. 생략 시 `setup` |
+| `-fixed-path` | 공통 `fixed_paths.tcl`의 절대경로 |
+| `-result-folder` | 결과를 저장할 새 폴더의 절대경로 |
+| `-progress-minutes` | 실행 상태 출력 간격(분). 생략 시 `10` |
+| `-fixed-power-before-ls` | 레벨시프터 입력 전에 사용하는 고정 전압 supply net의 정확한 이름 |
+| `-scaling-power-1`, `-scaling-power-2` | fixed-path cell 중 target voltage를 적용할 두 supply net의 정확한 이름 |
+| `-fixed-memory-power` | memory에 연결되어 기존 전압을 유지할 supply net의 정확한 이름 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
-스크립트가 `ANALYSIS`와 다르면 실행을 중단합니다.
+스크립트가 `-analysis`와 다르면 실행을 중단합니다. 전체 형식은 source 후 다음
+명령으로 확인합니다.
+
+```tcl
+auto_scaling::run -help
+```
 
 ## 5. restore session 확인
 
@@ -175,9 +174,9 @@ report_lib_groups -scaling -show {voltage temperature process}
 
 확인 기준은 다음과 같습니다.
 
-- `BEOL`이 `TARGET_BEOL`과 같아야 합니다. `RC_MAX_model`처럼 이름에 `rcmax`가
-  들어가면 `TARGET_BEOL "rcmax"`로 인식합니다.
-- `PARASITIC_TEMP`가 `TARGET_TEMPERATURE`와 정확히 같아야 합니다.
+- `BEOL`이 `-target-beol`과 같아야 합니다. `RC_MAX_model`처럼 이름에 `rcmax`가
+  들어가면 `-target-beol rcmax`로 인식합니다.
+- `PARASITIC_TEMP`가 `-target-temperature`와 정확히 같아야 합니다.
 - voltage 내삽에 필요한 양쪽 voltage DB가 `LIBRARIES`에 있어야 합니다.
 - 모든 library가 메모리에 로드된 것은 정상입니다.
 - 기존 scaling group에 target voltage/temperature가 들어 있으면 leave-one-out이
@@ -185,16 +184,33 @@ report_lib_groups -scaling -show {voltage temperature process}
   session을 사용합니다.
 
 고유 BEOL 이름이 `rcmax`, `rcmin`, `cmax`를 포함하지 않으면 Tcl의
-`TARGET_BEOL`에 실제 이름을 그대로 적습니다. 비교할 때는 대소문자와 `-`, `_`
+`-target-beol`에 실제 이름을 그대로 적습니다. 비교할 때는 대소문자와 `-`, `_`
 같은 구분 문자를 제거하지만 그 밖의 이름은 정확히 같아야 합니다.
 
 ## 6. PT scaling 실행
 
-복원한 `pt_shell`에서 작업용 Tcl을 source합니다.
+복원한 `pt_shell`에서 Tcl을 source한 뒤 외부 명령으로 실행 옵션을 전달합니다.
 
 ```tcl
 source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
+
+auto_scaling::run \
+  -target-process SSPG \
+  -target-voltage 0.57 \
+  -target-temperature 25 \
+  -target-beol rcmax \
+  -axis V \
+  -analysis setup \
+  -fixed-path /company/work/pt_scaling_eval/input/fixed_paths.tcl \
+  -result-folder /company/work/pt_scaling_eval/scaling_output \
+  -fixed-power-before-ls 실제_고정_rail_이름 \
+  -scaling-power-1 실제_scaling_rail_1 \
+  -scaling-power-2 실제_scaling_rail_2 \
+  -fixed-memory-power 실제_memory_rail_이름
 ```
+
+`source` 직후에는 `AUTO SCALING LOADED`만 출력되고 분석은 시작되지 않습니다.
+`auto_scaling::run`을 실행해야 library 선택과 timing 변경이 시작됩니다.
 
 스크립트가 자동으로 다음 작업을 수행합니다.
 
@@ -272,7 +288,7 @@ RUN 완료: 복원 세션 기반 scaling과 fixed-path report 생성이 끝났�
 ```
 
 스크립트는 기존 결과를 덮어쓰지 않습니다. `Output already exists`가 나오면
-이전 결과를 보존하고 새 `RESULT_FOLDER`를 지정합니다.
+이전 결과를 보존하고 `-result-folder`에 새 폴더를 지정합니다.
 
 ## 7. scaling 결과 파일
 
@@ -361,14 +377,10 @@ python3 /path/to/repository/analysis/recover_fixed_paths_from_ground_truth.py \
 스크립트가 report의 기존 path key, 전체 data-pin chain과 rise/fall 방향을 읽어
 `fixed_paths_SSPG_0p57V_25C_RCMAX_setup.tcl`을 만듭니다. 기존 출력은 덮어쓰지
 않으며 반복 실행하면 `_run2`, `_run3`가 붙습니다. 출력 마지막에 표시되는
-절대경로를 `run_scaling_after_restore.tcl` 위쪽에 넣습니다.
+절대경로를 `auto_scaling::run`의 `-fixed-path` 옵션에 넣습니다.
 
-```tcl
-set FIXED_PATH_FILE "/absolute/path/to/fixed_paths_SSPG_0p57V_25C_RCMAX_setup.tcl"
-```
-
-복원 결과가 `DTYPE=max`이면 `ANALYSIS "setup"`, `DTYPE=min`이면
-`ANALYSIS "hold"`로 설정한 뒤 restore session에서 scaling Tcl을 source합니다.
+복원 결과가 `DTYPE=max`이면 `-analysis setup`, `DTYPE=min`이면
+`-analysis hold`로 설정한 뒤 restore session에서 실행합니다.
 timing table이 없던 ground-truth block은 핀 경로를 복원할 수 없으므로 제외되며,
 복원 스크립트가 그 개수와 이유를 출력합니다.
 
@@ -450,14 +462,14 @@ column -s, -t \
 | 메시지 또는 증상 | 원인 | 조치 |
 |---|---|---|
 | `missing close-brace` | Tcl이 일부만 복사됐거나 구버전 사용 | Git의 최신 파일을 다시 복사하고 전체 파일을 source |
-| P/V/T library를 찾지 못함 | `TARGET_PROCESS`가 `report_lib`의 실제 이름과 다르거나 bracket DB 없음 | Operating Conditions와 loaded library 확인 |
+| P/V/T library를 찾지 못함 | `-target-process`가 `report_lib`의 실제 이름과 다르거나 bracket DB 없음 | Operating Conditions와 loaded library 확인 |
 | library selection ambiguous | 같은 PVT의 revision/중복 library가 여러 개 | 담당자가 사용할 PDK revision 하나를 정해 session 정리 |
 | `needs exactly one library ... found N` | 같은 family/PVT로 분류된 DB가 없거나 여러 개 | 오류 아래 `MATCH: LIB=... DB=...` 목록 확인. 서로 다른 LIB면 family 분류를 수정하고, 같은 LIB의 여러 DB면 사용할 revision 하나를 결정 |
 | target corner가 기존 scaling group에 포함 | leave-one-out 조건 위반 | target이 들어 있지 않은 fresh restore session 사용 |
 | BEOL 또는 parasitic temperature 불일치 | 다른 scenario/session의 parasitic 활성 | 정확한 target BEOL/temperature session을 restore |
 | `incomplete fixed path` 또는 missing path | 원래 invalid path이거나 netlist revision 불일치 | `.missing`에서 기존 invalid 목록과 비교 |
 | power/supply net 오류 | UPF 연결 또는 multi-voltage domain이 예상과 다름 | `get_supply_nets` 확인 후 담당 STA 방법론에 맞는 domain 결정 |
-| 설정한 fixed/scaling power net을 찾지 못함 | USER SETTINGS의 이름과 restore session의 `full_name`이 다름 | `get_object_name [get_supply_nets -hierarchy *]` 결과의 정확한 이름 입력 |
+| 설정한 fixed/scaling power net을 찾지 못함 | 실행 옵션의 이름과 restore session의 `full_name`이 다름 | `get_object_name [get_supply_nets -hierarchy *]` 결과의 정확한 이름 입력 |
 | fixed-path primary rail이 네 설정에 없음 | path cell이 다섯 번째 rail을 사용하거나 hierarchical 이름이 다름 | 오류에 나온 rail을 확인하고 네 역할 정의가 실제 설계와 맞는지 검토 |
 | scaling evidence 없음 | 실제 scaling이 cell arc에 적용되지 않음 | 결과 폐기 후 `.dcalc`, `.libgroups` 검사 |
 | `SLG-320` 또는 `DEL-012` | 외삽 또는 scaling 적용 실패 | target을 둘러싸는 interpolation DB 준비 |
@@ -469,8 +481,8 @@ domain을 확정한 뒤 실행해야 합니다.
 ## 12. 결과 인계 체크리스트
 
 - [ ] 실행 Git commit hash를 기록했다.
-- [ ] Tcl의 target process/voltage/temperature/BEOL/axis/analysis를 기록했다.
-- [ ] `FIXED_PATH_FILE`과 `RESULT_FOLDER`를 절대경로로 지정했다.
+- [ ] 실행한 `auto_scaling::run` 명령의 target process/voltage/temperature/BEOL/axis/analysis를 기록했다.
+- [ ] `-fixed-path`와 `-result-folder`를 절대경로로 지정했다.
 - [ ] 레벨시프터 전단/scaling 2개/memory rail의 정확한 supply 이름을 설정했다.
 - [ ] 로그의 `FIXED-PATH CELL SCOPE`에서 target-voltage cell 수를 확인했다.
 - [ ] `APPLY CELL-LEVEL VOLTAGE`가 설정한 scaling rail만 표시한다.
@@ -483,5 +495,5 @@ domain을 확정한 뒤 실행해야 합니다.
 - [ ] `.missing`은 기존 known-invalid path만 포함한다.
 - [ ] scaling/ground-truth block 수와 report unit이 일치한다.
 - [ ] MAE의 compared/excluded path 수를 확인했다.
-- [ ] Tcl, `.selection.tcl`, `.libgroups*`, `.dcalc`, `.missing`, scaling report,
-      ground-truth report, MAE CSV/JSON을 함께 보관했다.
+- [ ] 실행 명령, `.selection.tcl`, `.libgroups*`, `.dcalc`, `.missing`, scaling report,
+      ground-truth report, MAE TXT/JSON을 함께 보관했다.

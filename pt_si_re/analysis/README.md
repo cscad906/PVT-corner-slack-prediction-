@@ -23,8 +23,8 @@ python3 analysis/recover_fixed_paths_from_ground_truth.py ground_truth.rpt
 ```
 
 출력된 `fixed_paths_<ground-truth-name>.tcl`의 절대경로를
-`pt/run_scaling_after_restore.tcl`의 `FIXED_PATH_FILE`에 넣습니다. timing table이
-없는 실패 block은 복원할 수 없으며, 스크립트가 제외 개수와 사유를 출력합니다.
+`auto_scaling::run` 명령의 `-fixed-path` 옵션에 넣습니다. timing table이 없는
+실패 block은 복원할 수 없으며, 스크립트가 제외 개수와 사유를 출력합니다.
 
 `--output-dir`을 생략하면 ground-truth report의 파일명을 target corner 이름으로
 사용해 `pt_scaling_comparison/<target-corner>/` 아래에 `path_errors.txt`,
