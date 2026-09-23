@@ -55,6 +55,8 @@ clock identity, 선택 cycle/edge 또는 path 조건이 달라 현재 MAE를 sca
 사용할 수 없다는 뜻입니다. `REVIEW`는 generated-clock 후보가 여러 개이거나 clock
 정보를 읽지 못해 해당 report 원문 확인이 필요하다는 뜻입니다. 같은 판정과 원인,
 최악의 launch/capture edge path는 `summary.txt`에도 저장됩니다.
+회사 터미널의 EUC-KR/UTF-8 설정과 무관하게 깨지지 않도록 실행 결과의 `reason`과
+`action` 문장은 ASCII 영어로 출력합니다.
 
 `launch clock edge`, `capture clock edge`는 두 report가 사용한 clock edge time을
 비교합니다. 이 MAE가 clock period에 가까우면 서로 다른 cycle/edge 또는 다른

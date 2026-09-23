@@ -509,31 +509,35 @@ def clock_validation(summary):
 
     if identity_mismatches:
         reasons.append(
-            "clock/path identity mismatch가 있어 두 report의 분석 조건이 다릅니다.")
+            "Clock/path identity mismatch: the two reports use different analysis conditions.")
     if edge_differences:
         reasons.append(
-            ", ".join(edge_differences) + "로 같은 ideal edge/cycle이 아닙니다.")
+            ", ".join(edge_differences) +
+            ": the two reports do not use the same ideal edge/cycle.")
     if ambiguous:
         reasons.append(
-            f"multi-edge block이 {ambiguous}개라 generated-clock 원문 확인이 필요합니다.")
+            f"{ambiguous} multi-edge block(s): inspect the generated-clock report text.")
     if summary["clock_relation_unavailable"]:
         reasons.append(
-            f"clock 관계를 읽지 못한 path가 {summary['clock_relation_unavailable']}개입니다.")
+            f"Clock relation unavailable for "
+            f"{summary['clock_relation_unavailable']} path(s).")
 
     if ambiguous or summary["clock_relation_unavailable"]:
         status = "REVIEW"
         action = (
-            "worst edge path의 PrimeTime 원문에서 launch/capture clock edge와 "
-            "generated-clock 관계를 대조하세요.")
+            "Inspect the worst-edge path in the PrimeTime reports and compare "
+            "launch/capture edges and generated-clock relationships.")
     elif identity_mismatches or edge_differences:
         status = "INVALID"
         action = (
-            "현재 MAE를 scaling 오차로 사용하지 말고 두 report의 clock 정의, "
-            "선택 cycle, path group/type을 먼저 맞추세요.")
+            "Do not use this MAE as scaling error. First align clock definitions, "
+            "selected cycles, path groups, and path types between the reports.")
     else:
         status = "PASS"
-        reasons.append("비교 가능한 모든 path의 clock 이름, edge, group/type이 같습니다.")
-        action = "clock 조건이 일치하므로 slack/arrival/required scaling 오차를 분석하세요."
+        reasons.append(
+            "Clock names, edges, path groups, and path types match for all compared paths.")
+        action = (
+            "Clock conditions match. Continue with slack/arrival/required scaling analysis.")
     return status, reasons, action
 
 
