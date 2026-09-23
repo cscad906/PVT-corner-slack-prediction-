@@ -78,7 +78,8 @@ docs/START.md top to bottom.
                              overwritten by a hold run
     --corners hidden|seen|all   corners for predict/merge (default hidden)
     --at 0.57:cmax,0.62:rcmax   predict at these corners, measured or not
-    --period 3.8                predict at another clock period (ns). Exact:
+    --freq 950                  predict at another clock frequency (MHz)
+    --period 3.8                the same thing in ns. Exact:
                                 slack(T') = slack(T) + N*(T'-T), since no delay
                                 depends on the period. Hold is unaffected
     --weights <model.pt>        predict with ANOTHER circuit's model, e.g.
@@ -2023,7 +2024,7 @@ def _predict_files(p: dict, name: str, temps: list) -> dict:
 
 
 def _default_predict_name(design, temp, at, sweep, level, req, weights=None,
-                          period=None) -> str:
+                          period=None, freq=None) -> str:
     # the temperature is not part of it: each per-temperature file puts its
     # own temperature in front of this
     parts = [design] if design else []
@@ -2036,7 +2037,11 @@ def _default_predict_name(design, temp, at, sweep, level, req, weights=None,
         parts.append("at_" + "_".join("%g%s" % (v, l) for v, l in req))
     else:
         parts.append("at_%dcorners" % len(req))
-    if period is not None:
+    # named the way it was asked for: someone who said 950 MHz should not
+    # have to recognise 1.0526 ns in a file name
+    if freq is not None:
+        parts.append("F%gMHz" % freq)
+    elif period is not None:
         parts.append("T%gns" % period)
     if weights:
         # whose model made these numbers, in the file name: a prediction for
@@ -2469,6 +2474,9 @@ def main(argv=None):
                          "(measured voltages inside the range are added)")
     ap.add_argument("--level", default=None,
                     help="predict --sweep: this level only (default: every level)")
+    ap.add_argument("--freq", type=float, default=None,
+                    help="predict: report slack at this clock frequency (MHz). "
+                         "The same thing as --period, said the other way round")
     ap.add_argument("--period", type=float, default=None,
                     help="predict: report slack at this clock period (ns) "
                          "instead of the one in the reports. Exact, not a "
@@ -2488,6 +2496,16 @@ def main(argv=None):
         ap.error("use --at or --sweep, not both")
     if args.weights and args.stage not in ("predict", "all"):
         ap.error("--weights only applies to the predict stage")
+    if args.freq is not None and args.period is not None:
+        ap.error("use --freq or --period, not both -- they say the same thing")
+    if args.freq is not None:
+        if args.stage != "predict":
+            ap.error("--freq only applies to the predict stage")
+        if args.freq <= 0:
+            ap.error("--freq is a clock frequency in MHz, so it must be > 0")
+        # one knob downstream: a frequency IS a period, and the arithmetic that
+        # shifts the slack is written in ns because the reports are
+        args.period = 1000.0 / args.freq
     if args.period is not None:
         if args.stage != "predict":
             ap.error("--period only applies to the predict stage")
@@ -2548,7 +2566,7 @@ def main(argv=None):
                 req = _predict_request(p, models, args.at, args.sweep, args.level)
                 name = args.name or _default_predict_name(
                     args.design, args.temp, args.at, args.sweep, args.level, req,
-                    args.weights, args.period)
+                    args.weights, args.period, args.freq)
                 _, fails = stage_predict_at(models, p, req, name, args.weights,
                                             args.period)
                 failed += fails

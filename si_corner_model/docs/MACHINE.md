@@ -425,13 +425,17 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
   ```
 - 측정한 전압 범위 **밖**의 값은 외삽이라 믿기 어렵다
 
-### 클럭 주기를 바꿔서 보기 (`--period`)
+### 클럭 주파수·주기를 바꿔서 보기 (`--freq` / `--period`)
 
 ```
-bash scripts/run.sh predict --sweep 0.5:0.7:0.02 --level cmax --period 3.8
+bash scripts/run.sh predict --sweep 0.5:0.7:0.02 --level cmax --freq 950      # MHz
+bash scripts/run.sh predict --sweep 0.5:0.7:0.02 --level cmax --period 3.8    # ns, 같은 얘기
 ```
 
-리포트의 주기 대신 **3.8 ns 에서의 slack** 을 낸다. 근사가 아니라 정확하다:
+둘은 같은 스위치를 다르게 말한 것이고, 같이 주면 에러다. 파일 이름에는 준 대로
+들어간다 (`F950MHz` 또는 `T3.8ns`).
+
+리포트의 주기 대신 **그 주파수에서의 slack** 을 낸다. 근사가 아니라 정확하다:
 
 ```
 slack(T') = slack(T) + N x (T' - T)        N = 그 경로의 사이클 수

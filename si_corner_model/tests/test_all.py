@@ -1541,6 +1541,22 @@ def test_predict_at_another_clock_period(real_tree, tmp_path, monkeypatch):
     assert abs((two[1] - base[1]) - (1.8 - 2.0) * 1000.0) < 0.06
 
 
+def test_freq_is_the_same_knob_as_period():
+    """--freq (MHz) and --period (ns) are one knob said two ways."""
+    from si_model.run import _default_predict_name, main
+
+    req = [(0.57, "cmax")]
+    assert "F950MHz" in _default_predict_name(None, None, "0.57:cmax", None, None,
+                                              req, None, 1000.0 / 950.0, 950.0)
+    assert "T3.8ns" in _default_predict_name(None, None, "0.57:cmax", None, None,
+                                             req, None, 3.8, None)
+    for argv in (["predict", "--at", "0.57:cmax", "--freq", "500", "--period", "2"],
+                 ["predict", "--at", "0.57:cmax", "--freq", "0"],
+                 ["base", "--freq", "500"]):
+        with pytest.raises(SystemExit):
+            main(argv)
+
+
 def test_clock_edge_row_column_layouts():
     """The edge time is the LAST number on the row, however many precede it.
 
