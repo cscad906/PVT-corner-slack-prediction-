@@ -71,7 +71,10 @@ Hold 결과 실행 방법
     clock cycle/edge를 선택했거나 constraint/session이 다르다는 뜻이다. clock
     identity 또는 path-group mismatch가 1개라도 있으면 PT scaling 정확도를 판단하기
     전에 두 report 생성 조건부터 맞춘다. Clock edge와 group이 모두 같은데 required
-    오차만 크면 capture clock-tree scaling 범위를 우선 확인한다.
+    오차만 크면 capture clock-tree scaling 범위를 우선 확인한다. Parser는
+    data arrival time 앞 구간의 첫 clock edge를 launch, 뒤 구간의 첫 edge를
+    capture로 사용한다. multi_edge_blocks가 0이 아니면 generated-clock 원문을
+    path_errors.txt의 worst path부터 직접 대조한다.
 
 required diagnostic이 unavailable일 때
     report에 Path Type 또는 data required time 줄이 없을 수 있다. Setup이면
@@ -119,10 +122,12 @@ class PathResult(object):
 
     __slots__ = (
         "idx", "key", "slack", "arrival", "required", "path_type",
-        "path_group", "launch_clock", "capture_clock")
+        "path_group", "launch_clock", "capture_clock",
+        "launch_clock_rows", "capture_clock_rows")
 
     def __init__(self, idx, key, slack, arrival=None, required=None, path_type=None,
-                 path_group=None, launch_clock=None, capture_clock=None):
+                 path_group=None, launch_clock=None, capture_clock=None,
+                 launch_clock_rows=0, capture_clock_rows=0):
         self.idx = idx
         self.key = key
         self.slack = slack
@@ -132,6 +137,8 @@ class PathResult(object):
         self.path_group = path_group
         self.launch_clock = launch_clock
         self.capture_clock = capture_clock
+        self.launch_clock_rows = launch_clock_rows
+        self.capture_clock_rows = capture_clock_rows
 
 
 def labeled_number(match):
@@ -162,23 +169,27 @@ def parse_report(path):
     current_required = None
     current_path_type = None
     current_path_group = None
-    current_clock_edges = []
+    current_launch_clock = None
+    current_capture_clock = None
+    current_launch_clock_rows = 0
+    current_capture_clock_rows = 0
 
     def finish():
         nonlocal current_idx, current_key, current_slack
         nonlocal current_arrival, current_required
         nonlocal current_path_type
-        nonlocal current_path_group, current_clock_edges
+        nonlocal current_path_group
+        nonlocal current_launch_clock, current_capture_clock
+        nonlocal current_launch_clock_rows, current_capture_clock_rows
         if current_key is None or current_idx is None:
             return
         if current_key in results:
             raise ValueError(f"duplicate path key in {path}: {current_key}")
-        launch_clock = current_clock_edges[0] if current_clock_edges else None
-        capture_clock = current_clock_edges[1] if len(current_clock_edges) > 1 else None
         results[current_key] = PathResult(
             current_idx, current_key, current_slack,
             current_arrival, current_required, current_path_type,
-            current_path_group, launch_clock, capture_clock)
+            current_path_group, current_launch_clock, current_capture_clock,
+            current_launch_clock_rows, current_capture_clock_rows)
 
     with path.open(errors="ignore") as report:
         for line in report:
@@ -192,7 +203,10 @@ def parse_report(path):
                 current_required = None
                 current_path_type = None
                 current_path_group = None
-                current_clock_edges = []
+                current_launch_clock = None
+                current_capture_clock = None
+                current_launch_clock_rows = 0
+                current_capture_clock_rows = 0
                 continue
             if current_key is not None:
                 match = PATH_GROUP_RE.match(line)
@@ -205,7 +219,16 @@ def parse_report(path):
                     continue
                 edge = clock_edge(CLOCK_EDGE_RE.match(line))
                 if edge is not None:
-                    current_clock_edges.append(edge)
+                    # full_clock_expanded prints the launch section before the
+                    # first data-arrival row and the capture section after it.
+                    if current_arrival is None:
+                        current_launch_clock_rows += 1
+                        if current_launch_clock is None:
+                            current_launch_clock = edge
+                    else:
+                        current_capture_clock_rows += 1
+                        if current_capture_clock is None:
+                            current_capture_clock = edge
                     continue
                 match = SLACK_RE.match(line)
                 if match:
@@ -267,7 +290,13 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
         capture_edge_error = None
         launch_clock_mismatch = False
         capture_clock_mismatch = False
+        launch_clock_ambiguous = False
+        capture_clock_ambiguous = False
         if pred is not None and gt is not None:
+            launch_clock_ambiguous = (
+                pred.launch_clock_rows > 1 or gt.launch_clock_rows > 1)
+            capture_clock_ambiguous = (
+                pred.capture_clock_rows > 1 or gt.capture_clock_rows > 1)
             if pred.launch_clock is not None and gt.launch_clock is not None:
                 launch_clock_mismatch = pred.launch_clock[:2] != gt.launch_clock[:2]
                 launch_edge_error = (pred.launch_clock[2] - gt.launch_clock[2]) * factor
@@ -334,6 +363,8 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
             "path_type_mismatch": path_type_mismatch,
             "launch_clock_mismatch": launch_clock_mismatch,
             "capture_clock_mismatch": capture_clock_mismatch,
+            "launch_clock_ambiguous": launch_clock_ambiguous,
+            "capture_clock_ambiguous": capture_clock_ambiguous,
             "clock_status": clock_status,
             "status": status,
         })
@@ -386,6 +417,8 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
         "path_type_mismatches": sum(row["path_type_mismatch"] for row in compared_rows),
         "launch_clock_mismatches": sum(row["launch_clock_mismatch"] for row in compared_rows),
         "capture_clock_mismatches": sum(row["capture_clock_mismatch"] for row in compared_rows),
+        "launch_clock_ambiguous": sum(row["launch_clock_ambiguous"] for row in compared_rows),
+        "capture_clock_ambiguous": sum(row["capture_clock_ambiguous"] for row in compared_rows),
         "clock_relation_unavailable": sum(
             row["clock_status"] == "unavailable" for row in compared_rows),
         "launch_edge_mae_ps": (
@@ -394,6 +427,16 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
         "capture_edge_mae_ps": (
             sum(abs(value) for value in capture_edge_errors) / len(capture_edge_errors)
             if capture_edge_errors else None),
+        "launch_edge_bias_ps": (
+            sum(launch_edge_errors) / len(launch_edge_errors)
+            if launch_edge_errors else None),
+        "capture_edge_bias_ps": (
+            sum(capture_edge_errors) / len(capture_edge_errors)
+            if capture_edge_errors else None),
+        "launch_edge_min_ps": min(launch_edge_errors) if launch_edge_errors else None,
+        "launch_edge_max_ps": max(launch_edge_errors) if launch_edge_errors else None,
+        "capture_edge_min_ps": min(capture_edge_errors) if capture_edge_errors else None,
+        "capture_edge_max_ps": max(capture_edge_errors) if capture_edge_errors else None,
     }
     for name, values in (("arrival", arrival_errors), ("required", required_errors)):
         summary[f"{name}_compared_paths"] = len(values)
@@ -511,8 +554,17 @@ def clock_line(name, summary):
     """Format clock identity and edge-time comparison."""
     mae = summary[f"{name}_edge_mae_ps"]
     mismatch = summary[f"{name}_clock_mismatches"]
-    mae_text = "unavailable" if mae is None else f"{mae:.6f} ps"
-    return f"{name + ' clock edge':<21}: MAE={mae_text} identity_mismatches={mismatch}"
+    ambiguous = summary[f"{name}_clock_ambiguous"]
+    if mae is None:
+        detail = "MAE=unavailable"
+    else:
+        detail = (
+            f"MAE={mae:.6f} ps bias={summary[name + '_edge_bias_ps']:+.6f} ps "
+            f"range=[{summary[name + '_edge_min_ps']:+.6f},"
+            f"{summary[name + '_edge_max_ps']:+.6f}] ps")
+    return (
+        f"{name + ' clock edge':<21}: {detail} "
+        f"identity_mismatches={mismatch} multi_edge_blocks={ambiguous}")
 
 
 def safe_corner_name(report_path):

@@ -53,7 +53,10 @@ capture/constraint 조건 차이를 조사합니다.
 비교합니다. 이 MAE가 clock period에 가까우면 서로 다른 cycle/edge 또는 다른
 constraint/session을 비교한 것입니다. `identity_mismatches`, `path-group
 mismatches`, `path-type mismatches`는 모두 0이어야 합니다. Edge와 group은 같은데
-required 오차만 크면 capture clock-tree의 scaling 범위를 우선 확인합니다.
+required 오차만 크면 capture clock-tree의 scaling 범위를 우선 확인합니다. Parser는
+`data arrival time` 앞의 첫 clock edge를 launch, 뒤의 첫 edge를 capture로
+구분합니다. `multi_edge_blocks`가 0이 아니면 generated-clock 구조이므로 해당
+worst path의 원문도 직접 대조합니다.
 
 일부 report에 `data required time` 줄이 없으면 `Path Type: max|min`과 path별
 slack/arrival 관계식으로 required 오차를 유도합니다. `path_errors.txt`의
