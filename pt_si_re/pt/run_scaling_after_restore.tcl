@@ -25,11 +25,9 @@ set RESULT_FOLDER   "auto_scaling_output"
 # 긴 작업의 진행 상황 출력 간격(분). 계산 결과에는 영향을 주지 않습니다.
 set PROGRESS_INTERVAL_MINUTES 10
 
-# 회사 설계의 실제 supply net 이름으로 바꾸십시오.
-set FIXED_POWER_NET_BEFORE_LS "" ;# level shifter 입력 전 고정 rail
-set SCALING_POWER_NET_1       "" ;# target voltage 적용 rail 1
-set SCALING_POWER_NET_2       "" ;# target voltage 적용 rail 2
-set FIXED_MEMORY_POWER_NET    "" ;# SRAM/macro 고정 rail
+# target voltage를 적용할 확실한 실제 supply net 하나만 입력하십시오.
+# restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
+set SCALING_POWER_NET "" ;# target voltage 적용 rail
 # ===================== END USER SETTINGS ======================
 
 namespace eval auto_scaling {
@@ -1172,28 +1170,36 @@ proc auto_scaling::resolve_configured_supply_roles {cfg} {
     set supply_full_names [lsort -unique $supply_full_names]
     puts "RESTORED SUPPLY NETS: count=[llength $supply_full_names] names=$supply_full_names"
     if {![dict size $available]} {
-        error "restore session에 supply net이 없습니다. 네 power-net 설정을 검증할 수 없습니다."
+        error "restore session에 supply net이 없습니다. scaling power-net 설정을 검증할 수 없습니다."
     }
 
+    # 명시한 scaling net만 scaling으로 바꾸고 나머지는 모두 fixed로 둡니다.
     set roles [dict create]
-    foreach role {fixed scaling} {
-        foreach requested [dict get $cfg ${role}_power_nets] {
-            if {![dict exists $available $requested]} {
-                error "설정한 ${role} power net '$requested'을 restore session에서 찾지 못했습니다. 사용 가능한 supply net: [lsort [dict keys $available]]"
-            }
-            set matches [lsort -unique [dict get $available $requested]]
-            if {[llength $matches] != 1} {
-                error "설정한 power net '$requested'이 여러 hierarchical net과 일치합니다: $matches. full_name을 입력하세요."
-            }
-            set actual [lindex $matches 0]
-            if {[dict exists $roles $actual]} {
-                error "같은 supply net '$actual'이 fixed/scaling 설정에 중복되었습니다."
-            }
-            dict set roles $actual $role
-            puts "CONFIGURED POWER NET MATCH: role=$role requested=$requested matched=$actual count=[llength $matches]"
+    foreach full_name $supply_full_names { dict set roles $full_name fixed }
+    set scaling_matches {}
+    foreach requested [dict get $cfg scaling_power_nets] {
+        if {![dict exists $available $requested]} {
+            error "설정한 scaling power net '$requested'을 restore session에서 찾지 못했습니다. 사용 가능한 supply net: $supply_full_names"
         }
+        set matches [lsort -unique [dict get $available $requested]]
+        if {[llength $matches] != 1} {
+            error "설정한 scaling power net '$requested'이 여러 hierarchical net과 일치합니다: $matches. full_name을 입력하세요."
+        }
+        set actual [lindex $matches 0]
+        if {[dict get $roles $actual] eq "scaling"} {
+            error "같은 scaling power net '$actual'이 두 번 설정되었습니다."
+        }
+        dict set roles $actual scaling
+        lappend scaling_matches $actual
+        puts "CONFIGURED SCALING POWER NET MATCH: requested=$requested matched=$actual count=[llength $matches]"
     }
-    puts "CONFIGURED POWER NETS: matched=[dict size $roles] expected=4"
+    set fixed_names {}
+    dict for {name role} $roles {
+        if {$role eq "fixed"} { lappend fixed_names $name }
+    }
+    set fixed_names [lsort $fixed_names]
+    puts "SCALING POWER NETS: count=[llength $scaling_matches] names=[lsort $scaling_matches]"
+    puts "AUTO-FIXED POWER NETS (unchanged): count=[llength $fixed_names] names=$fixed_names"
     return $roles
 }
 
@@ -1282,10 +1288,10 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     }
     set unknown_rails [lsort -unique $unknown_rails]
     if {[llength $unknown_rails]} {
-        error "FIXED_PATHS scaling cell의 primary power rail 중 네 설정에 없는 rail이 있습니다: $unknown_rails"
+        error "FIXED_PATHS scaling cell의 primary power rail 중 restore session의 supply net 목록에 없는 rail이 있습니다: $unknown_rails"
     }
     if {![dict size $target_cell_names]} {
-        error "FIXED_PATHS에서 SCALING_POWER_NET_1/2에 연결된 scalable cell을 찾지 못했습니다."
+        error "FIXED_PATHS에서 SCALING_POWER_NET에 연결된 scalable cell을 찾지 못했습니다."
     }
 
     set target_cells [get_cells -quiet -exact [dict keys $target_cell_names]]
@@ -1299,12 +1305,18 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     }
     set static_path_count 0
     if {$static_path_cells ne ""} { set static_path_count [sizeof_collection $static_path_cells] }
+    set fixed_power_nets {}
+    dict for {name role} $roles {
+        if {$role eq "fixed"} { lappend fixed_power_nets $name }
+    }
+    set fixed_power_nets [lsort $fixed_power_nets]
     puts "FIXED-PATH CELL SCOPE: all=[sizeof_collection $path_cells] scalable_library=[sizeof_collection $scalable_candidates] target_voltage=[sizeof_collection $target_cells] static_library=$static_path_count"
-    puts "FIXED POWER NETS (unchanged): [dict get $cfg fixed_power_nets]"
+    puts "AUTO-FIXED POWER NETS (unchanged): count=[llength $fixed_power_nets] names=$fixed_power_nets"
     puts "SCALING POWER NETS (fixed-path cell override only): [dict get $cfg scaling_power_nets]"
 
     return [dict create path_cells $path_cells scaled_cells $target_cells \
-        voltage_groups $voltage_groups fixed_cell_names [dict keys $fixed_cell_names]]
+        voltage_groups $voltage_groups fixed_cell_names [dict keys $fixed_cell_names] \
+        fixed_power_nets $fixed_power_nets]
 }
 
 proc auto_scaling::run_after_restore {cfg} {
@@ -1414,7 +1426,7 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done PREPARE_SCALING_GROUPS $phase_started
 
     set phase_started [phase_start CLASSIFY_FIXED_PATH_POWER]
-    set power_plan [plan_fixed_path_power $fixed $cfg]
+    set power_plan [plan_fixed_path_power $fixed $restored_cfg]
     set scaled_cells [dict get $power_plan scaled_cells]
     set voltage_groups [dict get $power_plan voltage_groups]
     phase_done CLASSIFY_FIXED_PATH_POWER $phase_started
@@ -1455,7 +1467,7 @@ proc auto_scaling::run_after_restore {cfg} {
     if {[dict exists $record fixed cell_names]} { dict unset record fixed cell_names }
     dict set record restored_design [get_object_name [current_design]]
     dict set record scaling_scope fixed_path_cells_only
-    dict set record fixed_power_nets [dict get $cfg fixed_power_nets]
+    dict set record fixed_power_nets [dict get $power_plan fixed_power_nets]
     dict set record scaling_power_nets [dict get $cfg scaling_power_nets]
     dict set record scaled_cell_count [sizeof_collection $scaled_cells]
     puts $fp [list set scaling_selection $record]
@@ -1532,8 +1544,7 @@ proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
         ANALYSIS FIXED_PATH_FILE RESULT_FOLDER PROGRESS_INTERVAL_MINUTES
-        FIXED_POWER_NET_BEFORE_LS SCALING_POWER_NET_1 SCALING_POWER_NET_2
-        FIXED_MEMORY_POWER_NET
+        SCALING_POWER_NET
     } {
         if {![info exists ::$name]} {
             error "TCL 맨 위 USER SETTINGS에 $name 설정이 없습니다."
@@ -1570,20 +1581,12 @@ proc auto_scaling::build_restore_config {} {
     set filename "scaled_[string toupper $process]_${vtag}V_${ttag}C_${beol}_${axis}_${analysis}.rpt"
 
     foreach {setting_name setting_value} [list \
-        FIXED_POWER_NET_BEFORE_LS $::FIXED_POWER_NET_BEFORE_LS \
-        SCALING_POWER_NET_1 $::SCALING_POWER_NET_1 \
-        SCALING_POWER_NET_2 $::SCALING_POWER_NET_2 \
-        FIXED_MEMORY_POWER_NET $::FIXED_MEMORY_POWER_NET] {
+        SCALING_POWER_NET $::SCALING_POWER_NET] {
         if {[string trim $setting_value] eq ""} {
             error "TCL 맨 위 USER SETTINGS의 $setting_name 값을 설정해야 합니다."
         }
     }
-    set fixed_power_nets [list $::FIXED_POWER_NET_BEFORE_LS $::FIXED_MEMORY_POWER_NET]
-    set scaling_power_nets [list $::SCALING_POWER_NET_1 $::SCALING_POWER_NET_2]
-    set all_power_nets [concat $fixed_power_nets $scaling_power_nets]
-    if {[llength [lsort -unique $all_power_nets]] != 4} {
-        error "네 power-net 설정은 서로 다른 이름이어야 합니다: $all_power_nets"
-    }
+    set scaling_power_nets [list $::SCALING_POWER_NET]
 
     return [dict create \
         target_process $process \
@@ -1593,7 +1596,6 @@ proc auto_scaling::build_restore_config {} {
         mode $axis \
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
-        fixed_power_nets $fixed_power_nets \
         scaling_power_nets $scaling_power_nets \
         progress_minutes $progress_minutes \
         out_rpt [file join $::RESULT_FOLDER $filename]]
