@@ -57,6 +57,8 @@ clock identity, 선택 cycle/edge 또는 path 조건이 달라 현재 MAE를 sca
 최악의 launch/capture edge path는 `summary.txt`에도 저장됩니다.
 회사 터미널의 EUC-KR/UTF-8 설정과 무관하게 깨지지 않도록 실행 결과의 `reason`과
 `action` 문장은 ASCII 영어로 출력합니다.
+실행 결과가 길면 맨 마지막 `COPY THIS RESULT`의 세 줄만 복사해 전달하면 됩니다.
+이 세 줄에는 회사 clock/path 이름을 포함하지 않습니다.
 
 `launch clock edge`, `capture clock edge`는 두 report가 사용한 clock edge time을
 비교합니다. 이 MAE가 clock period에 가까우면 서로 다른 cycle/edge 또는 다른

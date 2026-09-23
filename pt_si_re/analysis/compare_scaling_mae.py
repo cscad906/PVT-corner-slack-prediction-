@@ -622,6 +622,7 @@ def write_summary_text(path, summary):
     ])
     for status, count in sorted(summary["status_counts"].items()):
         lines.append(f"  {status:<29} {count}")
+    lines.extend(["", "COPY THIS RESULT"] + share_lines(summary))
     if summary.get("scaling_input_plan"):
         lines.extend([
             "",
@@ -682,6 +683,45 @@ def edge_detail_line(label, detail):
         f"{detail['scaled_edge_ps']:.6f} ps "
         f"GT={detail['ground_truth_clock']}/{detail['ground_truth_transition']}@"
         f"{detail['ground_truth_edge_ps']:.6f} ps key={detail['path_key']}")
+
+
+def compact_number(value):
+    return "NA" if value is None else f"{value:.3f}"
+
+
+def share_lines(summary):
+    """Return a short, path-name-free diagnostic that is safe to copy."""
+    identity_mismatches = (
+        summary["path_group_mismatches"] + summary["path_type_mismatches"] +
+        summary["launch_clock_mismatches"] + summary["capture_clock_mismatches"])
+    multi_edge_blocks = (
+        summary["launch_clock_ambiguous"] + summary["capture_clock_ambiguous"])
+    worst_capture = summary["worst_capture_edge"]
+    if worst_capture is None:
+        worst_line = "WORST_CAPTURE error=NA scaled_edge=NA gt_edge=NA"
+    else:
+        worst_line = (
+            f"WORST_CAPTURE error={compact_number(worst_capture['error_ps'])}ps "
+            f"scaled_edge={compact_number(worst_capture['scaled_edge_ps'])}ps "
+            f"gt_edge={compact_number(worst_capture['ground_truth_edge_ps'])}ps")
+    return [
+        (
+            f"CLOCK_SHARE status={summary['clock_validation_status']} "
+            f"launch_mae={compact_number(summary['launch_edge_mae_ps'])}ps "
+            f"capture_mae={compact_number(summary['capture_edge_mae_ps'])}ps "
+            f"capture_bias={compact_number(summary['capture_edge_bias_ps'])}ps "
+            f"capture_range={compact_number(summary['capture_edge_min_ps'])},"
+            f"{compact_number(summary['capture_edge_max_ps'])}ps "
+            f"identity_mismatches={identity_mismatches} "
+            f"multi_edge_blocks={multi_edge_blocks} "
+            f"unavailable={summary['clock_relation_unavailable']}"),
+        worst_line,
+        (
+            f"ERROR_SHARE slack_mae={compact_number(summary['mae_ps'])}ps "
+            f"arrival_mae={compact_number(summary['arrival_mae_ps'])}ps "
+            f"required_mae={compact_number(summary['required_mae_ps'])}ps "
+            f"paths={summary['compared_paths']} excluded={summary['excluded_paths']}")
+    ]
 
 
 def safe_corner_name(report_path):
@@ -788,6 +828,10 @@ def main():
     print(f"path details   : {path_text_path}")
     print(f"summary text   : {summary_text_path}")
     print(f"summary JSON   : {json_path}")
+    print("")
+    print("=== COPY THIS RESULT ===")
+    for line in share_lines(summary):
+        print(line)
 
 
 if __name__ == "__main__":
