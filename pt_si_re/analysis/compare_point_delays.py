@@ -210,6 +210,10 @@ def compare(scaled, truth):
     for section in ("launch_clock", "data", "capture_clock"):
         summary[section] = metric([
             row["error_ps"] for row in rows if row["section"] == section])
+        for kind in ("cell", "net"):
+            summary[section + "_" + kind] = metric([
+                row["error_ps"] for row in rows
+                if row["section"] == section and row["kind"] == kind])
     return rows, summary
 
 
@@ -262,6 +266,17 @@ def share_line(summary):
             summary["library_cell_mismatches"]))
 
 
+def capture_share_line(summary):
+    return (
+        "CAPTURE_SHARE cell={}/{}/{}ps net={}/{}/{}ps".format(
+            number(summary["capture_clock_cell"]["mae_ps"]),
+            number(summary["capture_clock_cell"]["p95_abs_ps"]),
+            number(summary["capture_clock_cell"]["max_abs_ps"]),
+            number(summary["capture_clock_net"]["mae_ps"]),
+            number(summary["capture_clock_net"]["p95_abs_ps"]),
+            number(summary["capture_clock_net"]["max_abs_ps"])))
+
+
 def write_summary(path, summary, scaled_path, truth_path):
     lines = [
         "PrimeTime point Incr delay comparison",
@@ -280,9 +295,12 @@ def write_summary(path, summary, scaled_path, truth_path):
         metric_line("launch clock", summary["launch_clock"]),
         metric_line("data", summary["data"]),
         metric_line("capture clock", summary["capture_clock"]),
+        metric_line("capture cell", summary["capture_clock_cell"]),
+        metric_line("capture net", summary["capture_clock_net"]),
         "",
         "COPY THIS RESULT",
         share_line(summary),
+        capture_share_line(summary),
     ]
     path.write_text("\n".join(lines) + "\n")
 
@@ -337,6 +355,8 @@ def main():
     print(metric_line("launch clock", summary["launch_clock"]))
     print(metric_line("data", summary["data"]))
     print(metric_line("capture clock", summary["capture_clock"]))
+    print(metric_line("capture cell", summary["capture_clock_cell"]))
+    print(metric_line("capture net", summary["capture_clock_net"]))
     print("matched points : {}".format(summary["matched_points"]))
     print("missing points : {}".format(
         summary["missing_scaled_points"] + summary["missing_ground_truth_points"]))
@@ -345,6 +365,7 @@ def main():
     print("")
     print("=== COPY THIS RESULT ===")
     print(share_line(summary))
+    print(capture_share_line(summary))
 
 
 if __name__ == "__main__":

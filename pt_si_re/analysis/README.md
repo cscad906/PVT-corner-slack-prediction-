@@ -99,6 +99,7 @@ less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt
 직접 추출한 값은 아닙니다. `point_delay_errors.txt`는 absolute error가 큰 순서이고,
 터미널 마지막 `POINT_SHARE` 한 줄에는 회사의 point/path 이름을 넣지 않습니다.
 `cell`, `net`, `data`의 세 숫자는 각각 `MAE/P95/최대 absolute error` 순서입니다.
+`CAPTURE_SHARE`는 capture clock 구간만 다시 cell과 net으로 나눈 결과입니다.
 
 MAE 실행 결과의 `status counts`는 제외 원인을 다음처럼 구분합니다.
 
