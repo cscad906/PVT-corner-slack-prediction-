@@ -72,18 +72,28 @@ SLACK_RE = re.compile(
     r"^\s*slack\s+\((?:MET|VIOLATED)[^)]*\)\s*"
     r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
 )
+ARRIVAL_RE = re.compile(
+    r"^\s*data arrival time\s+"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*$"
+)
+REQUIRED_RE = re.compile(
+    r"^\s*data required time\s+"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*$"
+)
 NS_TO_PS = 1000.0
 
 
 class PathResult(object):
     """One fixed-path result; kept simple for Synopsys Python 3.6."""
 
-    __slots__ = ("idx", "key", "slack")
+    __slots__ = ("idx", "key", "slack", "arrival", "required")
 
-    def __init__(self, idx, key, slack):
+    def __init__(self, idx, key, slack, arrival=None, required=None):
         self.idx = idx
         self.key = key
         self.slack = slack
+        self.arrival = arrival
+        self.required = required
 
 
 def parse_report(path):
@@ -92,14 +102,19 @@ def parse_report(path):
     current_idx = None
     current_key = None
     current_slack = None
+    current_arrival = None
+    current_required = None
 
     def finish():
         nonlocal current_idx, current_key, current_slack
+        nonlocal current_arrival, current_required
         if current_key is None or current_idx is None:
             return
         if current_key in results:
             raise ValueError(f"duplicate path key in {path}: {current_key}")
-        results[current_key] = PathResult(current_idx, current_key, current_slack)
+        results[current_key] = PathResult(
+            current_idx, current_key, current_slack,
+            current_arrival, current_required)
 
     with path.open(errors="ignore") as report:
         for line in report:
@@ -109,11 +124,21 @@ def parse_report(path):
                 current_idx = int(match.group(1))
                 current_key = match.group(2).strip()
                 current_slack = None
+                current_arrival = None
+                current_required = None
                 continue
             if current_key is not None:
                 match = SLACK_RE.match(line)
                 if match:
                     current_slack = float(match.group(1))
+                    continue
+                match = ARRIVAL_RE.match(line)
+                if match:
+                    current_arrival = float(match.group(1))
+                    continue
+                match = REQUIRED_RE.match(line)
+                if match:
+                    current_required = float(match.group(1))
     finish()
     if not results:
         raise ValueError(f"no '### FIXED_PATH idx=... key=...' blocks: {path}")
@@ -131,6 +156,20 @@ def evaluate(scaled, truth, factor):
         gt = truth.get(key)
         pred_ps = None if pred is None or pred.slack is None else pred.slack * factor
         truth_ps = None if gt is None or gt.slack is None else gt.slack * factor
+        pred_arrival_ps = (
+            None if pred is None or pred.arrival is None else pred.arrival * factor)
+        truth_arrival_ps = (
+            None if gt is None or gt.arrival is None else gt.arrival * factor)
+        pred_required_ps = (
+            None if pred is None or pred.required is None else pred.required * factor)
+        truth_required_ps = (
+            None if gt is None or gt.required is None else gt.required * factor)
+        arrival_error = (
+            None if pred_arrival_ps is None or truth_arrival_ps is None
+            else pred_arrival_ps - truth_arrival_ps)
+        required_error = (
+            None if pred_required_ps is None or truth_required_ps is None
+            else pred_required_ps - truth_required_ps)
         if pred_ps is not None and truth_ps is not None:
             error = pred_ps - truth_ps
             errors.append(error)
@@ -157,6 +196,12 @@ def evaluate(scaled, truth, factor):
             "pt_scaling_ps": pred_ps,
             "pt_scaling_err_ps": error,
             "abs_error_ps": None if error is None else abs(error),
+            "ground_truth_arrival_ps": truth_arrival_ps,
+            "pt_scaling_arrival_ps": pred_arrival_ps,
+            "arrival_error_ps": arrival_error,
+            "ground_truth_required_ps": truth_required_ps,
+            "pt_scaling_required_ps": pred_required_ps,
+            "required_error_ps": required_error,
             "status": status,
         })
 
@@ -165,6 +210,12 @@ def evaluate(scaled, truth, factor):
     abs_errors = [abs(value) for value in errors]
     compared_rows = [row for row in rows if row["abs_error_ps"] is not None]
     worst_row = max(compared_rows, key=lambda row: row["abs_error_ps"])
+    arrival_errors = [
+        row["arrival_error_ps"] for row in compared_rows
+        if row["arrival_error_ps"] is not None]
+    required_errors = [
+        row["required_error_ps"] for row in compared_rows
+        if row["required_error_ps"] is not None]
     status_counts = {}
     for row in rows:
         status = row["status"]
@@ -188,6 +239,12 @@ def evaluate(scaled, truth, factor):
         "worst_path_key": worst_row["path_key"],
         "excluded_paths": len(rows) - len(errors),
     }
+    for name, values in (("arrival", arrival_errors), ("required", required_errors)):
+        summary[f"{name}_compared_paths"] = len(values)
+        summary[f"{name}_mae_ps"] = (
+            sum(abs(value) for value in values) / len(values) if values else None)
+        summary[f"{name}_bias_ps"] = (
+            sum(values) / len(values) if values else None)
     return rows, summary
 
 
@@ -209,8 +266,10 @@ def write_path_text(path, rows):
         output.write("# Input slack unit: ns; all values below: ps\n")
         output.write("# Order: abs_error descending; unresolved/missing paths last\n")
         output.write(
-            f"{'idx':>7} {'ground_truth':>15} {'pt_scaling':>15} "
-            f"{'signed_error':>15} {'abs_error':>15} {'status':<29} path_key\n"
+            f"{'idx':>7} {'gt_slack':>15} {'pt_slack':>15} "
+            f"{'slack_err':>15} {'abs_err':>15} "
+            f"{'arrival_err':>13} {'required_err':>13} "
+            f"{'status':<29} path_key\n"
         )
         for row in ordered_rows:
             output.write(
@@ -219,6 +278,8 @@ def write_path_text(path, rows):
                 f"{format_number(row['pt_scaling_ps']):>15} "
                 f"{format_number(row['pt_scaling_err_ps']):>15} "
                 f"{format_number(row['abs_error_ps']):>15} "
+                f"{format_number(row['arrival_error_ps']):>13} "
+                f"{format_number(row['required_error_ps']):>13} "
                 f"{row['status']:<29} {row['path_key']}\n"
             )
 
@@ -242,11 +303,37 @@ def write_summary_text(path, summary):
         f"bias                : {summary['bias_ps']:+.6f} ps",
         f"worst absolute error: {summary['worst_abs_error_ps']:.6f} ps",
         f"worst path key      : {summary['worst_path_key']}",
+        component_line("arrival", summary),
+        component_line("required", summary),
         "status counts:",
     ]
     for status, count in sorted(summary["status_counts"].items()):
         lines.append(f"  {status:<29} {count}")
+    if summary.get("scaling_input_plan"):
+        lines.extend([
+            "",
+            "Scaling inputs used by PrimeTime",
+            summary["scaling_input_plan"].rstrip("\n"),
+        ])
+    else:
+        lines.extend([
+            "",
+            "Scaling inputs used by PrimeTime",
+            "unavailable: adjacent <scaled-report>.inputs.txt was not found",
+        ])
     path.write_text("\n".join(lines) + "\n")
+
+
+def component_line(name, summary):
+    """Format arrival/required diagnostics when both reports contain them."""
+    count = summary[f"{name}_compared_paths"]
+    mae = summary[f"{name}_mae_ps"]
+    bias = summary[f"{name}_bias_ps"]
+    if not count:
+        return f"{name + ' diagnostic':<21}: unavailable in timing report"
+    return (
+        f"{name + ' diagnostic':<21}: paths={count} "
+        f"MAE={mae:.6f} ps bias={bias:+.6f} ps")
 
 
 def safe_corner_name(report_path):
@@ -291,6 +378,13 @@ def main():
         "scaled_report": str(args.scaled_rpt.resolve()),
         "ground_truth_report": str(args.ground_truth_rpt.resolve()),
     })
+    scaling_inputs_path = Path(str(args.scaled_rpt) + ".inputs.txt")
+    if scaling_inputs_path.is_file():
+        summary["scaling_input_plan_path"] = str(scaling_inputs_path.resolve())
+        summary["scaling_input_plan"] = scaling_inputs_path.read_text(errors="ignore")
+    else:
+        summary["scaling_input_plan_path"] = None
+        summary["scaling_input_plan"] = None
 
     corner_name = safe_corner_name(args.ground_truth_rpt)
     result_dir = create_result_dir(args.output_dir, corner_name)
@@ -313,6 +407,12 @@ def main():
     print(f"RMSE           : {summary['rmse_ps']:.3f} ps")
     print(f"bias           : {summary['bias_ps']:+.3f} ps")
     print(f"worst          : {summary['worst_abs_error_ps']:.3f} ps")
+    print(component_line("arrival", summary))
+    print(component_line("required", summary))
+    if summary["scaling_input_plan_path"]:
+        print(f"scaling inputs : {summary['scaling_input_plan_path']}")
+    else:
+        print("scaling inputs : unavailable (older scaling report)")
     print("worst paths    :")
     compared_rows = [row for row in rows if row["abs_error_ps"] is not None]
     for rank, row in enumerate(

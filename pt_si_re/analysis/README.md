@@ -37,6 +37,18 @@ python3 analysis/recover_fixed_paths_from_ground_truth.py ground_truth.rpt
 unresolved/missing path는 파일 마지막에 둡니다. 터미널에는 전체 내용을
 쏟아내지 않고 absolute error가 큰 상위 10개 path만 출력합니다.
 
+timing report에 `data arrival time`과 `data required time`이 있으면 각 항목의
+scaling-GT 오차도 함께 기록합니다. `arrival diagnostic`이 크면 launch clock과
+data path의 library/scaling/SI 조건을 먼저 확인하고, `required diagnostic`이 크면
+capture clock path, uncertainty, derate와 constraint 조건을 먼저 확인합니다.
+비교 프로그램이 정상 종료된 것만으로 두 PrimeTime session의 분석 조건이 같다고
+판정할 수는 없습니다.
+
+새 scaling report 옆에 `<scaled-report>.inputs.txt`가 있으면 그 내용을
+`summary.txt`의 `Scaling inputs used by PrimeTime` 아래에도 복사합니다. 따라서
+MAE와 함께 각 library family가 사용한 입력 P/V/T/DB와 target을 한 파일에서
+확인할 수 있습니다.
+
 ```bash
 cat results/pt_scaling_comparison/<target-corner>/summary.txt
 less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt

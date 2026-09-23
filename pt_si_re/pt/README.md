@@ -305,6 +305,7 @@ restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt
 |---|---|
 | `.rpt` | fixed path별 PT scaling timing report와 slack |
 | `.rpt.missing` | 찾지 못했거나 timing이 완성되지 않은 fixed path |
+| `.rpt.inputs.txt` | family별 실제 입력 P/V/T/DB와 목표 코너의 사람이 읽기 쉬운 요약 |
 | `.rpt.selection.tcl` | 선택된 library family와 scaling 입력 기록 |
 | `.rpt.libgroups.before` | 실행 전 scaling group |
 | `.rpt.libgroups` | 실행에 사용한 scaling group |
@@ -320,6 +321,17 @@ grep -n "Scaling libraries used" /company/work/pt_scaling_eval/scaling_output/*.
 Tcl도 `.dcalc`에서 이 두 오류 또는 외삽 취소 문구를 발견하면 완료 처리하지 않고
 중단합니다. PrimeTime은 외삽 실패 뒤에도 `Scaling libraries used` 목록을 표시할
 수 있으므로, 목록 존재 여부만으로 성공을 판단하면 안 됩니다.
+
+어떤 두 점 또는 네 점을 사용해 target을 계산했는지는 다음처럼 확인합니다.
+
+```bash
+cat /company/work/pt_scaling_eval/scaling_output/*.rpt.inputs.txt
+```
+
+각 family 아래에 `INPUT 1`, `INPUT 2`와 필요하면 `INPUT 3`, `INPUT 4`가
+process/voltage/temperature/DB 경로와 함께 표시되고, 마지막
+`INTERPOLATION ... -> target=...` 줄에 목표점이 표시됩니다. 실제 target DB가
+로드되어 있었으면 leave-one-out을 증명하기 위해 `EXCLUDED_TARGET`에도 기록됩니다.
 
 ```bash
 grep -nE "SLG-320|DEL-012|Error:|Fatal:" \

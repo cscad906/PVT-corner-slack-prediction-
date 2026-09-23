@@ -815,10 +815,10 @@ proc auto_scaling::plan {cfg} {
             puts "  TARGET LIBRARY: absent"
         }
         foreach row [dict get $group excluded] {
-            puts "  EXCLUDED TARGET: [dict get $row file]"
+            puts "  EXCLUDED TARGET: process=[dict get $row process] voltage=[dict get $row v] V temperature=[dict get $row t] C DB=[dict get $row file]"
         }
         foreach row [dict get $group selected] {
-            puts "  SCALING INPUT: [dict get $row file]"
+            puts "  SCALING INPUT: process=[dict get $row process] voltage=[dict get $row v] V temperature=[dict get $row t] C DB=[dict get $row file]"
         }
     }
     if {[dict exists $result fixed]} {
@@ -1077,6 +1077,46 @@ proc auto_scaling::write_text {path contents} {
     close $fp
 }
 
+proc auto_scaling::scaling_inputs_text {plan} {
+    set lines {}
+    lappend lines "PrimeTime scaling input plan"
+    lappend lines [format "TARGET process=%s voltage=%s V temperature=%s C beol=%s axis=%s" \
+        [dict get $plan process] [dict get $plan v] [dict get $plan t] \
+        [dict get $plan beol] [dict get $plan mode]]
+    lappend lines "NOTE BEOL is the restored parasitic corner; it is not interpolated."
+    foreach group [dict get $plan groups] {
+        lappend lines [format "FAMILY %s mode=%s" \
+            [dict get $group family] [dict get $group mode]]
+        set input_index 0
+        foreach row [dict get $group selected] {
+            incr input_index
+            lappend lines [format "  INPUT %d process=%s voltage=%s V temperature=%s C lib=%s" \
+                $input_index [dict get $row process] [dict get $row v] \
+                [dict get $row t] [dict get $row lib_name]]
+            lappend lines "    DB=[dict get $row file]"
+        }
+        if {![llength [dict get $group excluded]]} {
+            lappend lines "  EXCLUDED_TARGET absent"
+        } else {
+            foreach row [dict get $group excluded] {
+                lappend lines [format "  EXCLUDED_TARGET process=%s voltage=%s V temperature=%s C lib=%s" \
+                    [dict get $row process] [dict get $row v] [dict get $row t] \
+                    [dict get $row lib_name]]
+                lappend lines "    DB=[dict get $row file]"
+            }
+        }
+        lappend lines [format "  INTERPOLATION inputs=%d -> target=%s V/%s C" \
+            [llength [dict get $group selected]] [dict get $plan v] [dict get $plan t]]
+    }
+    foreach family [dict get $plan static_sets] {
+        lappend lines "STATIC_UNSCALED family=$family"
+    }
+    foreach lib [dict get $plan unclassified_used] {
+        lappend lines "UNCLASSIFIED_UNSCALED lib=$lib"
+    }
+    return "[join $lines \n]\n"
+}
+
 proc auto_scaling::fixed_path_cells {fixed} {
     if {[dict exists $fixed cell_names]} {
         set cached [get_cells -quiet -exact [dict get $fixed cell_names]]
@@ -1286,12 +1326,15 @@ proc auto_scaling::run_after_restore {cfg} {
 
     set original_out [file normalize [dict get $cfg out_rpt]]
     set out [file join [file dirname $original_out] "restored_[file tail $original_out]"]
-    foreach suffix {"" .missing .selection.tcl .libgroups.before .libgroups .dcalc} {
+    foreach suffix {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc} {
         if {[file exists ${out}${suffix}]} {
             error "Output already exists: ${out}${suffix}. 기존 결과를 보존하기 위해 덮어쓰지 않습니다."
         }
     }
     file mkdir [file dirname $out]
+    set inputs_text [scaling_inputs_text $plan]
+    write_text ${out}.inputs.txt $inputs_text
+    puts $inputs_text
     phase_done PLAN_DESIGN_LIBRARIES $phase_started
 
     set rail [lindex [dict get $cfg scaling_power_nets] 0]
