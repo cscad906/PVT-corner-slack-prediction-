@@ -49,6 +49,12 @@ capture/constraint 조건 차이를 조사합니다.
 비교 프로그램이 정상 종료된 것만으로 두 PrimeTime session의 분석 조건이 같다고
 판정할 수는 없습니다.
 
+`launch clock edge`, `capture clock edge`는 두 report가 사용한 clock edge time을
+비교합니다. 이 MAE가 clock period에 가까우면 서로 다른 cycle/edge 또는 다른
+constraint/session을 비교한 것입니다. `identity_mismatches`, `path-group
+mismatches`, `path-type mismatches`는 모두 0이어야 합니다. Edge와 group은 같은데
+required 오차만 크면 capture clock-tree의 scaling 범위를 우선 확인합니다.
+
 일부 report에 `data required time` 줄이 없으면 `Path Type: max|min`과 path별
 slack/arrival 관계식으로 required 오차를 유도합니다. `path_errors.txt`의
 `req_source`가 `direct`, `derived_setup`, `derived_hold` 중 어느 방식인지
