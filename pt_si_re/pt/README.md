@@ -96,7 +96,7 @@ library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rai
 다른 rail 전압은 family 구분값으로 유지하므로, 보조 전압이 다른 library를 같은
 scaling group에 섞지 않습니다.
 
-네 power rail의 역할은 Tcl의 `USER SETTINGS`에 명시합니다. 레벨시프터 입력 전 rail과
+네 power rail의 역할은 `auto_scaling::run` 옵션에 명시합니다. 레벨시프터 입력 전 rail과
 memory rail은 fixed, 나머지 두 rail은 scaling 대상으로 둡니다. 스크립트는
 fixed-path cell의 `type=primary_power` PG pin과 실제 `supply_connection`을 확인한 뒤,
 scaling rail에 연결된 PG pin만 `set_voltage -cell ... -pg_pin_name ...`으로 변경합니다.
@@ -306,6 +306,7 @@ restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt
 | `.rpt` | fixed path별 PT scaling timing report와 slack |
 | `.rpt.missing` | 찾지 못했거나 timing이 완성되지 않은 fixed path |
 | `.rpt.inputs.txt` | family별 실제 입력 P/V/T/DB와 목표 코너의 사람이 읽기 쉬운 요약 |
+| `.rpt.log` | terminal에 표시된 scaling 실행 과정과 오류를 함께 저장한 log |
 | `.rpt.selection.tcl` | 선택된 library family와 scaling 입력 기록 |
 | `.rpt.libgroups.before` | 실행 전 scaling group |
 | `.rpt.libgroups` | 실행에 사용한 scaling group |
@@ -470,17 +471,6 @@ column -s, -t \
 `unresolved_paths`가 예상 개수인지 확인합니다.
 
 ## 11. 자주 발생하는 오류
-
-현재 restore session의 clock period/waveform과 active scenario는 scaling 결과 옆의
-`<result>.rpt.clocks`에 자동 저장됩니다. 기존 실행에는 이 파일이 없으므로 session이
-아직 열려 있으면 Tcl을 다시 source한 뒤 scaling을 재실행하지 않고 다음처럼
-snapshot만 저장할 수 있습니다.
-
-```tcl
-auto_scaling::save_clock_snapshot /absolute/path/scaling_clock_snapshot.rpt
-```
-
-이 명령은 timing 상태를 변경하지 않습니다.
 
 | 메시지 또는 증상 | 원인 | 조치 |
 |---|---|---|
