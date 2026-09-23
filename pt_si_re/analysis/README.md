@@ -44,6 +44,12 @@ capture clock path, uncertainty, derate와 constraint 조건을 먼저 확인합
 비교 프로그램이 정상 종료된 것만으로 두 PrimeTime session의 분석 조건이 같다고
 판정할 수는 없습니다.
 
+일부 report에 `data required time` 줄이 없으면 `Path Type: max|min`과 path별
+slack/arrival 관계식으로 required 오차를 유도합니다. `path_errors.txt`의
+`req_source`가 `direct`, `derived_setup`, `derived_hold` 중 어느 방식인지
+표시합니다. report에 `Path Type`도 없으면 실행할 때 `--analysis setup` 또는
+`--analysis hold`를 지정합니다.
+
 새 scaling report 옆에 `<scaled-report>.inputs.txt`가 있으면 그 내용을
 `summary.txt`의 `Scaling inputs used by PrimeTime` 아래에도 복사합니다. 따라서
 MAE와 함께 각 library family가 사용한 입력 P/V/T/DB와 target을 한 파일에서

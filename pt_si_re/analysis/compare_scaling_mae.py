@@ -72,28 +72,33 @@ SLACK_RE = re.compile(
     r"^\s*slack\s+\((?:MET|VIOLATED)[^)]*\)\s*"
     r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
 )
-ARRIVAL_RE = re.compile(
-    r"^\s*data arrival time\s+"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*$"
-)
-REQUIRED_RE = re.compile(
-    r"^\s*data required time\s+"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*$"
-)
+NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+ARRIVAL_RE = re.compile(r"^\s*data\s+arrival\s+time\b(.*)$", re.IGNORECASE)
+REQUIRED_RE = re.compile(r"^\s*data\s+required\s+time\b(.*)$", re.IGNORECASE)
+PATH_TYPE_RE = re.compile(r"^\s*Path\s+Type\s*:\s*(max|min)\b", re.IGNORECASE)
 NS_TO_PS = 1000.0
 
 
 class PathResult(object):
     """One fixed-path result; kept simple for Synopsys Python 3.6."""
 
-    __slots__ = ("idx", "key", "slack", "arrival", "required")
+    __slots__ = ("idx", "key", "slack", "arrival", "required", "path_type")
 
-    def __init__(self, idx, key, slack, arrival=None, required=None):
+    def __init__(self, idx, key, slack, arrival=None, required=None, path_type=None):
         self.idx = idx
         self.key = key
         self.slack = slack
         self.arrival = arrival
         self.required = required
+        self.path_type = path_type
+
+
+def labeled_number(match):
+    """Return the first number after a matched timing-report row label."""
+    if not match:
+        return None
+    number = NUMBER_RE.search(match.group(1))
+    return None if number is None else float(number.group(0))
 
 
 def parse_report(path):
@@ -104,17 +109,19 @@ def parse_report(path):
     current_slack = None
     current_arrival = None
     current_required = None
+    current_path_type = None
 
     def finish():
         nonlocal current_idx, current_key, current_slack
         nonlocal current_arrival, current_required
+        nonlocal current_path_type
         if current_key is None or current_idx is None:
             return
         if current_key in results:
             raise ValueError(f"duplicate path key in {path}: {current_key}")
         results[current_key] = PathResult(
             current_idx, current_key, current_slack,
-            current_arrival, current_required)
+            current_arrival, current_required, current_path_type)
 
     with path.open(errors="ignore") as report:
         for line in report:
@@ -126,26 +133,35 @@ def parse_report(path):
                 current_slack = None
                 current_arrival = None
                 current_required = None
+                current_path_type = None
                 continue
             if current_key is not None:
+                match = PATH_TYPE_RE.match(line)
+                if match:
+                    current_path_type = match.group(1).lower()
+                    continue
                 match = SLACK_RE.match(line)
                 if match:
                     current_slack = float(match.group(1))
                     continue
                 match = ARRIVAL_RE.match(line)
-                if match:
-                    current_arrival = float(match.group(1))
+                value = labeled_number(match)
+                # A full-clock report repeats arrival later with a negated value
+                # while forming slack. The first row is the real arrival time.
+                if value is not None and current_arrival is None:
+                    current_arrival = value
                     continue
                 match = REQUIRED_RE.match(line)
-                if match:
-                    current_required = float(match.group(1))
+                value = labeled_number(match)
+                if value is not None and current_required is None:
+                    current_required = value
     finish()
     if not results:
         raise ValueError(f"no '### FIXED_PATH idx=... key=...' blocks: {path}")
     return results
 
 
-def evaluate(scaled, truth, factor):
+def evaluate(scaled, truth, factor, requested_analysis=None):
     rows = []
     errors = []
     scaled_resolved = sum(item.slack is not None for item in scaled.values())
@@ -170,6 +186,7 @@ def evaluate(scaled, truth, factor):
         required_error = (
             None if pred_required_ps is None or truth_required_ps is None
             else pred_required_ps - truth_required_ps)
+        required_source = "direct" if required_error is not None else "unavailable"
         if pred_ps is not None and truth_ps is not None:
             error = pred_ps - truth_ps
             errors.append(error)
@@ -189,6 +206,22 @@ def evaluate(scaled, truth, factor):
         else:
             error = None
             status = "unresolved_ground_truth_path"
+        analysis = requested_analysis
+        if analysis is None:
+            path_types = {
+                item.path_type for item in (pred, gt)
+                if item is not None and item.path_type is not None}
+            if len(path_types) == 1:
+                analysis = "setup" if next(iter(path_types)) == "max" else "hold"
+        if (required_error is None and error is not None and
+                arrival_error is not None and analysis in ("setup", "hold")):
+            if analysis == "setup":
+                # setup slack = required - arrival
+                required_error = error + arrival_error
+            else:
+                # hold slack = arrival - required
+                required_error = arrival_error - error
+            required_source = "derived_" + analysis
         rows.append({
             "idx": gt.idx if gt is not None else pred.idx,
             "path_key": key,
@@ -202,6 +235,7 @@ def evaluate(scaled, truth, factor):
             "ground_truth_required_ps": truth_required_ps,
             "pt_scaling_required_ps": pred_required_ps,
             "required_error_ps": required_error,
+            "required_error_source": required_source,
             "status": status,
         })
 
@@ -216,6 +250,10 @@ def evaluate(scaled, truth, factor):
     required_errors = [
         row["required_error_ps"] for row in compared_rows
         if row["required_error_ps"] is not None]
+    required_source_counts = {}
+    for row in compared_rows:
+        source = row["required_error_source"]
+        required_source_counts[source] = required_source_counts.get(source, 0) + 1
     status_counts = {}
     for row in rows:
         status = row["status"]
@@ -238,6 +276,7 @@ def evaluate(scaled, truth, factor):
         "worst_abs_error_ps": max(abs_errors),
         "worst_path_key": worst_row["path_key"],
         "excluded_paths": len(rows) - len(errors),
+        "required_source_counts": required_source_counts,
     }
     for name, values in (("arrival", arrival_errors), ("required", required_errors)):
         summary[f"{name}_compared_paths"] = len(values)
@@ -269,7 +308,7 @@ def write_path_text(path, rows):
             f"{'idx':>7} {'gt_slack':>15} {'pt_slack':>15} "
             f"{'slack_err':>15} {'abs_err':>15} "
             f"{'arrival_err':>13} {'required_err':>13} "
-            f"{'status':<29} path_key\n"
+            f"{'req_source':<13} {'status':<29} path_key\n"
         )
         for row in ordered_rows:
             output.write(
@@ -280,6 +319,7 @@ def write_path_text(path, rows):
                 f"{format_number(row['abs_error_ps']):>15} "
                 f"{format_number(row['arrival_error_ps']):>13} "
                 f"{format_number(row['required_error_ps']):>13} "
+                f"{row['required_error_source']:<13} "
                 f"{row['status']:<29} {row['path_key']}\n"
             )
 
@@ -331,9 +371,15 @@ def component_line(name, summary):
     bias = summary[f"{name}_bias_ps"]
     if not count:
         return f"{name + ' diagnostic':<21}: unavailable in timing report"
+    suffix = ""
+    if name == "required":
+        sources = ", ".join(
+            f"{key}={value}" for key, value in
+            sorted(summary["required_source_counts"].items()))
+        suffix = f" ({sources})"
     return (
         f"{name + ' diagnostic':<21}: paths={count} "
-        f"MAE={mae:.6f} ps bias={bias:+.6f} ps")
+        f"MAE={mae:.6f} ps bias={bias:+.6f} ps{suffix}")
 
 
 def safe_corner_name(report_path):
@@ -363,6 +409,8 @@ def main():
     parser.add_argument("ground_truth_rpt", type=Path, help="\uc2e4\uc81c target library\ub85c \uce21\uc815\ud55c fixed-path .rpt")
     parser.add_argument("--output-dir", type=Path, default=Path("pt_scaling_comparison"),
                         help="\ucf54\ub108\ubcc4 \uacb0\uacfc\ub97c \uc800\uc7a5\ud560 \uc0c1\uc704 \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
+    parser.add_argument("--analysis", choices=("setup", "hold"), default=None,
+                        help="Path Type row\uac00 \uc5c6\uc744 \ub54c required-time \uc624\ucc28 \uc720\ub3c4\uc5d0 \uc0ac\uc6a9")
     args = parser.parse_args()
 
     for path in (args.scaled_rpt, args.ground_truth_rpt):
@@ -371,7 +419,7 @@ def main():
 
     scaled = parse_report(args.scaled_rpt)
     truth = parse_report(args.ground_truth_rpt)
-    rows, summary = evaluate(scaled, truth, NS_TO_PS)
+    rows, summary = evaluate(scaled, truth, NS_TO_PS, args.analysis)
     summary.update({
         "input_unit": "ns",
         "output_unit": "ps",
