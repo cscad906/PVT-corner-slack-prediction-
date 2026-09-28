@@ -39,10 +39,12 @@ Hold 결과 실행 방법
 
         cat  mfc_scaling_comparison/*/summary.txt
         less -S mfc_scaling_comparison/*/path_errors.txt
+        less -S mfc_scaling_comparison/*/path_diagnostics.txt
 
     summary.txt
-        MAE/RMSE/bias, 비교 및 제외 path 수, arrival/required 진단,
-        실제 scaling 입력 P/V/T/DB 정보를 보여 준다.
+        MAE/RMSE/bias, 최대 절대오차, fixed-path WNS와 WNS 오차율,
+        비교 및 제외 path 수, arrival/required 진단, 실제 scaling 입력 P/V/T/DB
+        정보를 보여 준다. WNS 지표는 터미널과 summary.json에도 함께 출력된다.
 
     별도 grep 없이 터미널과 summary.txt의 CLOCK VALIDATION을 확인한다.
         PASS    : 두 report의 clock 이름/edge/cycle 및 path 조건이 일치함
@@ -54,10 +56,45 @@ Hold 결과 실행 방법
         path별 GT slack, scaling slack, signed/absolute error,
         arrival/required error를 absolute error가 큰 순서로 보여 준다.
 
+
+    path_diagnostics.txt
+        같은 실행으로 자동 생성되는 경로별 상세 진단이다. GT 세션 접근이나
+        PrimeTime 재실행은 필요 없으며, 기존 두 timing report만 사용한다.
+        launch clock/data/capture clock의 Incr 누적값과 uncertainty, CPPR,
+        setup/hold 항목을 GT, scaling, signed error 순서로 표시한다.
+        slack absolute error가 큰 경로부터 정렬하며, 양쪽 WNS 경로는 summary의
+        idx/key로 찾는다. 리포트에 없는 항목은 N/A이며 측정된 0과 구분한다.
+        launch/capture 구분에는 full_clock_expanded 및 input pin 정보가 필요하다.
+
+        EXPLAINED   : 리포트 항목 합산으로 arrival/required를 반올림 범위 내 설명함
+        REVIEW      : 핀 순서/전이/셀 구성 차이, 미해석 행 또는 잔여 오차가 있음
+        UNAVAILABLE : timing point의 Incr를 읽을 수 없어 상세 분해 불가
+        EXCLUDED    : 양쪽에서 slack을 읽을 수 없어 기존 비교에서 제외됨
+
+        EXPLAINED는 GT와 scaling 세션 설정이 같다는 뜻이 아니다. 기존
+        CLOCK VALIDATION도 함께 확인한다. *_unexplained_error_ps는 알려진
+        항목으로 설명하지 못한 차이이며, POCV나 SDC 문제라고 단정하지 않는다.
+        *_residual_ps는 각각의 리포트 자체에서 합산되지 않은 나머지다.
+        수치는 6자리 ns 보고서의 반올림 오차를 고려하되 원시 잔여값도 표시한다.
+
 결과 해석
     error = PT scaling slack - ground-truth slack
     MAE   = path별 absolute error 평균
     bias  = signed error 평균. 양수면 scaling slack이 GT보다 크게 나온 것이다.
+
+    Fixed-path WNS는 양쪽 report에서 slack을 읽을 수 있는 동일 path 집합의
+    최소 slack이다. 디자인 전체 WNS가 아니며, 모든 slack이 양수이면 양수의
+    최소값을 그대로 표시한다. 누락/미해결 path는 양쪽 WNS 계산에서 제외한다.
+    PT와 GT의 최악 path는 서로 다를 수 있으므로 각각의 idx/key도 표시한다.
+
+        WNS error          = PT scaling WNS - GT WNS
+        WNS absolute error = |WNS error|
+        WNS error (%)      = |WNS error| / |GT WNS| * 100
+
+    GT WNS가 0이면 오차율은 N/A이며 summary.json에서는 null이다.
+    제외 path가 있으면 WNS도 비교 가능한 부분 집합의 결과로 해석해야 한다.
+    CLOCK VALIDATION의 INVALID/REVIEW 상태는 WNS 비교에도 동일하게 적용된다.
+    실행 명령은 기존과 같고, 저장된 report만 있으면 PT를 다시 돌릴 필요가 없다.
 
     Setup에서는 path마다 다음 관계가 성립한다.
 
@@ -102,6 +139,7 @@ Scaling에 사용한 입력 DB 확인
 """
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -124,17 +162,362 @@ NS_TO_PS = 1000.0
 CLOCK_EDGE_TOLERANCE_PS = 0.001
 
 
+# Report-only diagnostics. No PrimeTime session or external package is required.
+STARTPOINT_RE = re.compile(r"^\s*Startpoint:\s*(.+?)(?:\s+\(|\s*$)")
+DIAG_POINT_RE = re.compile(r"^\s*(.*?)\s+\(([^()]*)\)\s*(?:<-)?\s*(.*)$")
+DIAG_SECTIONS = ("launch_clock", "data", "capture_clock")
+DIAG_TERMS = (
+    "launch_clock_cell", "launch_clock_net", "launch_clock_port",
+    "launch_clock_source_latency", "launch_clock_network_delay",
+    "data_cell", "data_net", "data_port", "input_external_delay",
+    "capture_clock_cell", "capture_clock_net", "capture_clock_port",
+    "capture_clock_source_latency", "capture_clock_network_delay",
+    "clock_reconvergence_pessimism", "clock_uncertainty",
+    "library_setup_time", "library_hold_time", "output_external_delay",
+)
+DIAG_ADJUSTMENTS = (
+    (re.compile(r"^\s*clock source latency\b(.*)$", re.I), "source_latency"),
+    (re.compile(r"^\s*clock network delay(?:\s*\([^)]*\))?\s+(.*)$", re.I), "network_delay"),
+    (re.compile(r"^\s*input external delay\b(.*)$", re.I), "input_external_delay"),
+    (re.compile(r"^\s*output external delay\b(.*)$", re.I), "output_external_delay"),
+    (re.compile(r"^\s*clock reconvergence pessimism\b(.*)$", re.I), "clock_reconvergence_pessimism"),
+    (re.compile(r"^\s*clock uncertainty\b(.*)$", re.I), "clock_uncertainty"),
+    (re.compile(r"^\s*library setup time\b(.*)$", re.I), "library_setup_time"),
+    (re.compile(r"^\s*library hold time\b(.*)$", re.I), "library_hold_time"),
+)
+DIAG_ARRIVAL_TERMS = DIAG_TERMS[:9]
+DIAG_REQUIRED_TERMS = DIAG_TERMS[9:]
+
+
+class ReportBreakdown(object):
+    """Accumulate Incr sums and sequence fingerprints, without storing every point."""
+
+    def __init__(self):
+        self.section = "launch_clock"
+        self.startpoint = None
+        self.previous_instance = None
+        self.arrival_seen = False
+        self.finished = False
+        self.incr_bounds = None
+        self.components = {}
+        self.point_counts = dict.fromkeys(DIAG_SECTIONS, 0)
+        self.point_hashes = {key: hashlib.sha256() for key in DIAG_SECTIONS}
+        self.library_hashes = {key: hashlib.sha256() for key in DIAG_SECTIONS}
+        self.unparsed_point_rows = 0
+        self.adjustment_rows = 0
+        self.data_boundary_seen = False
+
+    def add(self, name, value):
+        self.components[name] = self.components.get(name, 0.0) + value
+
+    def consume(self, raw_line):
+        line = raw_line.expandtabs()
+        match = STARTPOINT_RE.match(line)
+        if match:
+            self.startpoint = match.group(1).strip()
+        if ARRIVAL_RE.match(line) and not self.arrival_seen:
+            self.arrival_seen = True
+            self.section = "capture_clock"
+            self.previous_instance = None
+            return
+        if REQUIRED_RE.match(line):
+            self.finished = True
+        if self.finished:
+            return
+        if "Point" in line and "Incr" in line and "Path" in line:
+            labels = list(re.finditer(r"\b[A-Za-z][A-Za-z0-9_]*\b", line))
+            pos = next(i for i, label in enumerate(labels) if label.group() == "Incr")
+            center = lambda label: (label.start() + label.end()) / 2.0
+            self.incr_bounds = (
+                (center(labels[pos - 1]) + center(labels[pos])) / 2.0,
+                (center(labels[pos]) + center(labels[pos + 1])) / 2.0)
+            return
+        if CLOCK_EDGE_RE.match(line):
+            # Ideal edge/cycle is a separate term, not a cell/net increment.
+            return
+        for pattern, name in DIAG_ADJUSTMENTS:
+            match = pattern.match(line)
+            if match:
+                value = labeled_number(match)
+                if value is not None:
+                    if name in ("source_latency", "network_delay"):
+                        name = self.section + "_" + name
+                    if name == "input_external_delay":
+                        self.section = "data"
+                        self.data_boundary_seen = True
+                    self.add(name, value)
+                    self.adjustment_rows += 1
+                return
+        match = DIAG_POINT_RE.match(line)
+        if match is None or self.incr_bounds is None:
+            return
+        point, library_cell, tail = match.groups()
+        point = point.strip()
+        library_kind = library_cell.lower()
+        if library_kind == "net":
+            self.previous_instance = None
+        numbers = [m for m in NUMBER_RE.finditer(line, match.start(3))
+                   if self.incr_bounds[0] <= (m.start() + m.end()) / 2.0 < self.incr_bounds[1]]
+        if len(numbers) != 1:
+            # Net-only rows normally have Cap/RC columns and no Incr; do not read RC as delay.
+            if library_kind not in ("net", "in", "out"):
+                self.unparsed_point_rows += 1
+            return
+        increment = float(numbers[0].group())
+        instance = point.rsplit("/", 1)[0] if "/" in point else point
+        if self.section != "capture_clock" and (
+                "<-" in line or
+                (self.startpoint is not None and instance == self.startpoint and
+                 (self.previous_instance == instance or library_kind in ("in", "out")))):
+            self.section = "data"
+            self.data_boundary_seen = True
+        kind = ("port" if library_kind in ("in", "out") else
+                "net" if library_kind == "net" or self.previous_instance != instance else "cell")
+        self.add(self.section + "_" + kind, increment)
+        transition = re.search(r"(?:^|\s)([rf])\s*$", tail)
+        identity = (point, kind, None if transition is None else transition.group(1))
+        self.point_hashes[self.section].update(json.dumps(identity).encode("utf-8") + b"\n")
+        self.library_hashes[self.section].update(json.dumps(library_cell).encode("utf-8") + b"\n")
+        self.point_counts[self.section] += 1
+        self.previous_instance = instance if library_kind != "net" else None
+
+    def result(self):
+        return {
+            "components_ns": self.components,
+            "point_counts": self.point_counts,
+            "point_signatures": {key: value.hexdigest() for key, value in self.point_hashes.items()},
+            "library_signatures": {key: value.hexdigest() for key, value in self.library_hashes.items()},
+            "unparsed_point_rows": self.unparsed_point_rows,
+            "adjustment_rows": self.adjustment_rows,
+            "data_boundary_seen": self.data_boundary_seen,
+        }
+
+
+def diagnostic_metric(values):
+    if not values:
+        return {"count": 0, "mae_ps": None, "bias_ps": None, "max_abs_ps": None}
+    return {"count": len(values), "mae_ps": sum(abs(v) for v in values) / len(values),
+            "bias_ps": sum(values) / len(values), "max_abs_ps": max(abs(v) for v in values)}
+
+
+def diagnose_paths(rows, scaled, truth, requested_analysis=None):
+    """Explain reported errors using signed per-path sums, keeping unknown terms visible."""
+    status_counts = {}
+    for row in rows:
+        if row["status"] != "compared":
+            row["diagnostic"] = {"status": "EXCLUDED", "reasons": [row["status"]]}
+            status_counts["EXCLUDED"] = status_counts.get("EXCLUDED", 0) + 1
+            continue
+        pred, gt = scaled[row["path_key"]], truth[row["path_key"]]
+        pd, gd = pred.breakdown, gt.breakdown
+        components = {}
+        for term in DIAG_TERMS:
+            values = [d["components_ns"].get(term) for d in (pd, gd)]
+            pt_value, gt_value = [None if value is None else value * NS_TO_PS for value in values]
+            components[term] = {"scaled_ps": pt_value, "ground_truth_ps": gt_value,
+                                "error_ps": None if None in (pt_value, gt_value) else pt_value - gt_value}
+        for name in ("launch", "capture"):
+            clocks = (getattr(pred, name + "_clock"), getattr(gt, name + "_clock"))
+            pt_value, gt_value = [None if clock is None else clock[2] * NS_TO_PS for clock in clocks]
+            components[name + "_edge"] = {
+                "scaled_ps": pt_value, "ground_truth_ps": gt_value,
+                "error_ps": row[name + "_edge_error_ps"]}
+        # Missing terms are N/A. A known-terms sum is partial and its remainder is explicit.
+        known = {}
+        for section, terms, edge in (("arrival", DIAG_ARRIVAL_TERMS, "launch_edge"),
+                                     ("required", DIAG_REQUIRED_TERMS, "capture_edge")):
+            known[section] = {}
+            for side in ("scaled_ps", "ground_truth_ps"):
+                edge_value = components[edge][side]
+                known[section][side] = (None if edge_value is None else edge_value +
+                    sum(components[term][side] for term in terms if components[term][side] is not None))
+        path_types = {item.path_type for item in (pred, gt) if item.path_type is not None}
+        analysis = requested_analysis
+        if analysis is None and len(path_types) == 1:
+            analysis = "setup" if next(iter(path_types)) == "max" else "hold"
+        diagnostics = {"components": components, "reasons": [], "analysis": analysis,
+                       "scaled_point_counts": pd["point_counts"], "ground_truth_point_counts": gd["point_counts"]}
+        reasons = diagnostics["reasons"]
+        for term, component in components.items():
+            if (component["scaled_ps"] is None) != (component["ground_truth_ps"] is None):
+                reasons.append(term + " unavailable in one report")
+        all_points = sum(pd["point_counts"].values()) + sum(gd["point_counts"].values())
+        # The scaling report prints 6 decimal places in ns (0.001 ps per row).
+        # Include both reports' rows and adjustment rows; raw remainders are always output.
+        tolerance = max(0.05, 0.001 * (all_points + pd["adjustment_rows"] + gd["adjustment_rows"] + 8))
+        diagnostics["rounding_tolerance_ps"] = tolerance
+        for section in DIAG_SECTIONS:
+            if pd["point_signatures"][section] != gd["point_signatures"][section]:
+                reasons.append(section + " point sequence/transition mismatch")
+            if pd["library_signatures"][section] != gd["library_signatures"][section]:
+                reasons.append(section + " library-cell sequence mismatch")
+        if pd["unparsed_point_rows"] or gd["unparsed_point_rows"]:
+            reasons.append("point rows without a readable Incr column")
+        for side, item, detail in (("scaled_ps", pred, pd), ("ground_truth_ps", gt, gd)):
+            if not detail["data_boundary_seen"]:
+                reasons.append(side + " data boundary unavailable")
+            for section in ("arrival", "required"):
+                actual = getattr(item, section)
+                if actual is None and section == "required" and item.arrival is not None and item.slack is not None:
+                    if analysis == "setup":
+                        actual = item.arrival + item.slack
+                    elif analysis == "hold":
+                        actual = item.arrival - item.slack
+                observed = None if actual is None else actual * NS_TO_PS
+                expected = known[section][side]
+                residual = None if observed is None or expected is None else observed - expected
+                diagnostics[side.replace("_ps", "") + "_" + section + "_residual_ps"] = residual
+                if residual is not None and abs(residual) > tolerance:
+                    reasons.append(side + " " + section + " has unexplained terms")
+        for side, item in (("scaled", pred), ("ground_truth", gt)):
+            residual = None
+            if (item.arrival is not None and item.required is not None and item.slack is not None
+                    and analysis in ("setup", "hold")):
+                identity = item.required - item.arrival if analysis == "setup" else item.arrival - item.required
+                residual = (item.slack - identity) * NS_TO_PS
+                if abs(residual) > tolerance:
+                    reasons.append(side + " slack has unexplained terms")
+            diagnostics[side + "_slack_identity_residual_ps"] = residual
+        for section in ("arrival", "required"):
+            values = known[section]
+            error = (None if None in values.values() else values["scaled_ps"] - values["ground_truth_ps"])
+            observed_error = row[section + "_error_ps"]
+            diagnostics[section + "_known_error_ps"] = error
+            diagnostics[section + "_unexplained_error_ps"] = (
+                None if error is None or observed_error is None else observed_error - error)
+        for section in DIAG_SECTIONS:
+            terms = [section + "_" + kind for kind in ("cell", "net", "port")]
+            if section != "data":
+                terms += [section + "_source_latency", section + "_network_delay"]
+            values = []
+            for side in ("scaled_ps", "ground_truth_ps"):
+                values.append(sum(components[term][side] for term in terms if components[term][side] is not None))
+            diagnostics[section + "_delay_error_ps"] = (
+                values[0] - values[1] if pd["point_counts"][section] and gd["point_counts"][section] else None)
+        arrival_known, required_known = diagnostics["arrival_known_error_ps"], diagnostics["required_known_error_ps"]
+        slack_known = None
+        if analysis in ("setup", "hold") and arrival_known is not None and required_known is not None:
+            slack_known = required_known - arrival_known if analysis == "setup" else arrival_known - required_known
+        diagnostics["slack_unexplained_error_ps"] = (
+            None if slack_known is None else row["pt_scaling_err_ps"] - slack_known)
+        diagnostics["slack_identity_residual_ps"] = None
+        if analysis in ("setup", "hold") and row["arrival_error_ps"] is not None and row["required_error_ps"] is not None:
+            identity = row["required_error_ps"] - row["arrival_error_ps"]
+            if analysis == "hold":
+                identity = -identity
+            diagnostics["slack_identity_residual_ps"] = row["pt_scaling_err_ps"] - identity
+            if abs(diagnostics["slack_identity_residual_ps"]) > tolerance:
+                reasons.append("reported slack differs from arrival/required identity")
+        for term, component in components.items():
+            contribution = component["error_ps"]
+            if contribution is not None and analysis in ("setup", "hold"):
+                on_arrival = term in DIAG_ARRIVAL_TERMS or term == "launch_edge"
+                contribution *= -1 if (on_arrival == (analysis == "setup")) else 1
+            else:
+                contribution = None
+            component["slack_contribution_ps"] = contribution
+        available = [term for term in components
+                     if components[term]["slack_contribution_ps"] not in (None, 0.0)]
+        diagnostics["largest_known_slack_term"] = (
+            max(available, key=lambda term: abs(components[term]["slack_contribution_ps"])) if available else None)
+        if pred.launch_clock_rows > 1 or pred.capture_clock_rows > 1 or gt.launch_clock_rows > 1 or gt.capture_clock_rows > 1:
+            reasons.append("multiple ideal clock edges; generated-clock detail needs review")
+        if row["clock_status"] == "mismatch" or row["path_type_mismatch"] or row["path_group_mismatch"]:
+            reasons.append("clock/path identity mismatch")
+        if slack_known is None:
+            reasons.append("clock edges or analysis unavailable for full reconstruction")
+        has_points = sum(pd["point_counts"].values()) and sum(gd["point_counts"].values())
+        diagnostics["status"] = "UNAVAILABLE" if not has_points else "REVIEW" if reasons else "EXPLAINED"
+        row["diagnostic"] = diagnostics
+        status = diagnostics["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+    compared = [row["diagnostic"] for row in rows if row["status"] == "compared"]
+    fields = ("launch_clock_delay_error_ps", "data_delay_error_ps", "capture_clock_delay_error_ps",
+              "arrival_unexplained_error_ps", "required_unexplained_error_ps", "slack_unexplained_error_ps")
+    return {"status_counts": status_counts,
+            "metrics": {field: diagnostic_metric([d[field] for d in compared if d[field] is not None]) for field in fields},
+            "component_metrics": {term: diagnostic_metric([d["components"][term]["error_ps"] for d in compared
+                if d["components"][term]["error_ps"] is not None]) for term in DIAG_TERMS}}
+
+
+def diagnostic_share_line(detail):
+    metrics = detail["metrics"]
+    return (
+        "DELAY_SHARE launch_sum_mae={}ps data_sum_mae={}ps capture_sum_mae={}ps "
+        "arrival_unexplained_mae={}ps required_unexplained_mae={}ps review={} unavailable={}".format(
+            compact_number(metrics["launch_clock_delay_error_ps"]["mae_ps"]),
+            compact_number(metrics["data_delay_error_ps"]["mae_ps"]),
+            compact_number(metrics["capture_clock_delay_error_ps"]["mae_ps"]),
+            compact_number(metrics["arrival_unexplained_error_ps"]["mae_ps"]),
+            compact_number(metrics["required_unexplained_error_ps"]["mae_ps"]),
+            detail["status_counts"].get("REVIEW", 0), detail["status_counts"].get("UNAVAILABLE", 0)))
+
+
+def diagnostic_summary_lines(summary):
+    detail = summary.get("path_diagnostics")
+    if detail is None:
+        return ["Path delay reconstruction: unavailable"]
+    lines = ["Path delay reconstruction (signed sums of reported Incr)",
+             "Arithmetic closure is not proof of matching sessions; see CLOCK VALIDATION.",
+             "diagnostic counts   : " + ", ".join("{}={}".format(k, v) for k, v in sorted(detail["status_counts"].items()))]
+    labels = (("launch_clock_delay_error_ps", "launch clock sum"), ("data_delay_error_ps", "data path sum"),
+              ("capture_clock_delay_error_ps", "capture clock sum"),
+              ("arrival_unexplained_error_ps", "arrival unexplained"), ("required_unexplained_error_ps", "required unexplained"))
+    for field, label in labels:
+        value = detail["metrics"][field]
+        lines.append("{:<21}: paths={} MAE={} ps max={} ps".format(
+            label, value["count"], format_number(value["mae_ps"]), format_number(value["max_abs_ps"])))
+    return lines
+
+
+def write_path_diagnostics(path, rows):
+    """Write detailed blocks by descending slack absolute error; preserve unavailable paths."""
+    ordered = sorted(rows, key=lambda row: (row["abs_error_ps"] is None, -(row["abs_error_ps"] or 0.0), row["path_key"]))
+    with path.open("w", encoding="ascii", errors="backslashreplace") as output:
+        output.write("# All numbers: ps; error = scaling - GT. Order: slack absolute error descending.\n")
+        output.write("# N/A: absent/unreadable term, never a measured zero. Net: report sink increment, not raw SPEF RC.\n")
+        output.write("# EXPLAINED means arithmetic closes within rounding tolerance, not validated scaling accuracy.\n")
+        output.write("# Residuals include unreported/unparsed terms, statistical adjustments and rounding; do not name a cause from residual alone.\n\n")
+        for row in ordered:
+            detail = row["diagnostic"]
+            output.write("### PATH idx={} key={}\n".format(row["idx"], row["path_key"]))
+            output.write("status={} slack_error={} ps arrival_error={} ps required_error={} ps\n".format(
+                detail["status"], format_number(row["pt_scaling_err_ps"]), format_number(row["arrival_error_ps"]), format_number(row["required_error_ps"])))
+            if "components" not in detail:
+                output.write("reason={}\n\n".format("; ".join(detail["reasons"])))
+                continue
+            output.write("analysis={} rounding_tolerance={} ps\n".format(detail["analysis"], format_number(detail["rounding_tolerance_ps"])))
+            driver = detail["largest_known_slack_term"]
+            if driver is not None:
+                output.write("largest_known_slack_term={} contribution={} ps\n".format(driver, format_number(detail["components"][driver]["slack_contribution_ps"])))
+            output.write("{:<36} {:>15} {:>15} {:>15}\n".format("term", "GT", "scaling", "error"))
+            terms = ("launch_edge",) + DIAG_ARRIVAL_TERMS + ("capture_edge",) + DIAG_REQUIRED_TERMS
+            for term in terms:
+                values = detail["components"][term]
+                output.write("{:<36} {:>15} {:>15} {:>15}\n".format(term, *(
+                    "N/A" if values[key] is None else "{:+.6f}".format(values[key])
+                    for key in ("ground_truth_ps", "scaled_ps", "error_ps"))))
+            for field in ("arrival_unexplained_error_ps", "required_unexplained_error_ps", "slack_unexplained_error_ps",
+                          "scaled_arrival_residual_ps", "ground_truth_arrival_residual_ps", "scaled_required_residual_ps",
+                          "ground_truth_required_residual_ps", "slack_identity_residual_ps",
+                          "scaled_slack_identity_residual_ps", "ground_truth_slack_identity_residual_ps"):
+                value = detail[field]
+                output.write("{:<36}: {} ps\n".format(field, "N/A" if value is None else "{:+.6f}".format(value)))
+            output.write("points GT={} scaling={}\n".format(detail["ground_truth_point_counts"], detail["scaled_point_counts"]))
+            output.write("reason={}\n\n".format("; ".join(detail["reasons"]) or "reported terms reconstruct arrival/required within rounding tolerance"))
+
+
 class PathResult(object):
     """One fixed-path result; kept simple for Synopsys Python 3.6."""
 
     __slots__ = (
         "idx", "key", "slack", "arrival", "required", "path_type",
         "path_group", "launch_clock", "capture_clock",
-        "launch_clock_rows", "capture_clock_rows")
+        "launch_clock_rows", "capture_clock_rows", "breakdown")
 
     def __init__(self, idx, key, slack, arrival=None, required=None, path_type=None,
                  path_group=None, launch_clock=None, capture_clock=None,
-                 launch_clock_rows=0, capture_clock_rows=0):
+                 launch_clock_rows=0, capture_clock_rows=0, breakdown=None):
         self.idx = idx
         self.key = key
         self.slack = slack
@@ -146,6 +529,7 @@ class PathResult(object):
         self.capture_clock = capture_clock
         self.launch_clock_rows = launch_clock_rows
         self.capture_clock_rows = capture_clock_rows
+        self.breakdown = breakdown if breakdown is not None else ReportBreakdown().result()
 
 
 def labeled_number(match):
@@ -180,6 +564,7 @@ def parse_report(path):
     current_capture_clock = None
     current_launch_clock_rows = 0
     current_capture_clock_rows = 0
+    current_breakdown = ReportBreakdown()
 
     def finish():
         nonlocal current_idx, current_key, current_slack
@@ -196,7 +581,7 @@ def parse_report(path):
             current_idx, current_key, current_slack,
             current_arrival, current_required, current_path_type,
             current_path_group, current_launch_clock, current_capture_clock,
-            current_launch_clock_rows, current_capture_clock_rows)
+            current_launch_clock_rows, current_capture_clock_rows, current_breakdown.result())
 
     with path.open(errors="ignore") as report:
         for line in report:
@@ -214,8 +599,10 @@ def parse_report(path):
                 current_capture_clock = None
                 current_launch_clock_rows = 0
                 current_capture_clock_rows = 0
+                current_breakdown = ReportBreakdown()
                 continue
             if current_key is not None:
+                current_breakdown.consume(line)
                 match = PATH_GROUP_RE.match(line)
                 if match:
                     current_path_group = match.group(1).strip()
@@ -385,6 +772,12 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
     abs_errors = [abs(value) for value in errors]
     compared_rows = [row for row in rows if row["abs_error_ps"] is not None]
     worst_row = max(compared_rows, key=lambda row: row["abs_error_ps"])
+    # Use the same resolved path set for both minima, even if the worst paths differ.
+    gt_wns_row = min(compared_rows, key=lambda row: row["ground_truth_ps"])
+    pt_wns_row = min(compared_rows, key=lambda row: row["pt_scaling_ps"])
+    gt_wns = gt_wns_row["ground_truth_ps"]
+    pt_wns = pt_wns_row["pt_scaling_ps"]
+    wns_error = pt_wns - gt_wns
     arrival_errors = [
         row["arrival_error_ps"] for row in compared_rows
         if row["arrival_error_ps"] is not None]
@@ -432,6 +825,18 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
         "bias_ps": sum(errors) / len(errors),
         "worst_abs_error_ps": max(abs_errors),
         "worst_path_key": worst_row["path_key"],
+        "wns_scope": "shared_resolved_fixed_paths",
+        "wns_definition": "minimum slack without clamping to zero",
+        "ground_truth_wns_ps": gt_wns,
+        "pt_scaling_wns_ps": pt_wns,
+        "wns_error_ps": wns_error,
+        "wns_abs_error_ps": abs(wns_error),
+        "wns_error_percent": (
+            abs(wns_error) / abs(gt_wns) * 100.0 if gt_wns != 0.0 else None),
+        "ground_truth_wns_path_idx": truth[gt_wns_row["path_key"]].idx,
+        "ground_truth_wns_path_key": gt_wns_row["path_key"],
+        "pt_scaling_wns_path_idx": scaled[pt_wns_row["path_key"]].idx,
+        "pt_scaling_wns_path_key": pt_wns_row["path_key"],
         "excluded_paths": len(rows) - len(errors),
         "required_source_counts": required_source_counts,
         "path_group_mismatches": sum(row["path_group_mismatch"] for row in compared_rows),
@@ -603,6 +1008,8 @@ def write_summary_text(path, summary):
         component_line("arrival", summary),
         component_line("required", summary),
         "",
+    ] + wns_lines(summary) + [""] + diagnostic_summary_lines(summary) + [
+        "",
         "Clock validation",
         f"status              : {summary['clock_validation_status']}",
     ]
@@ -636,6 +1043,28 @@ def write_summary_text(path, summary):
             "unavailable: adjacent <scaled-report>.inputs.txt was not found",
         ])
     path.write_text("\n".join(lines) + "\n")
+
+
+def wns_lines(summary):
+    """Format minimum-slack metrics over the same compared fixed paths."""
+    percent = summary["wns_error_percent"]
+    percent_text = (
+        "N/A (GT WNS is zero)" if percent is None else f"{percent:.6f} %")
+    return [
+        "Fixed-path WNS (minimum slack; not clamped to zero)",
+        "WNS scope           : same compared fixed paths; not design-wide WNS",
+        f"WNS coverage        : {summary['compared_paths']} compared, "
+        f"{summary['excluded_paths']} excluded",
+        f"PT scaling WNS      : {summary['pt_scaling_wns_ps']:+.6f} ps",
+        f"GT WNS              : {summary['ground_truth_wns_ps']:+.6f} ps",
+        f"WNS error (PT - GT) : {summary['wns_error_ps']:+.6f} ps",
+        f"WNS absolute error  : {summary['wns_abs_error_ps']:.6f} ps",
+        f"WNS error (%)       : {percent_text}",
+        f"PT WNS path         : idx={summary['pt_scaling_wns_path_idx']} "
+        f"key={summary['pt_scaling_wns_path_key']}",
+        f"GT WNS path         : idx={summary['ground_truth_wns_path_idx']} "
+        f"key={summary['ground_truth_wns_path_key']}",
+    ]
 
 
 def component_line(name, summary):
@@ -720,8 +1149,15 @@ def share_lines(summary):
             f"ERROR_SHARE slack_mae={compact_number(summary['mae_ps'])}ps "
             f"arrival_mae={compact_number(summary['arrival_mae_ps'])}ps "
             f"required_mae={compact_number(summary['required_mae_ps'])}ps "
-            f"paths={summary['compared_paths']} excluded={summary['excluded_paths']}")
-    ]
+            f"paths={summary['compared_paths']} excluded={summary['excluded_paths']}"),
+        (
+            f"WNS_SHARE scope=fixed_paths "
+            f"pt={compact_number(summary['pt_scaling_wns_ps'])}ps "
+            f"gt={compact_number(summary['ground_truth_wns_ps'])}ps "
+            f"abs_error={compact_number(summary['wns_abs_error_ps'])}ps "
+            f"error_percent={compact_number(summary['wns_error_percent'])} "
+            f"paths={summary['compared_paths']} excluded={summary['excluded_paths']}"),
+    ] + ([diagnostic_share_line(summary["path_diagnostics"])] if "path_diagnostics" in summary else [])
 
 
 def safe_corner_name(report_path):
@@ -762,6 +1198,7 @@ def main():
     scaled = parse_report(args.scaled_rpt)
     truth = parse_report(args.ground_truth_rpt)
     rows, summary = evaluate(scaled, truth, NS_TO_PS, args.analysis)
+    summary["path_diagnostics"] = diagnose_paths(rows, scaled, truth, args.analysis)
     summary.update({
         "input_unit": "ns",
         "output_unit": "ps",
@@ -779,9 +1216,11 @@ def main():
     corner_name = safe_corner_name(args.ground_truth_rpt)
     result_dir = create_result_dir(args.output_dir, corner_name)
     path_text_path = result_dir / "path_errors.txt"
+    diagnostics_path = result_dir / "path_diagnostics.txt"
     summary_text_path = result_dir / "summary.txt"
     json_path = result_dir / "summary.json"
     write_path_text(path_text_path, rows)
+    write_path_diagnostics(diagnostics_path, rows)
     write_summary_text(summary_text_path, summary)
     with json_path.open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
@@ -799,6 +1238,12 @@ def main():
     print(f"worst          : {summary['worst_abs_error_ps']:.3f} ps")
     print(component_line("arrival", summary))
     print(component_line("required", summary))
+    print("")
+    for line in wns_lines(summary):
+        print(line)
+    print("")
+    for line in diagnostic_summary_lines(summary):
+        print(line)
     print("")
     print("=== CLOCK VALIDATION ===")
     print(f"status         : {summary['clock_validation_status']}")
@@ -826,6 +1271,7 @@ def main():
             f"err={row['pt_scaling_err_ps']:+.3f} ps key={row['path_key']}"
         )
     print(f"path details   : {path_text_path}")
+    print(f"diagnostics txt: {diagnostics_path}")
     print(f"summary text   : {summary_text_path}")
     print(f"summary JSON   : {json_path}")
     print("")

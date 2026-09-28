@@ -3,7 +3,7 @@
 이 디렉토리는 PrimeTime 실행이 끝난 뒤 사용하는 Python 후처리 도구를 모아 둡니다.
 PrimeTime에서 `source`하는 Tcl 파일은 `pt/` 디렉토리에 있습니다.
 
-- `compare_scaling_mae.py`: PT scaling report와 target-corner ground truth의 path별 오차 및 MAE 계산
+- `compare_scaling_mae.py`: path별 MAE·최대오차·fixed-path WNS 및 누적 지연 오차 분해
 - `compare_point_delays.py`: 동일 timing point의 `Incr` delay를 cell/net 및 path 구간별로 비교
 - `plot_ground_truth_slack.py`: 여러 ground-truth report의 slack 통계, CSV, SVG 및 터미널 histogram 생성
 - `recover_fixed_paths_from_ground_truth.py`: 남아 있는 ground-truth report에서 scaling용 fixed path 목록 복원
@@ -61,8 +61,8 @@ clock identity, 선택 cycle/edge 또는 path 조건이 달라 현재 MAE를 sca
 최악의 launch/capture edge path는 `summary.txt`에도 저장됩니다.
 회사 터미널의 EUC-KR/UTF-8 설정과 무관하게 깨지지 않도록 실행 결과의 `reason`과
 `action` 문장은 ASCII 영어로 출력합니다.
-실행 결과가 길면 맨 마지막 `COPY THIS RESULT`의 세 줄만 복사해 전달하면 됩니다.
-이 세 줄에는 회사 clock/path 이름을 포함하지 않습니다.
+실행 결과가 길면 맨 마지막 `COPY THIS RESULT`의 요약 줄을 전달하면 됩니다.
+이 요약에는 회사 clock/path 이름을 포함하지 않습니다.
 
 `launch clock edge`, `capture clock edge`는 두 report가 사용한 clock edge time을
 비교합니다. 이 MAE가 clock period에 가까우면 서로 다른 cycle/edge 또는 다른
@@ -91,6 +91,39 @@ less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt
 
 `compare_scaling_mae.py`는 입력 `.rpt`의 slack을 항상 ns로 읽고 결과를 ps로
 저장합니다.
+
+같은 명령으로 `path_diagnostics.txt`도 자동 생성합니다. 기존 GT/scaling
+report만 사용하므로 GT 세션 접근이나 PrimeTime 재실행은 필요하지 않습니다.
+
+```bash
+less -S results/pt_scaling_comparison/<target-corner>/path_diagnostics.txt
+```
+
+경로마다 launch clock, data, capture clock의 `Incr`를 cell/net별로 합산하고,
+source/network latency, 선택 edge, uncertainty, CPPR, library setup/hold 항목을
+`GT / scaling / error`로 보여 줍니다. `error`는 scaling−GT이고 결과는 ps입니다.
+`net`은 timing report의 증분이며 SPEF의 순수 RC 값을 추출한 것은 아닙니다.
+핀 순서·rise/fall 전이·library cell 구성이 다른 경로도 `REVIEW`로 표시합니다.
+상세 파일은 slack 절대오차 내림차순이고, 양쪽 WNS 경로는 `summary.txt`의
+idx/key로 찾을 수 있습니다. `summary.txt`와 터미널에는 구간별 누적 지연
+오차의 MAE와 설명되지 않은 오차의 MAE를 함께 출력합니다.
+
+`N/A`는 항목이 없거나 읽을 수 없다는 뜻이며 측정된 0과 구분합니다.
+`*_unexplained_error_ps`는 알려진 항목의 합산으로 설명되지 않은 두 report의
+차이입니다. `scaled_*_residual_ps`, `ground_truth_*_residual_ps`는 각각의 report
+자체에서 설명되지 않은 나머지입니다. 반올림, 보고되지 않은 통계 보정이나
+해석하지 못한 행 등이 포함될 수 있으므로 잔여값만으로 SDC/POCV를 원인으로
+확정하지 않습니다. 6자리 ns 리포트의 반올림 허용값도 경로마다 표시합니다.
+
+`EXPLAINED`는 리포트 항목으로 arrival/required를 재구성할 수 있다는 뜻이며
+scaling이 정확하거나 두 세션의 설정이 같다는 뜻이 아닙니다. 기존
+`CLOCK VALIDATION`도 함께 확인합니다. timing table이 없는 report는
+`UNAVAILABLE`로 표시하면서 기존 MAE/WNS 계산은 계속 수행합니다.
+
+WNS는 양쪽에서 slack을 읽을 수 있는 **동일 fixed path 집합의 최소 slack**이며,
+양수이면 양수 그대로 표시합니다. 디자인 전체 WNS와 구분해야 합니다.
+WNS 오차율은 `|PT WNS − GT WNS| / |GT WNS| × 100`이고 GT가 0이면 `N/A`입니다.
+짧게 전달할 때는 `COPY THIS RESULT`의 `WNS_SHARE`, `DELAY_SHARE`도 활용합니다.
 
 `compare_point_delays.py`는 ideal clock edge 차이가 누적되는 `Path` 열을 사용하지
 않고 각 timing point의 `Incr` 열만 비교합니다. 같은 instance의 연속 pin 사이
