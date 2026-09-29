@@ -28,6 +28,12 @@ set PROGRESS_INTERVAL_MINUTES 10
 # target voltage를 적용할 확실한 실제 supply net 하나만 입력하십시오.
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
+
+# Optional: keep ONE library set at its RESTORED DB/conditions instead of scaling.
+# Enter the set name from "library set '...'"; leave empty to disable.
+# This never relinks a 0.475 V cell to a 0.685 V DB. A mismatch stops the run.
+set FIXED_LIBRARY_SET     ""
+set FIXED_LIBRARY_VOLTAGE 0.685 ;# expected nominal voltage of the linked DB (V)
 # ===================== END USER SETTINGS ======================
 
 namespace eval auto_scaling {
@@ -777,7 +783,28 @@ proc auto_scaling::plan {cfg} {
     set static_sets {}
     set selected {}
     set excluded {}
+    set fixed_library_rows {}
+    set fixed_family [string trim [option $cfg fixed_library_set ""]]
+    if {$fixed_family ne ""} {
+        set matched_family ""
+        foreach family $chosen_families {
+            if {[string equal -nocase $family $fixed_family]} { set matched_family $family }
+        }
+        if {$matched_family eq ""} {
+            error "FIXED_LIBRARY_SET '$fixed_family' is not a selected fixed-path library set. Available: $chosen_families"
+        }
+        set fixed_family $matched_family
+        set fixed_voltage [number [need $cfg fixed_library_voltage]]
+        foreach row $rows {
+            if {[dict get $row family] eq $fixed_family} { lappend fixed_library_rows $row }
+        }
+    }
     foreach family $chosen_families {
+        if {$family eq $fixed_family} {
+            lappend static_sets $family
+            puts "EXPLICIT FIXED LIBRARY SET: $family | expected_linked_db_voltage=$fixed_voltage V | restore conditions unchanged"
+            continue
+        }
         set family_mode [family_scaling_mode $rows $process $family $tv $tt $mode]
         if {$family_mode eq "STATIC"} {
             lappend static_sets $family
@@ -806,6 +833,7 @@ proc auto_scaling::plan {cfg} {
     dict set result family $chosen_families
     dict set result groups $groups
     dict set result static_sets $static_sets
+    dict set result fixed_library_rows $fixed_library_rows
     dict set result selected $selected
     dict set result excluded $excluded
     dict set result catalog $rows
@@ -1076,6 +1104,83 @@ proc auto_scaling::verify_planned_group_coverage {plan} {
     puts "SCALING GROUP COVERAGE: all $planned planned input DB(s) are active"
 }
 
+# A fixed-set exception applies only to a whole group of that declared set.
+# Mixed groups remain subject to the target-exclusion check.
+proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperature} {
+    if {![report_has_corner $text $rail $voltage $temperature]} { return 0 }
+    set allowed [dict create]
+    foreach row [option $plan fixed_library_rows {}] {
+        dict set allowed [list [file normalize [dict get $row file]] [dict get $row lib_name]] 1
+    }
+    if {![dict size $allowed]} { return 1 }
+    set seen [dict create]
+    foreach_in_collection lib [get_libs -quiet *] {
+        set group [get_attribute -quiet $lib lib_scaling_group]
+        if {$group eq "" || ![sizeof_collection $group]} { continue }
+        set members [add_to_collection $group $lib]
+        set keys {}
+        set all_fixed 1
+        foreach_in_collection member $members {
+            set path [get_attribute $member source_file_name]
+            set key [list [file normalize $path] [get_attribute $member full_name]]
+            lappend keys $key
+            if {![dict exists $allowed $key]} { set all_fixed 0 }
+        }
+        set keys [lsort -unique $keys]
+        if {[dict exists $seen $keys]} { continue }
+        dict set seen $keys 1
+        if {$all_fixed} { continue }
+        redirect -variable group_text {
+            report_lib_groups -scaling -objects $lib -nosplit -show {voltage temperature process}
+        }
+        if {[report_has_corner $group_text $rail $voltage $temperature]} { return 1 }
+    }
+    return 0
+}
+
+# Check the actual linked libraries BEFORE creating groups or applying V/T.
+# Loaded alternative DBs are not evidence that the restored cells use them.
+proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
+    set rows [option $cfg fixed_library_rows {}]
+    if {![llength $rows]} { return [dict create names {} records {}] }
+    set policy [dict create]
+    foreach row $rows {
+        dict set policy [list [file normalize [dict get $row file]] [dict get $row lib_name]] $row
+    }
+    set expected [number [need $cfg fixed_library_voltage]]
+    set cells [fixed_path_cells $fixed]
+    set libraries [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cells]]
+    set decisions [dict create]
+    set names {}
+    set records {}
+    foreach_in_collection lib $libraries {
+        set name [get_attribute $lib full_name]
+        set path [file normalize [get_attribute $lib source_file_name]]
+        set key [list $path $name]
+        set keep [dict exists $policy $key]
+        if {[dict exists $decisions $name] && [dict get $decisions $name] != $keep} {
+            error "Fixed/scaling libraries share the same internal name '$name'. Cannot safely classify fixed-path cells by name. DB=$path"
+        }
+        dict set decisions $name $keep
+        if {!$keep} { continue }
+        set condition [report_operating_condition $lib $path]
+        set actual [dict get $condition v]
+        if {![same $actual $expected]} {
+            error "FIXED_LIBRARY_SET is linked to $actual V, expected $expected V: $path. No DB was switched; restore the intended DB before running."
+        }
+        lappend names $name
+        set row [dict get $policy $key]
+        dict set row v $actual
+        dict set row t [dict get $condition t]
+        lappend records $row
+        puts "FIXED RESTORE DB VERIFIED: LIB=$name | nominal_voltage=$actual V | temperature=[dict get $condition t] C | DB=$path"
+    }
+    if {![llength $records]} {
+        error "FIXED_LIBRARY_SET does not match any actual linked fixed-path library. No DB was switched."
+    }
+    return [dict create names [lsort -unique $names] records $records]
+}
+
 proc auto_scaling::write_text {path contents} {
     set fp [open $path w]
     puts -nonewline $fp $contents
@@ -1115,6 +1220,10 @@ proc auto_scaling::scaling_inputs_text {plan} {
     }
     foreach family [dict get $plan static_sets] {
         lappend lines "STATIC_UNSCALED family=$family"
+    }
+    foreach row [option $plan fixed_restore_records {}] {
+        lappend lines "EXPLICIT_FIXED_RESTORE family=[dict get $row family] lib=[dict get $row lib_name] nominal_voltage=[dict get $row v] V temperature=[dict get $row t] C"
+        lappend lines "  DB=[dict get $row file]"
     }
     foreach lib [dict get $plan unclassified_used] {
         lappend lines "UNCLASSIFIED_UNSCALED lib=$lib"
@@ -1217,7 +1326,9 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     set used_lib_cells [get_lib_cells -quiet -of_objects $path_cells]
     set used_libs [get_libs -quiet -of_objects $used_lib_cells]
     set scalable_lib_names [dict create]
+    set explicit_fixed_names [option $cfg fixed_library_names {}]
     foreach_in_collection lib $used_libs {
+        if {[lsearch -exact $explicit_fixed_names [get_attribute $lib full_name]] >= 0} { continue }
         set scaling_group [get_attribute -quiet $lib lib_scaling_group]
         if {$scaling_group ne "" && [sizeof_collection $scaling_group]} {
             dict set scalable_lib_names [get_attribute $lib full_name] 1
@@ -1355,6 +1466,10 @@ proc auto_scaling::run_after_restore {cfg} {
     set plan [plan $restored_cfg]
     dict set plan restored_parasitics $parasitics
     set fixed [expr {[dict exists $plan fixed] ? [dict get $plan fixed] : ""}]
+    dict set restored_cfg fixed_library_rows [dict get $plan fixed_library_rows]
+    set fixed_restore [validate_fixed_restore_libraries $fixed $restored_cfg]
+    dict set restored_cfg fixed_library_names [dict get $fixed_restore names]
+    dict set plan fixed_restore_records [dict get $fixed_restore records]
     set dt [option $cfg delay_type max]
     if {$dt ni {max min}} { error "delay_type must be max or min" }
 
@@ -1391,7 +1506,7 @@ proc auto_scaling::run_after_restore {cfg} {
 
     set phase_started [phase_start PREPARE_SCALING_GROUPS]
     redirect -variable groups_before {
-        report_lib_groups -scaling -show {voltage temperature process}
+        report_lib_groups -scaling -nosplit -show {voltage temperature process}
     }
     write_text ${out}.libgroups.before $groups_before
 
@@ -1399,7 +1514,7 @@ proc auto_scaling::run_after_restore {cfg} {
     # 단, 목표 코너가 들어 있으면 leave-one-out이 아니므로 중단합니다.
     set has_existing_group [regexp -line {^Group[[:space:]]+[0-9]+} $groups_before]
     if {$has_existing_group} {
-        if {[report_has_corner $groups_before $rail $target_v $target_t]} {
+        if {[report_has_unapproved_corner $groups_before $plan $rail $target_v $target_t]} {
             error "기존 scaling group에 목표 코너 $target_v V/$target_t C가 포함되어 있습니다. 이 세션에서는 목표 DB를 제외한 scaling 결과를 만들 수 없습니다."
         }
         puts "RESTORE MODE: 기존 scaling group을 재사용합니다."
@@ -1416,10 +1531,10 @@ proc auto_scaling::run_after_restore {cfg} {
     }
 
     redirect -variable groups_after {
-        report_lib_groups -scaling -show {voltage temperature process}
+        report_lib_groups -scaling -nosplit -show {voltage temperature process}
     }
     write_text ${out}.libgroups $groups_after
-    if {[report_has_corner $groups_after $rail $target_v $target_t]} {
+    if {[report_has_unapproved_corner $groups_after $plan $rail $target_v $target_t]} {
         error "생성된 scaling group에 목표 코너가 남아 있습니다. 결과를 사용하지 마세요: ${out}.libgroups"
     }
     verify_planned_group_coverage $plan
@@ -1545,6 +1660,7 @@ proc auto_scaling::build_restore_config {} {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
         ANALYSIS FIXED_PATH_FILE RESULT_FOLDER PROGRESS_INTERVAL_MINUTES
         SCALING_POWER_NET
+        FIXED_LIBRARY_SET FIXED_LIBRARY_VOLTAGE
     } {
         if {![info exists ::$name]} {
             error "TCL 맨 위 USER SETTINGS에 $name 설정이 없습니다."
@@ -1588,6 +1704,10 @@ proc auto_scaling::build_restore_config {} {
     }
     set scaling_power_nets [list $::SCALING_POWER_NET]
 
+    set fixed_family [string trim $::FIXED_LIBRARY_SET]
+    set fixed_voltage ""
+    if {$fixed_family ne ""} { set fixed_voltage [number $::FIXED_LIBRARY_VOLTAGE] }
+
     return [dict create \
         target_process $process \
         target_v $voltage \
@@ -1597,6 +1717,8 @@ proc auto_scaling::build_restore_config {} {
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
         scaling_power_nets $scaling_power_nets \
+        fixed_library_set $fixed_family \
+        fixed_library_voltage $fixed_voltage \
         progress_minutes $progress_minutes \
         out_rpt [file join $::RESULT_FOLDER $filename]]
 }

@@ -27,7 +27,8 @@ library scaling을 실행하고, 동일한 fixed path의 ground truth와 비교�
 
 `run_scaling_after_restore.tcl`은 DB, netlist, SDC, SPEF를 새로 읽지 않습니다.
 전부 restore session에 들어 있어야 합니다. target library가 메모리에 로드되어
-있는 것은 괜찮지만 scaling group에서는 제외되어야 합니다.
+있는 것은 괜찮지만 보간하는 scaling group에서는 제외되어야 합니다.
+아래의 명시적 고정 셋 예외는 restore DB를 유지하며, 해당 셋을 보간하지 않습니다.
 
 ## 2. 권장 작업 폴더
 
@@ -93,6 +94,23 @@ fixed path 밖의 cell과 SI aggressor는 restore 상태를 유지합니다.
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
 
+여러 코너가 있어도 특정 셋을 고정 DB로 유지하려면 `FIXED_LIBRARY_SET`에
+오류에 나온 셋 이름을 입력하고 `FIXED_LIBRARY_VOLTAGE`에 현재 연결되어 있어야
+하는 DB의 nominal 전압을 입력합니다. 셋 이름은 기본값이 빈칸이며,
+전압 기본값은 0.685 V입니다. 지정한 셋만 내삽 입력 선택과 목표 DB 제외에서
+예외 처리하고, 그 셀은 `set_voltage` 및 `set_temperature` 대상에서 제외합니다.
+
+이 설정은 다른 DB로 교체하는 기능이 아닙니다. fixed path에서 실제 사용하는
+library의 `report_lib` 전압이 지정 값과 일치하는지 변경 전에 검증합니다.
+0.475 V DB가 연결되어 있다면 0.685 V DB가 메모리에 있어도 중단합니다.
+고정 셋의 온도·rail 조건·기존 group은 restore 상태를 유지하며, 이 설정만으로
+모든 rail의 실제 전압을 검증했다는 뜻은 아닙니다. 따라서 ground truth에서도
+같은 고정 셋 조건을 사용해야 비교할 수 있습니다.
+
+기존 group에 target이 포함되어 있어도 group 전체가 지정한 고정 셋에만 속하면
+그대로 유지합니다. 고정 셋과 보간 셋이 섞인 group은 예외 처리하지 않습니다.
+나머지 셋은 목표 DB를 제외한 기존 보간 규칙을 계속 적용합니다.
+
 library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rail library는
 `report_lib` Operating Conditions의 주 전압만 scaling 축으로 인식합니다. 이름의
 다른 rail 전압은 family 구분값으로 유지하므로, 보조 전압이 다른 library를 같은
@@ -125,6 +143,10 @@ set RESULT_FOLDER   "/company/work/pt_scaling_eval/scaling_output"
 set PROGRESS_INTERVAL_MINUTES 10
 
 set SCALING_POWER_NET "실제_scaling_rail_이름"
+
+# Optional: this set keeps the DB already linked in the restored session.
+set FIXED_LIBRARY_SET     ""       ;# 고정할 셋 이름, 없으면 빈칸
+set FIXED_LIBRARY_VOLTAGE 0.685    ;# 실제 연결된 DB의 nominal 전압
 ```
 
 `PROGRESS_INTERVAL_MINUTES`는 긴 작업 중 현재 단계, 해당 단계 경과 시간과 전체
@@ -144,6 +166,8 @@ set SCALING_POWER_NET "실제_scaling_rail_이름"
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과와 실행 로그를 저장할 새 폴더의 절대경로 |
 | `SCALING_POWER_NET` | target voltage를 적용할 supply net 하나의 정확한 이름 |
+| `FIXED_LIBRARY_SET` | 그대로 유지할 셋 하나의 이름. 빈칸이면 예외 없음 |
+| `FIXED_LIBRARY_VOLTAGE` | 해당 셋에 실제 연결되어 있어야 하는 DB의 nominal 전압. DB 교체를 수행하지 않음 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
 스크립트가 `ANALYSIS`와 다르면 실행을 중단합니다.
@@ -234,9 +258,9 @@ library가 로드되어 있어도 group에 속하지 않으면 `SCALING GROUP: N
 - `PARASITIC_TEMP`가 `TARGET_TEMPERATURE`와 정확히 같아야 합니다.
 - voltage 내삽에 필요한 양쪽 voltage DB가 `LIBRARIES`에 있어야 합니다.
 - 모든 library가 메모리에 로드된 것은 정상입니다.
-- 기존 scaling group에 target voltage/temperature가 들어 있으면 leave-one-out이
+- 보간용 기존 scaling group에 target voltage/temperature가 들어 있으면 leave-one-out이
   아니므로 스크립트가 중단합니다. 가능하면 scaling group이 없는 fresh restore
-  session을 사용합니다.
+  session을 사용합니다. 명시적으로 지정한 고정 셋만으로 구성된 group은 유지할 수 있습니다.
 
 고유 BEOL 이름이 `rcmax`, `rcmin`, `cmax`를 포함하지 않으면 Tcl의
 `TARGET_BEOL`에 실제 이름을 그대로 적습니다. 비교할 때는 대소문자와 `-`, `_`
