@@ -382,6 +382,11 @@ fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 �
 | `FP-009` | scaling cell을 포함하는 timing path가 핀·edge·constraint 조건으로 resolve되지 않음 |
 | `FP-010` | key 끝에 유효한 원본 `#idx`가 없음; 임의로 재번호를 매기지 않고 중단 |
 | `FP-011` | 서로 다른 경로에 같은 원본 idx가 있어 중단 |
+| `SV-001` | resolve된 경로들에 scaling cell의 입력→출력 delay arc가 없음 |
+| `SV-002` | `report_delay_calculation` 명령 실행 실패 |
+| `SV-003` | delay calculation에서 외삽 또는 scaling 취소 감지 |
+| `SV-004` | `Scaling libraries used` 적용 증거 없음 |
+| `SV-005` | 검증 재시도 시 저장된 실행 정보와 현재 design/config 불일치 |
 
 `FP-005`는 실제 scaling 대상이 남아 있는지, `FP-008`은 rail 선택과 PG 연결이
 맞는지 확인해야 합니다. 번호만으로 fixed path 파일 자체가 잘못되었다고 단정하지 않습니다.
@@ -392,6 +397,40 @@ fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 �
 경로 출력 순서는 입력 목록과 같고, 진행률과 `requested`는 원본 idx와 별도로
 실제 처리한 경로 수를 셉니다. 기존 fixed-path 파일을 새로 만들 필요는 없습니다.
 새로 `1_union.py`가 생성하는 Tcl의 직접 실행도 같은 규칙을 사용합니다.
+
+### `VERIFY_SCALING_RESULT`에서 cell arc 오류가 난 경우
+
+기존 검증 코드는 scaling cell의 핀이 하나라도 있는 첫 경로를 골랐습니다.
+그 셀이 capture flop의 D 핀으로만 등장하면 같은 셀의 입력→출력 delay arc가
+없어 검증이 중단될 수 있습니다. 수정된 코드는 다음 fixed path도 확인하여
+실제 scaling 대상 cell delay arc가 있는 경로를 사용합니다. capture 입력 핀만
+있다는 이유로 scaling 실패 또는 외삽이라고 판정하지 않습니다.
+
+`.dcalc`는 검증 시작 시 만들며, 실패해도 `SCALING_VERIFICATION_STATUS: FAILED`와
+오류 코드를 남깁니다. setup에서는 `report_delay_calculation -max`, hold에서는
+`-min`으로 원래 analysis와 같은 delay를 확인합니다. 이 검증은 대표 cell arc의
+scaling 사용 확인이며 모든 경로/셀이 올바르다는 전수 검증을 의미하지 않습니다.
+
+긴 timing 계산이 끝난 뒤 이 오류가 났으면 **실패한 동일 pt_shell을 닫거나
+다른 session을 restore하지 않은 상태**에서 아래 순서로 검증만 재시도합니다.
+먼저 파일을 수정된 버전으로 교체하되 기존 회사 `USER SETTINGS`는 유지합니다.
+
+```tcl
+# 1. 새 함수만 읽고 자동 scaling 실행을 막습니다.
+set ::auto_scaling_restored_load_only 1
+source /path/to/run_scaling_after_restore.tcl
+unset ::auto_scaling_restored_load_only
+
+# 2. 실패한 실행에서 남아 있는 원래 config로 검증만 합니다.
+auto_scaling::verify_after_run $scaling_config
+```
+
+`scaling_config`는 실패한 실행의 설정이며 다시 만들지 않습니다. 재시도는 기존
+`.selection.tcl`과 fixed-path 파일을 읽어 대상을 확인하고 `.dcalc`를 갱신합니다.
+library group 생성, V/T 적용, 명시적인 `update_timing`, report 재생성은 호출하지
+않으며 기존 `.rpt`/`.missing`/입력 기록은 유지합니다. 로그는 기존 `.rpt.log`에
+추가하며 `VERIFY ONLY END: status=SUCCESS/FAILED`로 이번 검증 상태를 구분합니다.
+세션을 변경했거나 `scaling_config`가 남아 있지 않으면 이 복구 절차를 사용하지 않습니다.
 
 ## 7. scaling 결과 파일
 
@@ -587,6 +626,7 @@ column -s, -t \
 | power/supply net 오류 | UPF 연결 또는 multi-voltage domain이 예상과 다름 | `get_supply_nets` 확인 후 담당 STA 방법론에 맞는 domain 결정 |
 | 설정한 scaling power net을 찾지 못함 | `SCALING_POWER_NET` 이름과 restore session의 `full_name`이 다름 | `get_object_name [get_supply_nets -hierarchy *]` 결과의 정확한 이름 입력 |
 | fixed-path primary rail이 supply 목록에 없음 | UPF 연결이 해석되지 않았거나 hierarchical 이름이 다름 | 오류에 나온 rail과 restore session의 supply 연결 확인 |
+| `SV-001` / `cell arc`를 찾지 못함 | 검증 후보가 capture 입력만 포함하거나 모든 후보에 scaling delay arc가 없음 | 수정된 Tcl로 동일 세션에서 검증만 재시도. 모든 후보에 arc가 없으면 결과 검증은 미완료 |
 | scaling evidence 없음 | 실제 scaling이 cell arc에 적용되지 않음 | 결과 폐기 후 `.dcalc`, `.libgroups` 검사 |
 | `SLG-320` 또는 `DEL-012` | 외삽 또는 scaling 적용 실패 | target을 둘러싸는 interpolation DB 준비 |
 

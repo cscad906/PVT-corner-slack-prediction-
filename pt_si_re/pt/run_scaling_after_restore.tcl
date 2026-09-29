@@ -1034,9 +1034,32 @@ proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
         missing [llength $missing] missing_file $missing_file]
 }
 
+# A capture D pin alone is not a cell delay arc. Require an actual input->output
+# pair on the same scalable cell, rather than any scalable point on the path.
+proc auto_scaling::scaling_cell_arc {timing_path scaled_names} {
+    set previous ""
+    foreach_in_collection point [get_attribute [index_collection $timing_path 0] points] {
+        set pin [get_attribute $point object]
+        if {$previous ne ""} {
+            set a [get_cells -quiet -of_objects $previous]
+            set b [get_cells -quiet -of_objects $pin]
+            if {[sizeof_collection $a] == 1 && [sizeof_collection $b] == 1 &&
+                [get_object_name $a] eq [get_object_name $b] &&
+                [dict exists $scaled_names [get_object_name $a]] &&
+                [get_attribute $previous direction] eq "in" &&
+                [get_attribute $pin direction] eq "out"} {
+                return [dict create from $previous to $pin cell [get_object_name $a]]
+            }
+        }
+        set previous $pin
+    }
+    return {}
+}
+
 proc auto_scaling::find_scaling_fixed_path {fixed delay_type pba_mode scaled_cells} {
     set scaled_names [dict create]
     foreach name [get_object_name $scaled_cells] { dict set scaled_names $name 1 }
+    set resolved 0
     foreach item [dict get $fixed paths] {
         lassign $item key from to through edges
         set pins [concat [list $from] $through [list $to]]
@@ -1067,17 +1090,57 @@ proc auto_scaling::find_scaling_fixed_path {fixed delay_type pba_mode scaled_cel
         if {[catch {set timing_path [eval $cmd]}] || ![sizeof_collection $timing_path]} {
             continue
         }
-        foreach_in_collection point [get_attribute [index_collection $timing_path 0] points] {
-            set pin [get_attribute $point object]
-            set cell [get_cells -quiet -of_objects $pin]
-            if {[sizeof_collection $cell] == 1 &&
-                [dict exists $scaled_names [get_object_name $cell]]} {
-                puts "SCALING EVIDENCE PATH: fixed_key=$key"
-                return $timing_path
-            }
+        incr resolved
+        set arc [scaling_cell_arc $timing_path $scaled_names]
+        if {$arc ne ""} {
+            puts "SCALING EVIDENCE PATH: fixed_key=$key"
+            puts "SCALING EVIDENCE ARC: cell=[dict get $arc cell] from=[get_object_name [dict get $arc from]] to=[get_object_name [dict get $arc to]]"
+            return $timing_path
         }
     }
+    if {$resolved} {
+        error "SV-001: No input-to-output cell delay arc on a scaled cell in any resolved fixed path. resolved_paths=$resolved scaled_cells=[dict size $scaled_names]. A capture input pin alone is not a delay arc."
+    }
     error "FP-009: No timing path resolved through the scalable fixed-path cells. Check path pins/edges, analysis type, and timing constraints."
+}
+
+# The diagnostic file is created before searching. Every verification failure
+# records an ASCII status/code even when no delay calculation was possible.
+proc auto_scaling::verify_scaling_result {out fixed delay_type pba_mode scaled_cells} {
+    set evidence_file ${out}.dcalc
+    set header "SCALING_VERIFICATION_STATUS: STARTED\nANALYSIS_DELAY_TYPE: $delay_type\n"
+    write_text $evidence_file $header
+    set dcalc_text ""
+    set code [catch {
+        set timing_path [find_scaling_fixed_path $fixed $delay_type $pba_mode $scaled_cells]
+        set scaled_names [dict create]
+        foreach name [get_object_name $scaled_cells] { dict set scaled_names $name 1 }
+        set arc [scaling_cell_arc $timing_path $scaled_names]
+        if {$arc eq ""} { error "SV-001: The selected path no longer has a scalable cell delay arc." }
+        set from_pin [dict get $arc from]
+        set to_pin [dict get $arc to]
+        set delay_option -$delay_type
+        if {[catch {
+            redirect -variable dcalc_text {
+                report_delay_calculation $delay_option -from $from_pin -to $to_pin
+            }
+        } problem]} {
+            error "SV-002: report_delay_calculation failed: $problem"
+        }
+        if {[regexp -nocase {SLG-320|DEL-012|scaling extrapolation problem|due to extrapolation in scaling} $dcalc_text]} {
+            error "SV-003: Scaling extrapolation/cancellation detected. Evidence: $evidence_file"
+        }
+        if {[string first "Scaling libraries used" $dcalc_text] < 0} {
+            error "SV-004: Scaling libraries used evidence is missing. Evidence: $evidence_file"
+        }
+    } result options]
+    if {$code} {
+        write_text $evidence_file "SCALING_VERIFICATION_STATUS: FAILED\nANALYSIS_DELAY_TYPE: $delay_type\nRUN ERROR: $result\n$dcalc_text"
+        return -options $options $result
+    }
+    write_text $evidence_file "SCALING_VERIFICATION_STATUS: PASSED\nANALYSIS_DELAY_TYPE: $delay_type\nFROM_PIN: [get_object_name $from_pin]\nTO_PIN: [get_object_name $to_pin]\n$dcalc_text"
+    puts "SCALING VERIFICATION: PASSED | evidence=$evidence_file"
+    return $evidence_file
 }
 
 proc auto_scaling::report_has_corner {text rail voltage temperature} {
@@ -1608,11 +1671,6 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done UPDATE_TIMING_SI_POCV $phase_started
 
     set phase_started [phase_start GENERATE_TIMING_REPORT]
-    set paths [find_scaling_fixed_path $fixed $dt [option $cfg pba_mode ""] $scaled_cells]
-    if {![sizeof_collection $paths]} {
-        error "No timing path exists at the target conditions. Check restored constraints and analysis type."
-    }
-
     set fp [open ${out}.selection.tcl w]
     puts $fp "# restore_session scaling selection record"
     set record $plan
@@ -1640,37 +1698,7 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done GENERATE_TIMING_REPORT $phase_started
 
     set phase_started [phase_start VERIFY_SCALING_RESULT]
-    set dcalc_text ""
-    set arc_found 0
-    set scaled_cell_names [dict create]
-    foreach name [get_object_name $scaled_cells] { dict set scaled_cell_names $name 1 }
-    foreach_in_collection point [get_attribute [index_collection $paths 0] points] {
-        set pin [get_attribute $point object]
-        if {[info exists prev_pin]} {
-            set a [get_cells -quiet -of_objects $prev_pin]
-            set b [get_cells -quiet -of_objects $pin]
-            if {[sizeof_collection $a] == 1 && [sizeof_collection $b] == 1 &&
-                [get_object_name $a] eq [get_object_name $b] &&
-                [dict exists $scaled_cell_names [get_object_name $a]] &&
-                [get_attribute $prev_pin direction] eq "in" &&
-                [get_attribute $pin direction] eq "out"} {
-                redirect -variable dcalc_text {
-                    report_delay_calculation -from $prev_pin -to $pin
-                }
-                set arc_found 1
-                break
-            }
-        }
-        set prev_pin $pin
-    }
-    if {!$arc_found} { error "No cell arc was found to verify scaling-library use." }
-    write_text ${out}.dcalc $dcalc_text
-    if {[regexp -nocase {SLG-320|DEL-012|scaling extrapolation problem|due to extrapolation in scaling} $dcalc_text]} {
-        error "report_delay_calculation detected scaling extrapolation/cancellation. Scaling verification failed: ${out}.dcalc"
-    }
-    if {[string first "Scaling libraries used" $dcalc_text] < 0} {
-        error "report_delay_calculation did not show scaling-library use. Scaling verification failed: ${out}.dcalc"
-    }
+    verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] $scaled_cells
     phase_done VERIFY_SCALING_RESULT $phase_started
 
     puts "DONE: restore-session scaling report = $out"
@@ -1689,6 +1717,72 @@ proc auto_scaling::run_after_restore_monitored {cfg} {
     }
     if {$code} { return -options $options $result }
     return $result
+}
+
+# Retry only the final evidence check in the SAME still-loaded session after a
+# failure. The caller keeps the original scaling_config across a load-only source.
+# Never recreate groups, apply V/T, regenerate reports, or explicitly update timing.
+proc auto_scaling::verify_after_run {cfg} {
+    set requested_out [file normalize [need $cfg out_rpt]]
+    set out [file join [file dirname $requested_out] "restored_[file tail $requested_out]"]
+    readable $out
+    set selection_file [readable ${out}.selection.tcl]
+    set fp [open $selection_file r]
+    fconfigure $fp -encoding utf-8
+    set selection ""
+    while {[gets $fp line] >= 0} {
+        if {[regexp {^set\s+scaling_selection\s+} $line] &&
+            ![catch {llength $line} size] && $size == 3} {
+            set selection [lindex $line 2]
+            break
+        }
+    }
+    close $fp
+    if {$selection eq "" || [catch {dict size $selection}]} {
+        error "SV-005: Cannot read the literal saved scaling selection: $selection_file"
+    }
+    if {[get_object_name [current_design]] ne [dict get $selection restored_design]} {
+        error "SV-005: Current design differs from the saved scaling run. Use the same still-loaded session."
+    }
+    foreach {record_key config_key} {v target_v t target_t} {
+        if {![same [dict get $selection $record_key] [number [need $cfg $config_key]]]} {
+            error "SV-005: Saved scaling target and original config differ: $config_key"
+        }
+    }
+    foreach {record_key config_key} {process target_process mode mode} {
+        if {![string equal -nocase [dict get $selection $record_key] [need $cfg $config_key]]} {
+            error "SV-005: Saved scaling target and original config differ: $config_key"
+        }
+    }
+    if {[dict get $selection beol] ne [canonical_beol [need $cfg target_beol]] ||
+        [lsort [dict get $selection scaling_power_nets]] ne [lsort [need $cfg scaling_power_nets]]} {
+        error "SV-005: Saved BEOL or scaling supply nets differ from the original config."
+    }
+    set dt [option $cfg delay_type max]
+    set fixed [read_fixed [dict get $selection fixed file] $dt]
+    set code [catch {
+        redirect -tee -append ${out}.log {
+            puts "VERIFY ONLY START: same-session evidence retry | report=$out"
+            puts "VERIFY ONLY: keeping groups, cell V/T, and timing reports unchanged."
+            verify_restored_parasitics $cfg
+            verify_planned_group_coverage $selection
+            set verify_cfg $cfg
+            dict set verify_cfg fixed_library_rows [option $selection fixed_library_rows {}]
+            set retained [validate_fixed_restore_libraries $fixed $verify_cfg]
+            dict set verify_cfg fixed_library_names [dict get $retained names]
+            set power [plan_fixed_path_power $fixed $verify_cfg]
+            verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] [dict get $power scaled_cells]
+            puts "VERIFY ONLY END: status=SUCCESS | evidence=${out}.dcalc"
+        }
+    } result options]
+    if {$code} {
+        set fp [open ${out}.log a]
+        puts $fp "VERIFY ONLY END: status=FAILED"
+        puts $fp "RUN ERROR: $result"
+        close $fp
+        return -options $options $result
+    }
+    return ${out}.dcalc
 }
 
 
