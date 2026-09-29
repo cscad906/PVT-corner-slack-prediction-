@@ -2228,8 +2228,33 @@ def _summary_rows(vals, truth, kinds, keep, gap, base_T, eff_T, n_paths, f1):
         # error, since a path 20 ps high and one 20 ps low cancel
         rows.append(("mean absolute error (ps)", col(lambda k: err(k, np.mean))))
         rows.append(("worst absolute error (ps)", col(lambda k: err(k, np.max))))
-    rows.append(("smallest slack / WNS (ps)",
-                 col(lambda k: float(np.nanmin(vals[:, k])))))
+    rows.append(("WNS predicted (ps)", col(lambda k: float(np.nanmin(vals[:, k])))))
+
+    # WNS is one path. Its error is that path's predicted slack against its own
+    # measured one -- taking the two minima apart can land on different paths,
+    # and their difference would not be an error at all. The percentage is
+    # against that same path's measured slack, the only denominator that means
+    # anything for a single path, and is dropped where that sits at zero.
+    def _wns(k):
+        t = truth[:, k]
+        ok = np.isfinite(t)
+        if not ok.any():
+            return None
+        i = int(np.where(ok)[0][int(np.argmin(t[ok]))])
+        return t[i], float(vals[i, k])
+
+    if any(fin[k] and _wns(k) for k in keep):
+        def wcell(fn):
+            out = []
+            for k in keep:
+                r = _wns(k) if fin[k] else None
+                out.append("" if r is None else fn(*r))
+            return out
+        rows.append(("WNS measured (ps)", wcell(lambda t, m: f1(t))))
+        rows.append(("WNS error (ps)", wcell(lambda t, m: f1(m - t))))
+        rows.append(("WNS error (%)",
+                     wcell(lambda t, m: "%.2f%%" % (100.0 * (m - t) / abs(t))
+                           if abs(t) > 1e-9 else "")))
     rows.append(("sum of negative slacks (ps)",
                  col(lambda k: float(vals[:, k][vals[:, k] < 0].sum()))))
     rows.append(("paths with negative slack (out of %d)" % n_paths,

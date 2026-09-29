@@ -1118,9 +1118,21 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
         assert list(pp) == sorted(pp), "paths must be in FIXED_PATH idx order"
     assert list(summ) == ["mean predicted slack (ps)", "mean measured slack (ps)",
                           "mean absolute error (ps)", "worst absolute error (ps)",
-                          "smallest slack / WNS (ps)", "sum of negative slacks (ps)",
+                          "WNS predicted (ps)", "WNS measured (ps)",
+                          "WNS error (ps)", "WNS error (%)",
+                          "sum of negative slacks (ps)",
                           "paths with negative slack (out of 12)",
                           "max clock frequency (MHz)"]
+    # a percentage is written with its sign, and is the WNS error over the
+    # measured WNS of the same path. Both columns round to 0.1 ps on the way
+    # out, so the recomputed percent is only good to that half-ulp.
+    for pc, e, wm in zip(summ["WNS error (%)"], summ["WNS error (ps)"],
+                         summ["WNS measured (ps)"]):
+        assert bool(pc) == bool(e)
+        if pc:
+            assert pc.endswith("%")
+            tol = 100.0 * 0.05 / abs(float(wm)) + 0.01
+            assert abs(float(pc[:-1]) - 100.0 * float(e) / abs(float(wm))) < tol
     # measured columns carry a measured average, unmeasured ones stay blank
     meas, pred = summ["mean measured slack (ps)"], summ["mean predicted slack (ps)"]
     assert any(meas) and any(not x for x in meas), \
@@ -1135,7 +1147,7 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
             assert float(b) >= float(a) - 1e-9
     # the fixture's reports carry a 2 ns period: Fmax is 1 / (2 ns - WNS)
     fm = [float(x) for x in summ["max clock frequency (MHz)"] if x]
-    ws = [float(x) for x in summ["smallest slack / WNS (ps)"] if x]
+    ws = [float(x) for x in summ["WNS predicted (ps)"] if x]
     assert fm and len(fm) == len(ws)
     assert all(abs(f - 1000.0 / (2.0 - w / 1000.0)) < 0.5 for f, w in zip(fm, ws))
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
