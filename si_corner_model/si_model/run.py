@@ -18,7 +18,8 @@ Stages
                             base-only numbers are printed; needs numpy only)
   train    cache          -> runs/<design>/<temp>/best.pt + summary.json
   bundle   per-temp best.pt -> runs/<design>/model.pt  (ONE file per circuit)
-  predict  model.pt       -> runs/<design>/<temp>/predictions_<corners>.csv
+  predict  model.pt       -> runs/<mode>/_all/predict_<temp>_hidden.rpt (the
+                            report) + runs/<design>/<temp>/predictions_<corners>.csv
   sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack only, for comparison)
   merge    all members    -> runs/_all/predictions_<corners>.csv + summary.json
   all      build, base, train, bundle, predict, merge  (sweep only when named explicitly)
@@ -64,7 +65,8 @@ docs/START.md top to bottom.
                -> the step that confirms the data parsed correctly before training
     train      train -> runs/<design>/<temp>/best.pt + summary.json  (torch/GPU)
     bundle     per-temp weights into one file per circuit -> runs/<design>/model.pt
-    predict    predict only, from saved weights -> predictions_<corners>.csv
+    predict    predict only, from saved weights. Writes the report for the
+               corners config holds out -> _all/predict_<temp>_hidden.rpt
     merge      merge every circuit and temp prediction into runs/_all/
     all        build -> base -> train -> bundle -> predict -> merge
     sweep      compare lambda_si {0, 0.1, 1, 10} -> runs/_sweep/ (slack only)
@@ -76,8 +78,11 @@ docs/START.md top to bottom.
                              where reports are READ and where output is
                              WRITTEN together, so setup results cannot be
                              overwritten by a hold run
-    --corners hidden|seen|all   corners for predict/merge (default hidden)
-    --at 0.57:cmax,0.62:rcmax   predict at these corners, measured or not
+    --corners hidden|seen|all   which corners predict/merge report (default
+                                hidden: the ones config holds out. No --at
+                                needed -- each model reports its own)
+    --at 0.57:cmax,0.62:rcmax   predict at corners of your own choosing instead,
+                                measured or not
     --freq 950                  predict at another clock frequency (MHz)
     --period 3.8                the same thing in ns. Exact:
                                 slack(T') = slack(T) + N*(T'-T), since no delay
@@ -102,6 +107,7 @@ docs/START.md top to bottom.
     bash scripts/run.sh all
     bash scripts/run.sh base --design cpu
     bash scripts/run.sh train --design cpu --temp 125
+    bash scripts/run.sh predict                # the held-out corners, with truth
     bash scripts/run.sh predict --corners all
     bash scripts/run.sh predict --sweep 0.48:0.70:0.02 --level cmax
     bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25
@@ -1925,6 +1931,57 @@ def stage_predict(m: dict, corners: str, weights: "str | None" = None) -> None:
     tr.export_predictions(m["cfg"]["train"]["out_dir"], idx, tag=corners)
 
 
+def _split_request(models: list, corners: str) -> "tuple[list, dict]":
+    """The corners each model's OWN split calls `hidden` (or `seen`, or all),
+    as (voltage, level) pairs: the union in grid order, and one set per model.
+
+    --at names corners by hand. This is the same report for the corners the
+    config already names, so asking for the held-out ones needs no typing and
+    cannot disagree with what was trained -- the split is re-derived here the
+    same way training derived it, not copied from a file.
+
+    The per-model sets are kept apart because the split is per model: a corner
+    held out for one circuit can be seen for another, and the two must not be
+    mixed into one column. A model that does not hold out a corner leaves its
+    cells empty rather than filling them with a different kind of number.
+    """
+    import numpy as np
+
+    from si_model.parsing.keys import parse_corner
+    from si_model.training.loo import make_split
+
+    req, only, rank = [], {}, {}
+    for m in models:
+        cfg = m["cfg"]
+        names = list(cfg["base"]["axes"][1].get("levels") or {})
+        for n in names:
+            rank.setdefault(n, len(rank))
+        ds = dict(np.load(cfg["data"]["cache"]))
+        measured = (np.asarray(ds["measured"], bool) if "measured" in ds
+                    else np.ones(ds["vt"].shape[0], bool))
+        split = make_split(ds["corners"].tolist(), ds["vt"], cfg, measured=measured)
+        idx = {"hidden": split.hidden_idx, "seen": split.seen_idx,
+               "all": np.arange(len(split.corners))}[corners]
+        imap = {n: float(i) for i, n in enumerate(names)}
+        prefix = str(cfg["data"].get("corner_prefix") or "TT")
+        vt = np.asarray(ds["vt"], float)
+        sel = set()
+        for ci in idx:
+            try:
+                _, k = parse_corner(str(split.corners[ci]), imap, prefix)
+            except (ValueError, KeyError):
+                continue
+            k = int(round(k))
+            if 0 <= k < len(names):
+                sel.add((round(float(vt[ci, 0]), 6), names[k]))
+        only[m["name"]] = sel
+        req.extend(sel)
+    assert req, (
+        "no %s corners in this grid -- nothing to report. Name the corners you "
+        "want instead: predict --at / --sweep." % corners)
+    return sorted(set(req), key=lambda vl: (vl[0], rank.get(vl[1], len(rank)))), only
+
+
 # ------------------------------------------------------- predict --at/--sweep
 def _parse_at(spec: str) -> list:
     """'0.57:cmax,0.62:rcmax' -> [(0.57, 'cmax'), (0.62, 'rcmax')]"""
@@ -2025,11 +2082,13 @@ def _predict_files(p: dict, name: str, temps: list) -> dict:
 
 
 def _default_predict_name(design, temp, at, sweep, level, req, weights=None,
-                          period=None, freq=None) -> str:
+                          period=None, freq=None, corners=None) -> str:
     # the temperature is not part of it: each per-temperature file puts its
     # own temperature in front of this
     parts = [design] if design else []
-    if sweep:
+    if corners:                       # predict --corners hidden/seen/all
+        parts.append(corners)
+    elif sweep:
         lo, hi, _ = sweep.split(":")
         parts.append("sweep_%s-%s" % (lo, hi))
         if level:
@@ -2337,18 +2396,15 @@ def _write_predict_report(fp, labels, keep, grp, temp, period, weights, f1) -> N
 
 def stage_predict_at(models: list, p: dict, req: list, name: str,
                      weights: "str | None" = None,
-                     period: "float | None" = None) -> "tuple[str, list]":
+                     period: "float | None" = None,
+                     only: "dict | None" = None) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE FILE PER
-    TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.csv.
+    TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.rpt.
 
-        design,path_idx,path_key,<corner> slack (ps),<corner> slack (ps),...
-        D,1,<key>,<ps>,<ps>,...
-        D,2,<key>,<ps>,<ps>,...
-                                                   <- one blank row
-        design,,summary,<corner>,<corner>,...
-        D,,smallest slack (ps),...
-        D,,sum of negative slacks (ps),...
-        D,,paths with negative slack (out of N),...
+    A column-aligned text report, not a CSV: paths in the report's own order
+    (the idx column is the n of `### FIXED_PATH idx=<n>`), then a Summary block
+    per circuit. Every value is a prediction; where the corner was measured the
+    summary also carries the measurement and the error.
 
     Split by temperature because each temperature has its own RC corners --
     125C has rcmax and cmax, m25 adds rcmin -- so a single shared table had
@@ -2357,11 +2413,10 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
     blank to explain. Every circuit at that temperature is in the file; the
     temperature is in the name, so it is not a column.
 
-    Rows are paths in the report's own order (path_idx is the n of
-    `### FIXED_PATH idx=<n>`, path_key its key=). The summary sits below one
-    blank row, where a spreadsheet's sort and filter range stops, so it never
-    mixes in with the paths. Every value is a prediction, measured corners
-    included.
+    `only` is {model name: {(voltage, level)}}: the corners THAT model should
+    answer for, used by `predict --corners hidden`, where the held-out set is
+    per model. Cells outside it are left empty -- a corner one circuit held out
+    can be a seen corner for another, and the two are not the same number.
     """
     import numpy as np
 
@@ -2376,6 +2431,18 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
         try:
             keys, pidx, vals, kinds, (vmin, vmax), gap, truth = _predict_one_model(
                 m, req, weights)
+            sel = None if only is None else only.get(m["name"], set())
+            if sel is not None and not sel:
+                # e.g. `--corners hidden` where this model holds nothing out
+                print("  this model has none of the requested corners "
+                      "-- left out of the report", flush=True)
+                continue
+            if sel is not None:
+                for k, vl in enumerate(req):
+                    if vl not in sel:
+                        kinds[k] = "n/a"
+                        vals[:, k] = np.nan
+                        truth[:, k] = np.nan
             gap, base_T, eff_T = _apply_period(m, gap, vals, period)
             # the measurement moves with the period by the same identity, so
             # comparing it against a shifted prediction stays honest
@@ -2668,7 +2735,7 @@ def main(argv=None):
                          "(runs/<mode>/<circuit>/model.pt). This circuit's own "
                          "base is still fitted on its own reports")
     ap.add_argument("--name", default=None,
-                    help="predict --at/--sweep: output file name "
+                    help="predict: output file name "
                          "(default: made from the request)")
     args = ap.parse_args(argv)
     if (args.at or args.sweep) and args.stage != "predict":
@@ -2742,14 +2809,34 @@ def main(argv=None):
                 failed.append(("merge", repr(e)))
                 traceback.print_exc()
             continue
-        if stage == "predict" and (args.at or args.sweep):
+        if stage == "predict":
+            # Both ways in write the same report. --at/--sweep names the
+            # corners; without it the corners are the ones the config already
+            # named -- the held-out set -- which is the common case and should
+            # not have to be retyped as coordinates.
             try:
-                req = _predict_request(p, models, args.at, args.sweep, args.level)
+                only = None
+                if args.at or args.sweep:
+                    req = _predict_request(p, models, args.at, args.sweep,
+                                           args.level)
+                else:
+                    req, only = _split_request(models, args.corners)
+                    # the per-model CSV/npz as well: `merge` reads those, and
+                    # they carry the per-path truth and error the report sums up
+                    for m in models:
+                        try:
+                            stage_predict(m, args.corners, args.weights)
+                        except Exception as e:
+                            failed.append((f"predict:{m['name']}", repr(e)))
+                            traceback.print_exc()
+                            print(f"!!!!! FAILED predict: {m['name']} -- "
+                                  f"continuing", flush=True)
                 name = args.name or _default_predict_name(
                     args.design, args.temp, args.at, args.sweep, args.level, req,
-                    args.weights, args.period, args.freq)
+                    args.weights, args.period, args.freq,
+                    corners=None if (args.at or args.sweep) else args.corners)
                 _, fails = stage_predict_at(models, p, req, name, args.weights,
-                                            args.period)
+                                            args.period, only)
                 failed += fails
             except Exception as e:
                 failed.append(("predict", repr(e)))
@@ -2766,8 +2853,6 @@ def main(argv=None):
                     stage_train(m)
                 elif stage == "sweep":
                     stage_sweep(m)
-                elif stage == "predict":
-                    stage_predict(m, args.corners, args.weights)
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()

@@ -475,6 +475,7 @@ bash scripts/run.sh predict --corners all              # seen 코너까지 다 �
 결과:
 
 ```
+runs/<mode>/_all/predict_<온도>_hidden.rpt ★ 홀드아웃 코너 리포트 (vim 으로 읽는 것)
 runs/<mode>/_all/predictions_hidden.csv   ★ 전 회로·전 온도 통합본
 runs/<mode>/_all/summary.json             ★ 모델별 지표
 runs/<mode>/<회로>/model.pt               ★ 넘길 가중치 (온도 전부 포함, 회로당 하나)

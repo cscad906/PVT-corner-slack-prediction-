@@ -1184,6 +1184,105 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
         _predict_request(p, only125, None, "0.5:0.6:0.1", "rcmin")
 
 
+def test_predict_writes_the_report_for_the_declared_hidden_corners(
+        real_tree, tmp_path, monkeypatch):
+    """`run.sh predict` with no --at: the same report, for the corners the
+    config already holds out.
+
+    Two things have to hold, and neither is visible from the file alone.
+    (1) The columns are THIS model's hidden corners -- not the union with the
+    other temperature's, and no seen corner smuggled in, which is what a single
+    shared request list would have produced. (2) Every cell is the number
+    predictions_hidden.csv carries for that path at that corner, matched by
+    path key so a permutation cannot pass. Both were measured to fail:
+    dropping the per-model mask puts 0.500V_cmax in the 125C file, and reading
+    the seen set instead of the hidden one changes every column.
+    """
+    pytest.importorskip("torch")
+    import csv as _csv
+
+    import si_model.run as run
+    from si_model.parsing.build_dataset import build
+    from si_model.run import (_split_request, expand, load_project, select,
+                              stage_train)
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def project():
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p["files"]["crosstalk_subdir"] = None
+        p["train"]["epochs"] = 1
+        p["train"]["device"] = "cpu"
+        return p
+
+    models = select(expand(project()), design="boomcore")
+    for m in models:
+        build(m["cfg"])
+        stage_train(m)
+
+    # the whole CLI path, including the dispatch: `predict` with no --at
+    monkeypatch.setenv("SI_STAGE", "")            # restored on teardown
+    monkeypatch.setattr(run, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(run, "load_project", lambda *a, **k: project())
+    assert run.main(["predict"]) == 0
+
+    req, only = _split_request(models, "hidden")
+    for m in models:
+        temp = str(m["temp"])
+        fp = os.path.join("runs", "setup", "_all", "predict_%s_hidden.rpt" % temp)
+        assert os.path.exists(fp), fp
+        labels, paths, summ = _read_report(fp)
+        # (1) this model's own holdout, in grid order
+        want = ["%.3fV_%s" % vl for vl in req if vl in only[m["name"]]]
+        assert labels == want, (labels, want)
+        assert len(paths) == 12
+
+        # (2) the same numbers as the csv the trainer wrote
+        csv_fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
+        want_ps = {}
+        with open(csv_fp, newline="", encoding="utf-8") as f:
+            for row in _csv.DictReader(f):
+                if row.get("path_key") and row["path_key"] != "summary":
+                    want_ps[(row["path_key"], row["corner"])] = float(row["model_ps"])
+        assert want_ps, csv_fp
+        by_v = {}
+        for (key, corner), ps in want_ps.items():
+            by_v.setdefault(corner, {})[key] = ps
+        assert len(by_v) == len(labels), (sorted(by_v), labels)
+        # corner NAMES differ (SSPG_0p5V_cmax vs 0.500V_cmax), so match on the
+        # level and the voltage the label states
+        keys = _report_keys(fp)
+        for ci, lab in enumerate(labels):
+            v, lv = float(lab.split("V_")[0]), lab.split("V_")[1]
+            hit = [c for c in by_v if c.endswith("_" + lv)
+                   and abs(float(c.split("_")[1].rstrip("V").replace("p", ".")) - v) < 1e-6]
+            assert len(hit) == 1, (lab, sorted(by_v))
+            col = by_v[hit[0]]
+            for i, row in paths.items():
+                # path by path, not as a set: a permutation would pass that
+                assert abs(float(row[ci]) - col[keys[i]]) <= 0.05, (lab, keys[i])
+
+        # the summary is the same block the --at report carries
+        assert summ["WNS predicted (ps)"] and summ["WNS measured (ps)"]
+        assert all(c.endswith("%") for c in summ["WNS error (%)"])
+
+
+def _report_keys(fp):
+    """{idx: path key} from a predict report -- the column _read_report drops."""
+    lines = open(fp, encoding="utf-8").read().splitlines()
+    i = next(n for n, l in enumerate(lines) if l.startswith("  ----"))
+    a = lines[i].index("- ") + 2                  # past the idx column
+    b = lines[i].index(" ", a)
+    out = {}
+    for l in lines[i + 1:]:
+        if not l.strip():
+            break
+        out[int(l[:a].strip())] = l[a:b].strip()
+    return out
+
+
 def _read_report(fp):
     """Read a predict report back: (corner labels, {idx: [values]}, {label: [values]}).
 

@@ -223,6 +223,7 @@ E  2/40 loss=  218.36  lr=2.0e-03
 | 전체 통합 코너 표 | `runs/<mode>/_all/summary.json` (코너 단위. 모델별 분할은 없다) |
 | train/val/test 별 요약, best epoch | 같은 파일 |
 | 경로별 예측 (truth · base · model) | `predictions_hidden.csv` |
+| 홀드아웃 코너 리포트 (사람이 읽는 것) | `runs/<mode>/_all/predict_<온도>_hidden.rpt` |
 
 ### 설정은 `config.yaml` 의 `run:` 에 있다
 
@@ -387,11 +388,29 @@ si_corner_model/
     ├── <회로>/<온도>/summary.json             성적
     ├── <회로>/<온도>/predictions_hidden.csv   경로별 예측
     ├── <회로>/model.pt                        회로당 한 파일 (bundle)
+    ├── _all/predict_<온도>_hidden.rpt         홀드아웃 코너 리포트 (predict)
     └── _all/predictions_hidden.csv            전 회로·온도 합본 (merge)
     └── _all/summary.json                      코너별 성적표
 ```
 
 넘길 때 필요한 건 보통 `runs/<mode>/_all/` 두 개와 회로별 `model.pt` 다.
+
+### 홀드아웃 코너 리포트 (`predict`)
+
+config 가 `hidden_corners` 로 빼 둔 코너는 **좌표를 다시 칠 필요가 없다.** 그냥:
+
+```
+bash scripts/run.sh predict                 # --corners hidden 이 기본값
+bash scripts/run.sh predict --temp m25      # 그 온도만
+```
+
+학습이 끝나 있으면 이 한 줄로 온도마다
+`runs/<mode>/_all/predict_<온도>_hidden.rpt` 가 나온다. 아래 `--at` 리포트와
+**형식이 완전히 같고**, 이 코너들은 정답이 있으므로 measured·오차·WNS 오차 줄이
+전부 채워진다. 회로마다 홀드아웃이 다르면 각 회로는 **자기 홀드아웃 열만** 채우고
+나머지는 빈칸이다 (남의 홀드아웃은 이 회로엔 학습에 쓴 코너라 같은 숫자가 아니다).
+
+`merge` 가 읽는 회로별 `predictions_hidden.csv` 도 같이 갱신된다.
 
 ### 측정 안 한 코너까지 예측하기 (`predict --at` / `--sweep`)
 
@@ -433,7 +452,10 @@ Design: PERIC0_Timing_Report
   mean measured slack (ps)                        78.8                         412.9
   mean absolute error (ps)                         0.1                           0.2
   worst absolute error (ps)                        0.1                           0.2
-  smallest slack / WNS (ps)                       56.7          167.0          390.7
+  WNS predicted (ps)                              56.7          167.0          390.7
+  WNS measured (ps)                               56.8                         390.9
+  WNS error (ps)                                  -0.1                          -0.2
+  WNS error (%)                                 -0.18%                        -0.05%
   sum of negative slacks (ps)                      0.0            0.0            0.0
   paths with negative slack (out of 12)              0              0              0
   max clock frequency (MHz)                      573.7          612.4          709.6
@@ -441,7 +463,8 @@ Design: PERIC0_Timing_Report
 
 - 한 줄 = 경로 하나, **리포트의 path 인덱스 순서대로**. `idx` 는 `### FIXED_PATH idx=<n>`
   의 n, `path` 는 같은 줄의 `key=`
-- 측정된 코너에만 `mean measured` 와 오차 두 줄이 채워진다. 측정 안 한 코너는 빈칸
+- 측정된 코너에만 `mean measured`·오차·`WNS measured`·`WNS error` 줄이 채워진다.
+  측정 안 한 코너는 빈칸. `WNS error (%)` 는 그 경로 자신의 측정 slack 기준
 - 요청한 코너가 그 온도에 하나도 없으면 그 온도 파일은 안 만든다
 
 ### 클럭 주파수·주기를 바꿔서 보기 (`--freq` / `--period`)
