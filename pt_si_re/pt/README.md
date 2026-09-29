@@ -215,6 +215,13 @@ library 개수를 출력합니다. 조건이 여러 개면 전부 표시하고, 
 같은 이름이 여러 DB에 있으면 후보 `extended_name`을 출력하며 중단합니다.
 그때는 표시된 후보 중 하나를 `DB경로:library이름` 형태 그대로 입력합니다.
 
+`PLAN_DESIGN_LIBRARIES`에서 `Cannot build scaling inputs for required library set`
+오류가 났다면 **`LIBRARY_NAME ""`를 그대로 두어도 됩니다.** 같은 pt_shell에 남은
+`scaling_config`의 실행 로그를 읽고 마지막 `RUN ERROR`에서 실패한 셋 이름을
+자동 추출합니다. `details/`와 이전 형식의 report 옆 로그를 모두 지원합니다.
+로그의 마지막 오류가 다른 종류이거나 로그가 없으면 임의로 셋을 고르지 않고
+`LG-001`로 중단합니다. 이 조회 때문에 scaling을 다시 실행하지 않습니다.
+
 ```tcl
 set LIBRARY_NAME "실제_library_이름_또는_library_set_이름"
 ```
@@ -240,6 +247,20 @@ scaling 실행의 process 설정으로 필터링하며, 셋 내 library별 전�
 로드된 셋 구성원에는 planner가 제외하는 target/다른 온도 library도 있을 수 있으므로,
 이 목록 전체가 실제 scaling 입력이라는 뜻은 아닙니다. catalog 전압은 scaling 코드의
 해석 값이며 native group 표에는 실제 group의 rail별 전압이 표시됩니다.
+
+V 축 조회에는 다음처럼 target 온도의 전압과 목표점 제외 후의 양쪽 입력도 표시합니다.
+
+```text
+V CHECK: target=0.76 temperature=25 loaded_at_target_temperature=0.54 0.685
+V CHECK: after_target_exclusion=0.54 0.685 lower=0.685 upper=NONE status=CANNOT_BRACKET
+```
+
+`upper=NONE`이면 target보다 높은 입력이 없고, `lower=NONE`이면 낮은 입력이
+없습니다. `STATIC_ON_V_AXIS`는 그 온도에서 전압이 한 점 이하인 셋,
+`EXPLICIT_FIXED_SET`은 명시적으로 고정한 셋입니다. 이 표는 catalog의 범위
+진단이며 실제 cell/PG 전압 또는 전체 scaling 성공을 증명하는 표는 아닙니다.
+셋 조회가 `found 0`이면 `SET LOOKUP`의 process 필터와 이름이 일치한 공정도
+표시하므로, 이름 자체가 없는 경우와 다른 공정에서만 일치하는 경우를 구분합니다.
 
 셋 조회는 `run_scaling_after_restore.tcl`을 이미 실행한 **같은 세션**에서 사용합니다.
 scaling이 외삽 오류로 중단된 뒤에도 조회할 수 있으며, group을 만들기 전에

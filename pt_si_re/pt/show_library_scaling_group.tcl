@@ -1,6 +1,7 @@
 # Show a loaded library's scaling group OR a scaling-script library set.
 #
-# USER SETTINGS: enter a library name OR the name after "library set" below.
+# USER SETTINGS: blank = read the failed library-set name from the current run log.
+# Or enter an exact library name OR the name after "library set" below.
 # Use the library name shown by get_libs, not a .db path alone or a cell name.
 # If the name is duplicated, use one printed extended_name: DB_path:lib_name.
 set LIBRARY_NAME ""
@@ -25,6 +26,77 @@ set LIBRARY_NAME ""
 # ASCII source/output avoids UTF-8/EUC-KR source-encoding problems.
 
 namespace eval library_scaling_group_report {}
+
+proc library_scaling_group_report::failed_set_name {} {
+    if {![info exists ::scaling_config] || ![dict exists $::scaling_config out_rpt]} {
+        error "Set LIBRARY_NAME, or use this query in the SAME pt_shell with the original scaling_config from the failed run."
+    }
+    set requested [file normalize [dict get $::scaling_config out_rpt]]
+    set out [file join [file dirname $requested] "restored_[file tail $requested]"]
+    set candidates [list [file join [file dirname $out] details "[file tail $out].log"] ${out}.log]
+    set log_file ""
+    foreach candidate $candidates {
+        if {![file isfile $candidate] || ![file readable $candidate]} { continue }
+        if {$log_file eq "" || [file mtime $candidate] > [file mtime $log_file]} {
+            set log_file $candidate
+        }
+    }
+    if {$log_file eq ""} {
+        error "LG-001: No readable log for the current scaling_config. Set LIBRARY_NAME manually. Expected: $candidates"
+    }
+    set fp [open $log_file r]
+    # Match ASCII log structure; do not depend on the company terminal encoding.
+    fconfigure $fp -encoding iso8859-1
+    set last_error ""
+    while {[gets $fp line] >= 0} {
+        if {[string match {RUN ERROR:*} $line]} { set last_error $line }
+    }
+    close $fp
+    if {![regexp {^RUN ERROR: Cannot build scaling inputs for required library set '([^']+)':} $last_error -> set_name]} {
+        error "LG-001: The latest RUN ERROR is not a library-set planning error. Set LIBRARY_NAME manually. Log: $log_file"
+    }
+    puts "AUTO-SELECTED FAILED LIBRARY SET: $set_name"
+    puts "AUTO-SELECT SOURCE: $log_file"
+    return $set_name
+}
+
+# Reproduce only the 1D V range check, including target-temperature filtering
+# and exact target-point exclusion. This does not prove native group coverage.
+proc library_scaling_group_report::show_voltage_range {members cfg} {
+    if {![dict exists $cfg target_v] || ![dict exists $cfg target_t] ||
+        [string toupper [dict get $cfg mode]] ne "V"} { return }
+    set target [dict get $cfg target_v]
+    set temperature [dict get $cfg target_t]
+    set loaded {}
+    set eligible {}
+    foreach row $members {
+        if {abs([dict get $row t] - $temperature) >= 1e-8} { continue }
+        set v [dict get $row v]
+        lappend loaded $v
+        if {abs($v - $target) >= 1e-8} { lappend eligible $v }
+    }
+    set loaded [lsort -real -unique $loaded]
+    set eligible [lsort -real -unique $eligible]
+    set lower NONE
+    set upper NONE
+    foreach v $eligible {
+        if {$v < $target} { set lower $v }
+        if {$v > $target && $upper eq "NONE"} { set upper $v }
+    }
+    set status BRACKET_AVAILABLE
+    if {[llength $loaded] <= 1} {
+        set status STATIC_ON_V_AXIS
+    } elseif {$lower eq "NONE" || $upper eq "NONE"} {
+        set status CANNOT_BRACKET
+    }
+    if {[dict exists $cfg fixed_library_set] &&
+        [string equal -nocase [dict get $cfg fixed_library_set] [dict get [lindex $members 0] family]]} {
+        set status EXPLICIT_FIXED_SET
+    }
+    puts "V CHECK: target=$target temperature=$temperature loaded_at_target_temperature=$loaded"
+    puts "V CHECK: after_target_exclusion=$eligible lower=$lower upper=$upper status=$status"
+    puts "NOTE: V CHECK uses catalog values and planner rules, not effective PG-pin voltages or a full scaling validation."
+}
 
 proc library_scaling_group_report::show_current_group {libraries seen_name} {
     upvar 1 $seen_name seen
@@ -63,12 +135,15 @@ proc library_scaling_group_report::show_library_set {set_name} {
     puts "LIBRARY SET LOOKUP: using the scaling script's loaded-library catalog (read-only)."
     set catalog [::auto_scaling::catalog $cfg]
     set members {}
+    set matching_processes {}
     foreach row [dict get $catalog rows] {
         if {![string equal -nocase [dict get $row family] $set_name]} { continue }
+        lappend matching_processes [dict get $row process]
         if {$process ne "" && [dict get $row process] ne $process} { continue }
         lappend members $row
     }
     if {![llength $members]} {
+        puts "SET LOOKUP: process_filter=$process name_matches_in_processes=[lsort -unique $matching_processes]"
         error "No exact loaded library or scaling-script library set named '$set_name'; found 0 (process filter='$process'). Copy only the name inside the quotes after library set, without quotes or the rest of the error message."
     }
     puts "SELECTED LIBRARY SET: [dict get [lindex $members 0] family]"
@@ -76,6 +151,7 @@ proc library_scaling_group_report::show_library_set {set_name} {
     if {[dict exists $cfg target_v] && [dict exists $cfg target_t]} {
         puts "SCALING RUN TARGET: voltage=[dict get $cfg target_v] V temperature=[dict get $cfg target_t] C axis=[dict get $cfg mode]"
     }
+    show_voltage_range $members $cfg
     # The catalog includes target and other-temperature libraries that the
     # scaling planner may exclude. These are NOT claimed to be active inputs.
     puts "NOTE: loaded set members below are NOT necessarily active scaling inputs."
@@ -106,13 +182,18 @@ proc library_scaling_group_report::show_library_set {set_name} {
 
 proc library_scaling_group_report::run {library_name} {
     set library_name [string trim $library_name]
+    set automatic [expr {$library_name eq ""}]
     if {$library_name eq ""} {
-        error "Set LIBRARY_NAME at the top of show_library_scaling_group.tcl, then source it again."
+        set library_name [failed_set_name]
     }
     foreach command {get_libs sizeof_collection foreach_in_collection get_object_name get_attribute report_lib_groups redirect} {
         if {![llength [info commands $command]]} {
             error "PrimeTime command '$command' is missing. Source this file in pt_shell after restore_session."
         }
+    }
+    if {$automatic} {
+        show_library_set $library_name
+        return
     }
 
     # Exact lookup keeps special characters and long names literal.
