@@ -90,6 +90,10 @@ scaling 적용을 취소했습니다. 다른 PrimeTime major version을 사용�
 복원합니다. 먼저 primary power PG pin의 실제 supply 연결을 조회하고,
 `SCALING_POWER_NET`에 연결된 fixed-path cell이 사용하는 library family만
 내삽 검사 및 scaling group 구성 대상으로 선택합니다.
+사용 여부는 연결된 library의 **원본 DB 경로와 내부 library 이름을 함께**
+비교합니다. 같은 내부 이름을 쓰는 다른 DB가 로드돼 있다는 이유만으로
+그 DB의 셋을 필수 대상으로 선택하지 않습니다. 실제 사용 중인 library의
+source 경로를 확인할 수 없으면 `LS-001`로 중단합니다.
 fixed path 밖의 cell과 SI aggressor는 restore 상태를 유지합니다.
 
 다른 supply net에만 연결된 셋은 입력 전압이 여러 개여도 내삽 검사에서 제외하고
@@ -333,9 +337,38 @@ source 경로 중복 제거로 catalog에서 빠졌다는 뜻이고, `NO_SOURCE_
 경로를 조회할 수 없다는 뜻입니다. 기본값 `0`은 간단한 개수·전압 요약과 해석
 실패/누락 각각 최대 3개만 보여줍니다. 이 진단은 후보를 합치거나 scaling 규칙을
 변경하지 않고, 추가 `report_lib`·PG pin 검색·timing 갱신도 수행하지 않습니다.
-이 조회는 fixed path나 scaling supply 자격을 확인하지 않으므로, 고정 전원에
-연결된 메모리 셋의 표시 또는 `CANNOT_BRACKET`만으로 실제 scaling 대상이라고
-판단하면 안 됩니다. 실제 대상 선택은 run Tcl의 fixed path·supply 판정으로 정합니다.
+전압 범위 표 자체는 supply 자격을 판정하지 않습니다. 최신 run Tcl에서 계획을
+수행했다면 같은 세션의 `RECORDED SET SCOPE`가 DB 경로와 내부 이름으로 확인한
+사용 여부 및 PG 연결 판정을 보여줍니다. `FIXED_RAIL_ONLY`는 고정 전원에서만
+사용되어 내삽이 필요 없는 셋, `NOT_USED_BY_FIXED_PATHS`는 fixed path에서
+사용하지 않는 셋입니다. `TARGET_RAIL_MATCH`는 대상 전원의 셀에서 사용하는
+셋이며, 이후 static/명시적 fixed 정책에 따라 실제 내삽 여부를 결정합니다.
+`SCOPE LINKED LIB`에는 그 판정의 근거가 된 실제 연결 DB만 출력합니다.
+이 정보는 계획 시점에 기록한 것이므로 nearest DB 교체 후의 현재 연결을
+증명하는 표는 아닙니다. 설정이나 current design이 바뀌거나 이전 run Tcl이라
+기록이 없으면 `UNAVAILABLE`로 표시합니다. 조회 때문에 PG 연결을 다시 검색하지
+않습니다. 고정 메모리 셋의 `CANNOT_BRACKET`을 실행 중 외삽 오류로 해석하면 안 됩니다.
+
+시간이 오래 걸리는 STA를 실행하지 않고 대상 선택만 확인하려면, run Tcl의
+USER SETTINGS를 실제 조건으로 설정한 뒤 **restore된 pt_shell**에서 다음을
+실행합니다. 두 경로는 실제 파일 경로로 바꿉니다. 이 과정은 DB·전압·온도·그룹을
+변경하지 않고 보고서 파일도 만들지 않습니다. fixed path의 PG 연결 및 library
+catalog 조회 시간은 필요합니다.
+
+```tcl
+set auto_scaling_restored_load_only 1
+source /path/to/pt/run_scaling_after_restore.tcl
+unset auto_scaling_restored_load_only
+set scaling_config [auto_scaling::build_restore_config]
+auto_scaling::plan $scaling_config
+source /path/to/pt/show_library_scaling_group.tcl
+```
+
+`plan`이 `Cannot bracket`로 끝나도 그전에 대상 판정이 기록되므로 다음 source
+명령을 실행할 수 있습니다. query Tcl의 `LIBRARY_NAME`에는 확인할 셋 이름을
+입력합니다. 빈칸 자동 선택은 기존 실행 로그가 있을 때만 사용할 수 있고,
+위의 계획 조회는 새 실행 로그를 생성하지 않습니다. 현재 세션이 이미 변경된
+상태라면 이 조회는 그 상태를 기준으로 하며, 원래 restore 상태를 증명하지 않습니다.
 
 V 축 조회에는 다음처럼 target 온도의 전압과 목표점 제외 후의 양쪽 입력도 표시합니다.
 

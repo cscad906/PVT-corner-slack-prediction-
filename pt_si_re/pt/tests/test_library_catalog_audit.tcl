@@ -85,7 +85,7 @@ assert_contains $text "members=3 other_set=2 same_set_other_process=1"
 assert_contains $text "candidates=2 other_temperature=1 excluded_target=0 nearest_candidates=0"
 assert_contains $text "all parsed sets/processes/temperatures; NOT scaling inputs): 0.475 0.685 0.825 0.875 0.925 0.95"
 assert_contains $text "after_target_exclusion=0.475 0.685 lower=0.685 upper=NONE status=CANNOT_BRACKET"
-assert_contains $text "fixed-path membership and SCALING_POWER_NET eligibility are NOT checked"
+assert_contains $text "RECORDED SET SCOPE: UNAVAILABLE"
 assert_contains $text "UNPARSED: LIB=unparsed reason=ambiguous Operating Conditions"
 assert_contains $text "LIB=same_db_other_internal_name reason=SOURCE_PATH_REUSED"
 assert_contains $text "LIB=no_source reason=NO_SOURCE_FILE"
@@ -116,6 +116,30 @@ set text [query_text MEM_RCMAX]
 assert_contains $text "nearest_candidates=0 fixed_restore=2"
 assert_contains $text "status=EXPLICIT_FIXED_SET"
 original_puts "PASS: detailed reasons, ordinary target exclusion, exact-target nearest eligibility and numeric restore policy remain distinct"
+
+# Scope comes from actual linked DB identity and cached PG classification,
+# never from the voltage-range display. Reading it must not rescan PG pins.
+set context $::scaling_config
+set fixed_result [dict create family_matches {MEM_RCMAX MEM_RCMIN} \
+    used_library_keys [list [list /fixture/high.db high] [list /fixture/rcmin.db rcmin]]]
+set target_result [dict create family_matches MEM_RCMIN \
+    used_library_keys [list [list /fixture/rcmin.db rcmin]]]
+set ::auto_scaling::last_library_scope [dict create context $context design_name "" \
+    rows $::fixture_rows fixed_result $fixed_result rail_result $target_result]
+set text [query_text MEM_RCMAX]
+assert_contains $text "RECORDED SET SCOPE: FIXED_RAIL_ONLY"
+assert_contains $text "SCOPE LINKED LIB: high"
+assert_absent $text "SCOPE LINKED LIB: low"
+set text [query_text MEM_RCMIN]
+assert_contains $text "RECORDED SET SCOPE: TARGET_RAIL_MATCH"
+assert_contains $text "SCOPE LINKED LIB: rcmin"
+set text [query_text MEM_RCMAX_REV2]
+assert_contains $text "RECORDED SET SCOPE: NOT_USED_BY_FIXED_PATHS"
+dict set ::scaling_config target_v 0.76
+set text [query_text MEM_RCMAX]
+assert_contains $text "RECORDED SET SCOPE: UNAVAILABLE (scaling configuration changed since planning)"
+set ::auto_scaling::last_library_scope {}
+original_puts "PASS: fixed-rail, target-rail and outside-path recorded scope; actual linked DB only; changed config rejected without PG rescans"
 
 set ::SHOW_ALL_LOADED_LIBRARIES 0
 set ::output {}

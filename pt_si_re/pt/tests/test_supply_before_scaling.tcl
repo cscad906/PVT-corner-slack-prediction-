@@ -16,6 +16,8 @@ proc foreach_in_collection {name objects body} {
     foreach item $objects { uplevel 1 $body }
 }
 set ::cell_lib [dict create launch CORE/FF logic CORE/INV memory LIMITED/INV]
+set ::linked_db [dict create CORE /fixture/CORE_0.80.db LIMITED /fixture/LIMITED_0.685.db \
+    LIMITED_1 /fixture/LIMITED_1_0.685.db LIMITED_2 /fixture/LIMITED_2_0.685.db]
 set ::pin_rail [dict create launch/VDD VDD_SCALE logic/VDD VDD_SCALE memory/VDD VDD_FIXED]
 set ::pg_queries 0
 set ::group_queries 0
@@ -55,6 +57,7 @@ proc get_attribute {args} {
     set attribute [lindex $args end]
     switch -- $attribute {
         full_name { return $objects }
+        source_file_name { return [dict get $::linked_db $objects] }
         pin_name { return [lindex [split $objects /] end] }
         supply_connection { return [dict get $::pin_rail $objects] }
         lib_cell {
@@ -99,6 +102,31 @@ assert [expr {[llength [dict get $plan selected]] == 2}] "Wrong core inputs"
 assert [expr {[string first "FIXED_RAIL_UNSCALED family=LIMITED" \
     [auto_scaling::scaling_inputs_text $plan]] >= 0}] "Missing fixed-rail evidence"
 puts "PASS: target 0.76 ignores fixed-rail 0.475/0.685 set before groups exist"
+
+# A loaded DB with the SAME internal name as the linked core must not make
+# its unrelated memory set a required target-rail interpolation family.
+rename auto_scaling::catalog auto_scaling::identity_base_catalog
+proc auto_scaling::catalog {cfg} {
+    set data [identity_base_catalog $cfg]
+    foreach voltage {0.475 0.685} {
+        dict lappend data rows [dict create process SSPG v $voltage t 25 \
+            family SAME_NAME_MEMORY lib_name CORE file /fixture/memory_${voltage}.db]
+    }
+    return $data
+}
+set identity_plan [auto_scaling::plan $cfg]
+assert [expr {[dict get $identity_plan family] eq "CORE"}] "Same-name unlinked DB entered target-rail scope"
+assert [expr {[dict get [dict get $::auto_scaling::last_library_scope rail_result] family_matches] eq "CORE"}] "Recorded scope used names without source DBs"
+set identity_rows [dict get [auto_scaling::catalog $cfg] rows]
+dict set ::linked_db CORE /fixture/alias/../CORE_0.80.db
+set identity_result [auto_scaling::family_used_by_cells $identity_rows {CORE SAME_NAME_MEMORY} {launch logic}]
+assert [expr {[dict get $identity_result family_matches] eq "CORE"}] "Normalized actual source path did not match"
+dict set ::linked_db CORE ""
+expect_error {auto_scaling::family_used_by_cells $identity_rows {CORE SAME_NAME_MEMORY} {launch logic}} {LS-001:*}
+dict set ::linked_db CORE /fixture/CORE_0.80.db
+rename auto_scaling::catalog {}
+rename auto_scaling::identity_base_catalog auto_scaling::catalog
+puts "PASS: duplicate internal library names in different DBs do not add false memory targets; normalized source identity and missing-source rejection"
 
 # On the target rail the SAME library must retain its interpolation checks.
 dict set ::pin_rail memory/VDD VDD_SCALE
@@ -242,6 +270,7 @@ dict set ::pin_rail memory/VDD UNKNOWN_RAIL
 set before $::catalog_queries
 expect_error {auto_scaling::plan $cfg} {FP-007:*}
 assert [expr {$::catalog_queries == $before}] "Libraries checked before unknown supply error"
+assert [expr {$::auto_scaling::last_library_scope eq ""}] "Failed new planning reused stale scope"
 dict unset ::pin_rail memory/VDD
 expect_error {auto_scaling::plan $cfg} {FP-006:*}
 dict set ::pin_rail memory/VDD VDD_FIXED

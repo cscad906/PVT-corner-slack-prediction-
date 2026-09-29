@@ -30,6 +30,55 @@ set SHOW_ALL_LOADED_LIBRARIES 0
 
 namespace eval library_scaling_group_report {}
 
+# Use provenance cached during planning, including a failed bracket check.
+# Do not repeat a large fixed-path PG-pin search merely to explain a set.
+proc library_scaling_group_report::show_recorded_scope {set_name cfg} {
+    if {![info exists ::auto_scaling::last_library_scope] ||
+        $::auto_scaling::last_library_scope eq ""} {
+        puts "RECORDED SET SCOPE: UNAVAILABLE (no scope captured by the current scaling script)"
+        return
+    }
+    set scope $::auto_scaling::last_library_scope
+    dict for {key value} [dict get $scope context] {
+        if {![dict exists $cfg $key] || [dict get $cfg $key] ne $value} {
+            puts "RECORDED SET SCOPE: UNAVAILABLE (scaling configuration changed since planning)"
+            return
+        }
+    }
+    if {[llength [info commands ::current_design]] &&
+        [get_object_name [current_design]] ne [dict get $scope design_name]} {
+        puts "RECORDED SET SCOPE: UNAVAILABLE (current design changed since planning)"
+        return
+    }
+    set fixed [dict get $scope fixed_result]
+    set target [dict get $scope rail_result]
+    set status NOT_USED_BY_FIXED_PATHS
+    set selected_result $fixed
+    if {[lsearch -nocase -exact [dict get $target family_matches] $set_name] >= 0} {
+        set status TARGET_RAIL_MATCH
+        set selected_result $target
+    } elseif {[lsearch -nocase -exact [dict get $fixed family_matches] $set_name] >= 0} {
+        set status FIXED_RAIL_ONLY
+    }
+    puts "RECORDED SET SCOPE: $status (planning-time DB identity and fixed-path PG connections)"
+    if {$status eq "TARGET_RAIL_MATCH"} {
+        puts "SCOPE NOTE: used on the configured target rail; static/fixed-set policies may still disable interpolation."
+    } else {
+        puts "SCOPE NOTE: this set is not required for interpolation on the configured target rail."
+    }
+    set seen [dict create]
+    foreach row [dict get $scope rows] {
+        if {![string equal -nocase [dict get $row family] $set_name]} { continue }
+        set key [list [file normalize [dict get $row file]] [dict get $row lib_name]]
+        if {[dict exists $seen $key] ||
+            [lsearch -exact [dict get $selected_result used_library_keys] $key] < 0} { continue }
+        dict set seen $key 1
+        puts "SCOPE LINKED LIB: [dict get $row lib_name]"
+        puts "  DB=[dict get $row file]"
+    }
+    puts "SCOPE NOTE: recorded before V/T changes or nearest-DB relinking; this is not a fresh scan of the current session."
+}
+
 # Explain catalog/filter decisions without changing the scaling inputs. A row
 # from another set is NOT a compatible input merely because its V is useful.
 proc library_scaling_group_report::catalog_row_reason {row set_name cfg} {
@@ -121,7 +170,8 @@ proc library_scaling_group_report::show_catalog_audit {catalog set_name cfg} {
     puts "CATALOG VOLTAGES (all parsed sets/processes/temperatures; NOT scaling inputs): [lsort -real -unique $voltages]"
     puts "SET LOOKUP AUDIT: members=[dict get $counts SET_MEMBER] other_set=[dict get $counts OTHER_LIBRARY_SET] same_set_other_process=[dict get $counts OTHER_PROCESS]"
     puts "V INPUT AUDIT: candidates=[dict get $input_counts V_INPUT_CANDIDATE] other_temperature=[dict get $input_counts OTHER_TEMPERATURE] excluded_target=[dict get $input_counts EXCLUDED_TARGET_POINT] nearest_candidates=[dict get $input_counts NEAREST_DB_CANDIDATE] fixed_restore=[dict get $input_counts FIXED_RESTORE_DB]"
-    puts "QUERY SCOPE: library metadata only; fixed-path membership and SCALING_POWER_NET eligibility are NOT checked."
+    puts "QUERY SCOPE: range audit uses library metadata; fixed-path/supply scope is reported separately from cached planning provenance."
+    show_recorded_scope $set_name $cfg
     if {$verbose} {
         set number 0
         foreach row $rows {
