@@ -185,13 +185,14 @@ library 개수를 출력합니다. 조건이 여러 개면 전부 표시하고, 
 변경하거나 timing을 갱신하지 않으며 파일도 만들지 않습니다.
 
 특정 library에서 외삽 경고가 발생했다면 `show_library_scaling_group.tcl` 맨 위의
-빈 입력란에 PrimeTime library 이름을 입력합니다. DB 파일 경로나 `library/cell`
-이름이 아니라 `get_libs`에 표시되는 library 이름을 정확히 적습니다.
+빈 입력란에 PrimeTime library 이름 **또는 오류의 `library set '...'` 안에 나온
+셋 이름**을 입력합니다. 실제 library 이름을 넣을 때는 DB 파일 경로나
+`library/cell` 이름이 아니라 `get_libs`에 표시되는 이름을 정확히 적습니다.
 같은 이름이 여러 DB에 있으면 후보 `extended_name`을 출력하며 중단합니다.
 그때는 표시된 후보 중 하나를 `DB경로:library이름` 형태 그대로 입력합니다.
 
 ```tcl
-set LIBRARY_NAME "실제_library_이름"
+set LIBRARY_NAME "실제_library_이름_또는_library_set_이름"
 ```
 
 경고가 발생한 **같은 `pt_shell` 세션**에서 실행합니다. 이미 restore했다면 다시
@@ -201,11 +202,25 @@ restore할 필요가 없습니다.
 source /path/to/repository/pt_si_re/pt/show_library_scaling_group.tcl
 ```
 
-선택한 library가 실제로 속한 scaling group만 조회하며, 그 group의 모든 member
+실제 library 이름을 입력하면 그 library가 속한 scaling group만 조회하며, 그 group의 모든 member
 library 이름과 process·온도·전압·`extended_name`을 PrimeTime 원본 표로 출력합니다. multi-rail
 library는 rail별 전압도 표에 그대로 표시됩니다. 이 값은 library group의 값이며
 셀/PG pin에 적용된 `set_voltage` override를 보여주는 것은 아닙니다.
 전압 내삽 여부는 같은 조건에서 **대상 rail**의 전압이 target 양쪽에 있는지 확인합니다.
+
+셋 이름은 scaling Tcl이 만든 묶음 이름이므로 `get_libs`에서 직접 찾을 수 없습니다.
+실제 library 이름으로 찾지 못하면, 같은 세션에 이미 정의된 `auto_scaling::catalog`를
+사용해 **scaling과 동일한 PVT/family 해석 규칙**으로 로드된 셋 구성원을 조회합니다.
+scaling 실행의 process 설정으로 필터링하며, 셋 내 library별 전압·온도·process·DB
+경로를 출력하고 현재 생성된 PrimeTime scaling group은 별도 표로 표시합니다.
+로드된 셋 구성원에는 planner가 제외하는 target/다른 온도 library도 있을 수 있으므로,
+이 목록 전체가 실제 scaling 입력이라는 뜻은 아닙니다. catalog 전압은 scaling 코드의
+해석 값이며 native group 표에는 실제 group의 rail별 전압이 표시됩니다.
+
+셋 조회는 `run_scaling_after_restore.tcl`을 이미 실행한 **같은 세션**에서 사용합니다.
+scaling이 외삽 오류로 중단된 뒤에도 조회할 수 있으며, group을 만들기 전에
+중단됐다면 구성원 목록은 나오고 `CURRENT GROUP: NONE`이 표시됩니다.
+조회 Tcl은 scaling Tcl을 다시 source하거나 timing을 변경하지 않습니다.
 
 library가 로드되어 있어도 group에 속하지 않으면 `SCALING GROUP: NONE`을
 표시합니다. scaling 실행 중 생성한 group은 저장하지 않은 fresh restore session에는
