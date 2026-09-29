@@ -310,6 +310,33 @@ scaling 실행의 process 설정으로 필터링하며, 셋 내 library별 전�
 이 목록 전체가 실제 scaling 입력이라는 뜻은 아닙니다. catalog 전압은 scaling 코드의
 해석 값이며 native group 표에는 실제 group의 rail별 전압이 표시됩니다.
 
+셋 조회의 `CATALOG AUDIT`는 실제 로드된 library 수와 PVT 해석 성공·실패·catalog
+누락 수를 나누어 표시합니다. `CATALOG VOLTAGES`는 **모든 셋·공정·온도에서 해석된
+전압의 합집합**이며, 그 전압들이 선택한 셋의 내삽 입력이라는 뜻은 아닙니다.
+`SET LOOKUP AUDIT`의 `other_set`은 다른 셋으로 분류된 DB 수,
+`same_set_other_process`는 같은 셋이지만 공정 설정 때문에 빠진 DB 수입니다.
+`V INPUT AUDIT`는 목표 온도에서의 후보, 다른 온도, 목표점 제외를 별도로 셉니다.
+nearest 정책에서는 목표점도 후보로 인정하므로 `nearest_candidates`로 표시합니다.
+
+다른 전압 DB가 있는데 위쪽 `LIB=... voltage=...` 목록에는 두 전압만 나온다면,
+조회 Tcl 맨 위를 다음처럼 설정하고 같은 세션에서 다시 source합니다.
+
+```tcl
+set SHOW_ALL_LOADED_LIBRARIES 1
+```
+
+전체 catalog row의 `AUDIT LIB`에 원본 library·DB·분류된 셋과 제외 이유를 표시합니다.
+`OTHER_LIBRARY_SET`, `OTHER_PROCESS`, `OTHER_TEMPERATURE`, `EXCLUDED_TARGET_POINT`를
+구분하며, PVT 해석 실패는 `UNPARSED`와 실제 실패 이유로 출력합니다.
+`NOT_CATALOGED ... SOURCE_PATH_REUSED`는 같은 DB 파일 안의 다른 내부 library가
+source 경로 중복 제거로 catalog에서 빠졌다는 뜻이고, `NO_SOURCE_FILE`은 source
+경로를 조회할 수 없다는 뜻입니다. 기본값 `0`은 간단한 개수·전압 요약과 해석
+실패/누락 각각 최대 3개만 보여줍니다. 이 진단은 후보를 합치거나 scaling 규칙을
+변경하지 않고, 추가 `report_lib`·PG pin 검색·timing 갱신도 수행하지 않습니다.
+이 조회는 fixed path나 scaling supply 자격을 확인하지 않으므로, 고정 전원에
+연결된 메모리 셋의 표시 또는 `CANNOT_BRACKET`만으로 실제 scaling 대상이라고
+판단하면 안 됩니다. 실제 대상 선택은 run Tcl의 fixed path·supply 판정으로 정합니다.
+
 V 축 조회에는 다음처럼 target 온도의 전압과 목표점 제외 후의 양쪽 입력도 표시합니다.
 
 ```text

@@ -5,6 +5,9 @@
 # Use the library name shown by get_libs, not a .db path alone or a cell name.
 # If the name is duplicated, use one printed extended_name: DB_path:lib_name.
 set LIBRARY_NAME ""
+# 0 = compact catalog audit; 1 = print every loaded library and its lookup/input reason.
+# This setting applies to library-set lookup, not exact-library group lookup.
+set SHOW_ALL_LOADED_LIBRARIES 0
 # END USER SETTINGS
 #
 # Usage in pt_shell AFTER restore_session (or after a scaling run):
@@ -26,6 +29,125 @@ set LIBRARY_NAME ""
 # ASCII source/output avoids UTF-8/EUC-KR source-encoding problems.
 
 namespace eval library_scaling_group_report {}
+
+# Explain catalog/filter decisions without changing the scaling inputs. A row
+# from another set is NOT a compatible input merely because its V is useful.
+proc library_scaling_group_report::catalog_row_reason {row set_name cfg} {
+    if {![string equal -nocase [dict get $row family] $set_name]} {
+        return [list OTHER_LIBRARY_SET NOT_EVALUATED]
+    }
+    if {[dict exists $cfg target_process] && [dict get $cfg target_process] ne "" &&
+        [dict get $row process] ne [string toupper [dict get $cfg target_process]]} {
+        return [list OTHER_PROCESS NOT_EVALUATED]
+    }
+    if {![dict exists $cfg target_v] || ![dict exists $cfg target_t] ||
+        [string toupper [dict get $cfg mode]] ne "V"} {
+        return [list SET_MEMBER NOT_EVALUATED]
+    }
+    if {abs([dict get $row t] - [dict get $cfg target_t]) >= 1e-8} {
+        return [list SET_MEMBER OTHER_TEMPERATURE]
+    }
+    set fixed_sets {}
+    if {[dict exists $cfg fixed_library_set]} {
+        if {[llength [info commands ::auto_scaling::resolve_fixed_families]]} {
+            set fixed_sets [::auto_scaling::resolve_fixed_families \
+                [dict get $cfg fixed_library_set] [dict get $cfg catalog_families] 0]
+        } elseif {[string equal -nocase [dict get $cfg fixed_library_set] $set_name]} {
+            set fixed_sets [list [dict get $row family]]
+        }
+    }
+    if {[lsearch -exact $fixed_sets [dict get $row family]] >= 0} {
+        if {[dict exists $cfg fixed_library_voltage] &&
+            [string equal -nocase [dict get $cfg fixed_library_voltage] nearest]} {
+            return [list SET_MEMBER NEAREST_DB_CANDIDATE]
+        }
+        return [list SET_MEMBER FIXED_RESTORE_DB]
+    }
+    if {abs([dict get $row v] - [dict get $cfg target_v]) < 1e-8} {
+        return [list SET_MEMBER EXCLUDED_TARGET_POINT]
+    }
+    return [list SET_MEMBER V_INPUT_CANDIDATE]
+}
+
+proc library_scaling_group_report::show_catalog_audit {catalog set_name cfg} {
+    set verbose 0
+    if {[info exists ::SHOW_ALL_LOADED_LIBRARIES]} {
+        if {![string is boolean -strict $::SHOW_ALL_LOADED_LIBRARIES]} {
+            error "LG-002: SHOW_ALL_LOADED_LIBRARIES must be 0 or 1."
+        }
+        set verbose [expr {$::SHOW_ALL_LOADED_LIBRARIES ? 1 : 0}]
+    }
+    set counts [dict create SET_MEMBER 0 OTHER_LIBRARY_SET 0 OTHER_PROCESS 0]
+    set input_counts [dict create V_INPUT_CANDIDATE 0 OTHER_TEMPERATURE 0 \
+        EXCLUDED_TARGET_POINT 0 NEAREST_DB_CANDIDATE 0 FIXED_RESTORE_DB 0 NOT_EVALUATED 0]
+    set represented [dict create]
+    set catalog_paths [dict create]
+    set voltages {}
+    set rows [dict get $catalog rows]
+    foreach row $rows {
+        dict set represented [list [dict get $row file] [dict get $row lib_name]] 1
+        dict set catalog_paths [dict get $row file] 1
+        lappend voltages [dict get $row v]
+        lassign [catalog_row_reason $row $set_name $cfg] lookup input
+        dict incr counts $lookup
+        dict incr input_counts $input
+    }
+    set ignored {}
+    if {[dict exists $catalog ignored]} { set ignored [dict get $catalog ignored] }
+    foreach row $ignored {
+        dict set represented [list [dict get $row path] [dict get $row lib_name]] 1
+        dict set catalog_paths [dict get $row path] 1
+    }
+
+    # The scaling catalog deduplicates source_file_name. Check the raw loaded
+    # objects too, so another internal library in the same DB is not hidden.
+    # No report_lib, PG-pin query, or timing update is added by this audit.
+    set loaded [get_libs -quiet *]
+    set skipped {}
+    foreach_in_collection lib $loaded {
+        set path [get_attribute $lib source_file_name]
+        set name [get_attribute $lib full_name]
+        if {[dict exists $represented [list $path $name]]} { continue }
+        if {$path eq ""} {
+            set reason NO_SOURCE_FILE
+        } elseif {[dict exists $catalog_paths $path]} {
+            set reason SOURCE_PATH_REUSED
+        } else {
+            set reason NOT_IN_CATALOG
+        }
+        lappend skipped [dict create lib_name $name path $path reason $reason]
+    }
+    puts "CATALOG AUDIT: raw_loaded=[sizeof_collection $loaded] parsed=[llength $rows] unparsed=[llength $ignored] not_cataloged=[llength $skipped]"
+    puts "CATALOG VOLTAGES (all parsed sets/processes/temperatures; NOT scaling inputs): [lsort -real -unique $voltages]"
+    puts "SET LOOKUP AUDIT: members=[dict get $counts SET_MEMBER] other_set=[dict get $counts OTHER_LIBRARY_SET] same_set_other_process=[dict get $counts OTHER_PROCESS]"
+    puts "V INPUT AUDIT: candidates=[dict get $input_counts V_INPUT_CANDIDATE] other_temperature=[dict get $input_counts OTHER_TEMPERATURE] excluded_target=[dict get $input_counts EXCLUDED_TARGET_POINT] nearest_candidates=[dict get $input_counts NEAREST_DB_CANDIDATE] fixed_restore=[dict get $input_counts FIXED_RESTORE_DB]"
+    puts "QUERY SCOPE: library metadata only; fixed-path membership and SCALING_POWER_NET eligibility are NOT checked."
+    if {$verbose} {
+        set number 0
+        foreach row $rows {
+            incr number
+            lassign [catalog_row_reason $row $set_name $cfg] lookup input
+            puts "AUDIT LIB $number: lookup=$lookup v_input=$input process=[dict get $row process] voltage=[dict get $row v] V temperature=[dict get $row t] C"
+            puts "  LIB=[dict get $row lib_name]"
+            puts "  SET=[dict get $row family]"
+            puts "  DB=[dict get $row file]"
+        }
+    }
+    foreach section [list [list UNPARSED $ignored] [list NOT_CATALOGED $skipped]] {
+        lassign $section label items
+        set limit [expr {$verbose ? [llength $items] : 3}]
+        foreach row [lrange $items 0 [expr {$limit-1}]] {
+            puts "$label: LIB=[dict get $row lib_name] reason=[dict get $row reason]"
+            puts "  DB=[dict get $row path]"
+        }
+        if {[llength $items] > $limit} {
+            puts "$label: remaining=[expr {[llength $items]-$limit}] (set SHOW_ALL_LOADED_LIBRARIES 1 for all entries)"
+        }
+    }
+    if {!$verbose} {
+        puts "DETAIL OPTION: set SHOW_ALL_LOADED_LIBRARIES 1 at the top of this query Tcl to print every loaded-library decision."
+    }
+}
 
 proc library_scaling_group_report::failed_set_name {} {
     if {![info exists ::scaling_config] || ![dict exists $::scaling_config out_rpt]} {
@@ -167,6 +289,8 @@ proc library_scaling_group_report::show_library_set {set_name} {
         if {$process ne "" && [dict get $row process] ne $process} { continue }
         lappend members $row
     }
+    dict set cfg catalog_families [lsort -unique $catalog_families]
+    show_catalog_audit $catalog $set_name $cfg
     if {![llength $members]} {
         puts "SET LOOKUP: process_filter=$process name_matches_in_processes=[lsort -unique $matching_processes]"
         error "No exact loaded library or scaling-script library set named '$set_name'; found 0 (process filter='$process'). Copy only the name inside the quotes after library set, without quotes or the rest of the error message."
@@ -176,7 +300,6 @@ proc library_scaling_group_report::show_library_set {set_name} {
     if {[dict exists $cfg target_v] && [dict exists $cfg target_t]} {
         puts "SCALING RUN TARGET: voltage=[dict get $cfg target_v] V temperature=[dict get $cfg target_t] C axis=[dict get $cfg mode]"
     }
-    dict set cfg catalog_families [lsort -unique $catalog_families]
     show_voltage_range $members $cfg
     # The catalog includes target and other-temperature libraries that the
     # scaling planner may exclude. These are NOT claimed to be active inputs.
