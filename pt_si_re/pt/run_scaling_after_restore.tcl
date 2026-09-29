@@ -591,6 +591,10 @@ proc auto_scaling::families_matching_library_names {rows families used_names} {
 # fixed-path-only 모드에서 실제 scaling할 library family를 얻습니다.
 proc auto_scaling::family_used_by_fixed_paths {rows families fixed} {
     set cells [fixed_path_cells $fixed]
+    return [family_used_by_cells $rows $families $cells]
+}
+
+proc auto_scaling::family_used_by_cells {rows families cells} {
     set used_names [dict create]
     if {[sizeof_collection $cells]} {
         set lib_cells [get_lib_cells -quiet -of_objects $cells]
@@ -728,13 +732,22 @@ proc auto_scaling::plan {cfg} {
         error "SCALING_AXIS must be V, T, or VT"
     }
 
-    set fixed ""
-    if {[option $cfg fixed_tcl ""] ne ""} {
+    set fixed [option $cfg resolved_fixed ""]
+    if {$fixed eq "" && [option $cfg fixed_tcl ""] ne ""} {
         set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
     }
     if {$fixed eq ""} {
         error "FP-000: FIXED_PATH_FILE is required for fixed-path-only scaling."
     }
+
+    # Resolve supply connections before asking any library set to interpolate.
+    # This lookup does not require an existing scaling group.
+    if {[dict exists $cfg fixed_path_supply]} {
+        set supply [dict get $cfg fixed_path_supply]
+    } else {
+        set supply [classify_fixed_path_supply $fixed $cfg]
+    }
+    dict set fixed cell_names [get_object_name [dict get $supply path_cells]]
 
     set cat [catalog $cfg]
     set rows [dict get $cat rows]
@@ -768,6 +781,14 @@ proc auto_scaling::plan {cfg} {
         error "Fixed paths do not resolve to a loaded PVT library set. fixed-path library names: $fixed_names; design-used sets: $used_matches"
     }
 
+    set rail_result [family_used_by_cells $rows $families [dict get $supply target_cells]]
+    set rail_matches [dict get $rail_result family_matches]
+    set fixed_rail_sets {}
+    foreach family $fixed_matches {
+        if {[lsearch -exact $rail_matches $family] < 0} { lappend fixed_rail_sets $family }
+    }
+    puts "FIXED-RAIL LIBRARY SETS (no interpolation check): $fixed_rail_sets"
+
     set requested_family [option $cfg family ""]
     if {$requested_family ne ""} {
         if {[lsearch -exact $families $requested_family] < 0} {
@@ -776,13 +797,16 @@ proc auto_scaling::plan {cfg} {
         if {[lsearch -exact $fixed_matches $requested_family] < 0} {
             error "Requested library set is not used by the fixed paths: $requested_family; fixed-path sets: $fixed_matches"
         }
+        if {[lsearch -exact $rail_matches $requested_family] < 0} {
+            error "Requested library set has no fixed-path cell on SCALING_POWER_NET: $requested_family"
+        }
         set chosen_families [list $requested_family]
         puts "EXPLICIT LIBRARY SET OVERRIDE: $chosen_families"
     } else {
-        set chosen_families $fixed_matches
-        puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) USED BY FIXED PATHS ONLY: $chosen_families"
+        set chosen_families $rail_matches
+        puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) ON FIXED-PATH SCALING POWER NET: $chosen_families"
     }
-    puts "FIXED-PATH SCALING SCOPE: design sets=[llength $used_matches], selected sets=[llength $fixed_matches]"
+    puts "FIXED-PATH SCALING SCOPE: design sets=[llength $used_matches], path sets=[llength $fixed_matches], target-rail sets=[llength $chosen_families]"
 
     # Operating condition/family를 해석하지 못한 library라도 design에서 실제
     # 사용 중이면 숨기지 않습니다. scaling 가능 여부를 증명하지 못했으므로
@@ -800,20 +824,24 @@ proc auto_scaling::plan {cfg} {
     }
 
     set groups {}
-    set static_sets {}
+    set static_sets $fixed_rail_sets
     set selected {}
     set excluded {}
     set fixed_library_rows {}
     set fixed_family [string trim [option $cfg fixed_library_set ""]]
     if {$fixed_family ne ""} {
         set matched_family ""
-        foreach family $chosen_families {
+        foreach family $fixed_matches {
             if {[string equal -nocase $family $fixed_family]} { set matched_family $family }
         }
         if {$matched_family eq ""} {
-            error "FIXED_LIBRARY_SET '$fixed_family' is not a selected fixed-path library set. Available: $chosen_families"
+            error "FIXED_LIBRARY_SET '$fixed_family' is not a selected fixed-path library set. Available: $fixed_matches"
         }
         set fixed_family $matched_family
+        # A declared fixed set can be on another rail; still validate its DB.
+        if {[lsearch -exact $chosen_families $fixed_family] < 0} {
+            lappend chosen_families $fixed_family
+        }
         set fixed_voltage [number [need $cfg fixed_library_voltage]]
         foreach row $rows {
             if {[dict get $row family] eq $fixed_family} { lappend fixed_library_rows $row }
@@ -821,7 +849,7 @@ proc auto_scaling::plan {cfg} {
     }
     foreach family $chosen_families {
         if {$family eq $fixed_family} {
-            lappend static_sets $family
+            set static_sets [lsort -unique [concat $static_sets [list $family]]]
             puts "EXPLICIT FIXED LIBRARY SET: $family | expected_linked_db_voltage=$fixed_voltage V | restore conditions unchanged"
             continue
         }
@@ -844,6 +872,17 @@ proc auto_scaling::plan {cfg} {
         error "The instantiated design uses no library set with a usable interpolation grid. Static sets: $static_sets"
     }
 
+    set scaling_library_rows {}
+    foreach row $rows {
+        foreach group $groups {
+            if {[dict get $row process] eq $process &&
+                [dict get $row family] eq [dict get $group family]} {
+                lappend scaling_library_rows $row
+                break
+            }
+        }
+    }
+
     set result [dict create]
     dict set result process $process
     dict set result v $tv
@@ -853,6 +892,8 @@ proc auto_scaling::plan {cfg} {
     dict set result family $chosen_families
     dict set result groups $groups
     dict set result static_sets $static_sets
+    dict set result fixed_rail_sets $fixed_rail_sets
+    dict set result scaling_library_rows $scaling_library_rows
     dict set result fixed_library_rows $fixed_library_rows
     dict set result selected $selected
     dict set result excluded $excluded
@@ -1193,11 +1234,16 @@ proc auto_scaling::verify_planned_group_coverage {plan} {
 # Mixed groups remain subject to the target-exclusion check.
 proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperature} {
     if {![report_has_corner $text $rail $voltage $temperature]} { return 0 }
+    set scoped [dict exists $plan scaling_library_rows]
+    set relevant [dict create]
+    foreach row [option $plan scaling_library_rows {}] {
+        dict set relevant [list [file normalize [dict get $row file]] [dict get $row lib_name]] 1
+    }
     set allowed [dict create]
     foreach row [option $plan fixed_library_rows {}] {
         dict set allowed [list [file normalize [dict get $row file]] [dict get $row lib_name]] 1
     }
-    if {![dict size $allowed]} { return 1 }
+    if {!$scoped && ![dict size $allowed]} { return 1 }
     set seen [dict create]
     foreach_in_collection lib [get_libs -quiet *] {
         set group [get_attribute -quiet $lib lib_scaling_group]
@@ -1205,15 +1251,20 @@ proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperat
         set members [add_to_collection $group $lib]
         set keys {}
         set all_fixed 1
+        set has_relevant 0
         foreach_in_collection member $members {
             set path [get_attribute $member source_file_name]
             set key [list [file normalize $path] [get_attribute $member full_name]]
             lappend keys $key
             if {![dict exists $allowed $key]} { set all_fixed 0 }
+            if {[dict exists $relevant $key]} { set has_relevant 1 }
         }
         set keys [lsort -unique $keys]
         if {[dict exists $seen $keys]} { continue }
         dict set seen $keys 1
+        # Groups unrelated to this run's target-rail families stay restored.
+        # A mixed group touching a scaled family still gets the full check.
+        if {$scoped && !$has_relevant} { continue }
         if {$all_fixed} { continue }
         redirect -variable group_text {
             report_lib_groups -scaling -objects $lib -nosplit -show {voltage temperature process}
@@ -1371,6 +1422,9 @@ proc auto_scaling::scaling_inputs_text {plan} {
     foreach family [dict get $plan static_sets] {
         lappend lines "STATIC_UNSCALED family=$family"
     }
+    foreach family [option $plan fixed_rail_sets {}] {
+        lappend lines "FIXED_RAIL_UNSCALED family=$family reason=no_fixed_path_cell_on_scaling_power_net"
+    }
     foreach row [option $plan fixed_restore_records {}] {
         lappend lines "EXPLICIT_FIXED_RESTORE family=[dict get $row family] lib=[dict get $row lib_name] nominal_voltage=[dict get $row v] V temperature=[dict get $row t] C"
         lappend lines "  DB=[dict get $row file]"
@@ -1462,62 +1516,26 @@ proc auto_scaling::resolve_configured_supply_roles {cfg} {
     return $roles
 }
 
-# fixed path의 data pin 전체에서 cell을 복원하고, scaling group이 있는 library의
-# cell 중 사용자가 지정한 scaling rail에 연결된 primary PG pin만 선택합니다.
-# rail 전체 set_voltage가 아니라 cell+pg_pin override를 만들기 위한 계획입니다.
-proc auto_scaling::plan_fixed_path_power {fixed cfg} {
+# Read-only supply classification, independent of library scaling groups.
+# Run before interpolation planning so fixed rails cannot cause bracket errors.
+proc auto_scaling::classify_fixed_path_supply {fixed cfg} {
     set path_cells [fixed_path_cells $fixed]
-    # path cell과 lib_cell은 같은 순서/개수로 한 번에 얻습니다. library별 전체
-    # design instance를 다시 조회하지 않으므로 이 단계의 범위도 fixed path뿐입니다.
-    set path_lib_cells [get_attribute $path_cells lib_cell]
-    if {[sizeof_collection $path_lib_cells] != [sizeof_collection $path_cells]} {
-        error "FP-004: Cannot resolve lib_cell for every FIXED_PATHS cell. cells=[sizeof_collection $path_cells] lib_cells=[sizeof_collection $path_lib_cells]"
-    }
-    set used_lib_cells [get_lib_cells -quiet -of_objects $path_cells]
-    set used_libs [get_libs -quiet -of_objects $used_lib_cells]
-    set scalable_lib_names [dict create]
-    set explicit_fixed_names [option $cfg fixed_library_names {}]
-    foreach_in_collection lib $used_libs {
-        if {[lsearch -exact $explicit_fixed_names [get_attribute $lib full_name]] >= 0} { continue }
-        set scaling_group [get_attribute -quiet $lib lib_scaling_group]
-        if {$scaling_group ne "" && [sizeof_collection $scaling_group]} {
-            dict set scalable_lib_names [get_attribute $lib full_name] 1
-        }
-    }
-    set scalable_names {}
-    set static_names {}
-    foreach cell_name [get_object_name $path_cells] \
-            lib_cell_name [get_object_name $path_lib_cells] {
-        set slash [string first "/" $lib_cell_name]
-        if {$slash <= 0} { error "Cannot extract a library name from lib_cell: $lib_cell_name" }
-        set lib_name [string range $lib_cell_name 0 [expr {$slash-1}]]
-        if {[dict exists $scalable_lib_names $lib_name]} {
-            lappend scalable_names $cell_name
-        } else {
-            lappend static_names $cell_name
-        }
-    }
-    set scalable_candidates [get_cells -quiet -exact $scalable_names]
-    set static_path_cells [get_cells -quiet -exact $static_names]
-    if {$scalable_candidates eq "" || ![sizeof_collection $scalable_candidates]} {
-        error "FP-005: No fixed-path cell uses an active scaling group after fixed-library exclusions. path_cells=[sizeof_collection $path_cells] explicit_fixed_libraries=[llength $explicit_fixed_names]"
-    }
-
     if {[dict exists $cfg configured_supply_roles]} {
         set roles [dict get $cfg configured_supply_roles]
     } else {
         set roles [resolve_configured_supply_roles $cfg]
     }
-    set pg_pins [get_pg_pins -of_objects $scalable_candidates]
+    set pg_pins [get_pg_pins -of_objects $path_cells]
     set primary_pg [filter_collection $pg_pins {type == primary_power}]
     if {$primary_pg eq "" || ![sizeof_collection $primary_pg]} {
-        error "FP-006: No type=primary_power PG pins were found on scalable FIXED_PATHS cells. scalable_cells=[sizeof_collection $scalable_candidates]"
+        error "FP-006: No type=primary_power PG pins were found on FIXED_PATHS cells. path_cells=[sizeof_collection $path_cells]"
     }
 
     set target_cell_names [dict create]
     set voltage_cells_by_pin [dict create]
     set voltage_rails_by_pin [dict create]
     set fixed_cell_names [dict create]
+    set mapped_cell_names [dict create]
     set unknown_rails {}
     foreach_in_collection pg $primary_pg {
         # supply_connection 문자열은 hierarchical UPF에서 short name일 수 있으므로
@@ -1539,6 +1557,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
             error "Cannot extract a cell name from PG pin full_name: $full_name"
         }
         set cell_name [string range $full_name 0 end-[string length $suffix]]
+        dict set mapped_cell_names $cell_name 1
         if {[dict get $roles $supply_name] eq "scaling"} {
             dict set target_cell_names $cell_name 1
             dict lappend voltage_cells_by_pin $pin_name $cell_name
@@ -1549,10 +1568,17 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     }
     set unknown_rails [lsort -unique $unknown_rails]
     if {[llength $unknown_rails]} {
-        error "FP-007: Scalable FIXED_PATHS cells have primary supply rails absent from the restored supply-net map: $unknown_rails"
+        error "FP-007: FIXED_PATHS cells have primary supply rails absent from the restored supply-net map: $unknown_rails"
+    }
+    set unmapped_cells {}
+    foreach cell_name [get_object_name $path_cells] {
+        if {![dict exists $mapped_cell_names $cell_name]} { lappend unmapped_cells $cell_name }
+    }
+    if {[llength $unmapped_cells]} {
+        error "FP-006: Cannot classify FIXED_PATHS cells without a connected primary_power PG pin: [lrange $unmapped_cells 0 19]"
     }
     if {![dict size $target_cell_names]} {
-        error "FP-008: No scalable FIXED_PATHS cell has a primary PG pin on SCALING_POWER_NET. scalable_cells=[sizeof_collection $scalable_candidates] primary_pins=[sizeof_collection $primary_pg] fixed_rail_cells=[dict size $fixed_cell_names]"
+        error "FP-008: No FIXED_PATHS cell has a primary PG pin on SCALING_POWER_NET. path_cells=[sizeof_collection $path_cells] primary_pins=[sizeof_collection $primary_pg] fixed_rail_cells=[dict size $fixed_cell_names]"
     }
 
     set target_cells [get_cells -quiet -exact [dict keys $target_cell_names]]
@@ -1562,22 +1588,84 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
         set rails [lsort -unique [dict get $voltage_rails_by_pin $pin_name]]
         lappend voltage_groups [dict create pin_name $pin_name \
             cell_names $cell_names rails $rails]
-        puts "FIXED-PATH VOLTAGE GROUP: pg_pin=$pin_name cells=[llength $cell_names] rails=$rails"
     }
-    set static_path_count 0
-    if {$static_path_cells ne ""} { set static_path_count [sizeof_collection $static_path_cells] }
     set fixed_power_nets {}
     dict for {name role} $roles {
         if {$role eq "fixed"} { lappend fixed_power_nets $name }
     }
     set fixed_power_nets [lsort $fixed_power_nets]
-    puts "FIXED-PATH CELL SCOPE: all=[sizeof_collection $path_cells] scalable_library=[sizeof_collection $scalable_candidates] target_voltage=[sizeof_collection $target_cells] static_library=$static_path_count"
+    puts "FIXED-PATH SUPPLY SCOPE: all=[sizeof_collection $path_cells] target_rail=[sizeof_collection $target_cells] fixed_rail=[dict size $fixed_cell_names]"
     puts "AUTO-FIXED POWER NETS (unchanged): count=[llength $fixed_power_nets] names=$fixed_power_nets"
     puts "SCALING POWER NETS (fixed-path cell override only): [dict get $cfg scaling_power_nets]"
 
-    return [dict create path_cells $path_cells scaled_cells $target_cells \
+    return [dict create path_cells $path_cells target_cells $target_cells \
         voltage_groups $voltage_groups fixed_cell_names [dict keys $fixed_cell_names] \
         fixed_power_nets $fixed_power_nets]
+}
+
+# Filter the cached supply scope by the planned and active scaling libraries.
+# Never query PG connections again during the same run.
+proc auto_scaling::plan_fixed_path_power {fixed cfg} {
+    if {[dict exists $cfg fixed_path_supply]} {
+        set supply [dict get $cfg fixed_path_supply]
+    } else {
+        set supply [classify_fixed_path_supply $fixed $cfg]
+    }
+    set path_cells [dict get $supply path_cells]
+    set path_lib_cells [get_attribute $path_cells lib_cell]
+    if {[sizeof_collection $path_lib_cells] != [sizeof_collection $path_cells]} {
+        error "FP-004: Cannot resolve lib_cell for every FIXED_PATHS cell. cells=[sizeof_collection $path_cells] lib_cells=[sizeof_collection $path_lib_cells]"
+    }
+    set used_libs [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $path_cells]]
+    set scalable_lib_names [dict create]
+    set explicit_fixed_names [option $cfg fixed_library_names {}]
+    foreach_in_collection lib $used_libs {
+        set lib_name [get_attribute $lib full_name]
+        if {[lsearch -exact $explicit_fixed_names $lib_name] >= 0} { continue }
+        if {[dict exists $cfg scaling_library_names] &&
+            [lsearch -exact [dict get $cfg scaling_library_names] $lib_name] < 0} { continue }
+        set scaling_group [get_attribute -quiet $lib lib_scaling_group]
+        if {$scaling_group ne "" && [sizeof_collection $scaling_group]} {
+            dict set scalable_lib_names $lib_name 1
+        }
+    }
+    set scalable_names [dict create]
+    set static_count 0
+    foreach cell_name [get_object_name $path_cells] lib_cell_name [get_object_name $path_lib_cells] {
+        set slash [string first "/" $lib_cell_name]
+        if {$slash <= 0} { error "Cannot extract a library name from lib_cell: $lib_cell_name" }
+        set lib_name [string range $lib_cell_name 0 [expr {$slash-1}]]
+        if {[dict exists $scalable_lib_names $lib_name]} {
+            dict set scalable_names $cell_name 1
+        } else {
+            incr static_count
+        }
+    }
+    if {![dict size $scalable_names]} {
+        error "FP-005: No fixed-path cell uses an active scaling group after fixed-library exclusions. path_cells=[sizeof_collection $path_cells] explicit_fixed_libraries=[llength $explicit_fixed_names]"
+    }
+    set target_names [dict create]
+    set voltage_groups {}
+    foreach group [dict get $supply voltage_groups] {
+        set names {}
+        foreach cell_name [dict get $group cell_names] {
+            if {![dict exists $scalable_names $cell_name]} { continue }
+            lappend names $cell_name
+            dict set target_names $cell_name 1
+        }
+        if {![llength $names]} { continue }
+        dict set group cell_names $names
+        lappend voltage_groups $group
+        puts "FIXED-PATH VOLTAGE GROUP: pg_pin=[dict get $group pin_name] cells=[llength $names] rails=[dict get $group rails]"
+    }
+    if {![dict size $target_names]} {
+        error "FP-008: No scalable FIXED_PATHS cell has a primary PG pin on SCALING_POWER_NET. scalable_cells=[dict size $scalable_names]"
+    }
+    set target_cells [get_cells -quiet -exact [dict keys $target_names]]
+    puts "FIXED-PATH CELL SCOPE: all=[sizeof_collection $path_cells] scalable_library=[dict size $scalable_names] target_voltage=[sizeof_collection $target_cells] static_library=$static_count"
+    return [dict create path_cells $path_cells scaled_cells $target_cells \
+        voltage_groups $voltage_groups fixed_cell_names [dict get $supply fixed_cell_names] \
+        fixed_power_nets [dict get $supply fixed_power_nets]]
 }
 
 proc auto_scaling::run_after_restore {cfg} {
@@ -1612,6 +1700,14 @@ proc auto_scaling::run_after_restore {cfg} {
     set parasitics [verify_restored_parasitics $restored_cfg]
     phase_done VERIFY_PARASITICS $phase_started
 
+    set phase_started [phase_start CLASSIFY_FIXED_PATH_SUPPLY]
+    set fixed [read_fixed [need $cfg fixed_tcl] [option $cfg delay_type max]]
+    set supply [classify_fixed_path_supply $fixed $restored_cfg]
+    dict set fixed cell_names [get_object_name [dict get $supply path_cells]]
+    dict set restored_cfg resolved_fixed $fixed
+    dict set restored_cfg fixed_path_supply $supply
+    phase_done CLASSIFY_FIXED_PATH_SUPPLY $phase_started
+
     set phase_started [phase_start PLAN_DESIGN_LIBRARIES]
     set plan [plan $restored_cfg]
     dict set plan restored_parasitics $parasitics
@@ -1619,6 +1715,11 @@ proc auto_scaling::run_after_restore {cfg} {
     dict set restored_cfg fixed_library_rows [dict get $plan fixed_library_rows]
     set fixed_restore [validate_fixed_restore_libraries $fixed $restored_cfg]
     dict set restored_cfg fixed_library_names [dict get $fixed_restore names]
+    set scaling_library_names {}
+    foreach row [dict get $plan scaling_library_rows] {
+        lappend scaling_library_names [dict get $row lib_name]
+    }
+    dict set restored_cfg scaling_library_names [lsort -unique $scaling_library_names]
     dict set plan fixed_restore_records [dict get $fixed_restore records]
     set dt [option $cfg delay_type max]
     if {$dt ni {max min}} { error "delay_type must be max or min" }
@@ -1817,6 +1918,13 @@ proc auto_scaling::verify_after_run {cfg} {
             dict set verify_cfg fixed_library_rows [option $selection fixed_library_rows {}]
             set retained [validate_fixed_restore_libraries $fixed $verify_cfg]
             dict set verify_cfg fixed_library_names [dict get $retained names]
+            if {[dict exists $selection scaling_library_rows]} {
+                set scaling_names {}
+                foreach row [dict get $selection scaling_library_rows] {
+                    lappend scaling_names [dict get $row lib_name]
+                }
+                dict set verify_cfg scaling_library_names [lsort -unique $scaling_names]
+            }
             set power [plan_fixed_path_power $fixed $verify_cfg]
             verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] [dict get $power scaled_cells]
             puts "VERIFY ONLY END: status=SUCCESS | evidence=[detail_path $out .dcalc]"

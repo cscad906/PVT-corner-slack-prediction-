@@ -87,8 +87,18 @@ scaling 적용을 취소했습니다. 다른 PrimeTime major version을 사용�
 
 현재 운영 모드는 fixed path에 포함된 cell만 scaling합니다. `1_union.py`가
 `FIXED_PATHS`에 저장한 launch/capture pin과 전체 data-pin chain으로 cell 집합을
-복원하고, 그 cell들이 사용하는 library family만 scaling group에 포함합니다.
+복원합니다. 먼저 primary power PG pin의 실제 supply 연결을 조회하고,
+`SCALING_POWER_NET`에 연결된 fixed-path cell이 사용하는 library family만
+내삽 검사 및 scaling group 구성 대상으로 선택합니다.
 fixed path 밖의 cell과 SI aggressor는 restore 상태를 유지합니다.
+
+다른 supply net에만 연결된 셋은 입력 전압이 여러 개여도 내삽 검사에서 제외하고
+restore 상태를 유지합니다. 같은 셋이 고정 rail과 scaling rail 양쪽에 사용되면
+그 셋은 내삽 검사하되 실제 전압 변경은 scaling rail의 cell/PG pin에만 적용합니다.
+따라서 scaling rail의 셋에서 양쪽 입력이 부족하면 여전히 `Cannot bracket`로
+중단합니다. 범위 밖 target을 가까운 DB로 자동 대체하는 기능은 없습니다.
+PG 연결을 확인할 수 없는 fixed-path cell은 고정이라고 추측하지 않고
+`FP-006` 또는 `FP-007`로 중단합니다.
 
 고정된 한 점만 있는 SRAM, macro, IO library set은 scaling group에 넣지 않고
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
@@ -109,7 +119,9 @@ library의 `report_lib` 전압이 지정 값과 일치하는지 변경 전에 �
 
 기존 group에 target이 포함되어 있어도 group 전체가 지정한 고정 셋에만 속하면
 그대로 유지합니다. 고정 셋과 보간 셋이 섞인 group은 예외 처리하지 않습니다.
-나머지 셋은 목표 DB를 제외한 기존 보간 규칙을 계속 적용합니다.
+scaling rail의 나머지 셋은 목표 DB를 제외한 기존 보간 규칙을 계속 적용합니다.
+기존 group의 target 포함 검사도 이번에 scaling할 셋과 연결된 group을 대상으로
+하며, 그 셋과 다른 셋이 섞인 group은 group 전체를 검사합니다.
 
 library 이름에 주 전압과 보조 rail 전압이 함께 들어간 multi-rail library는
 `report_lib` Operating Conditions의 주 전압만 scaling 축으로 인식합니다. 이름의
@@ -301,12 +313,12 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 스크립트가 자동으로 다음 작업을 수행합니다.
 
 1. restore된 전체 supply net 개수/이름 확인, 설정한 scaling net 하나만 scaling으로 지정하고 나머지는 자동 fixed 처리
-2. restore된 library의 process/voltage/temperature 조사
-3. fixed path cell이 실제 사용하는 library set만 선택
-4. target library를 제외한 내삽 입력 선택
-5. 현재 parasitic의 BEOL과 온도 확인
+2. 현재 parasitic의 BEOL과 온도 확인
+3. fixed path cell의 primary PG pin과 실제 supply 연결을 먼저 조회
+4. restore된 library의 process/voltage/temperature 조사
+5. 지정한 scaling net의 fixed-path cell이 쓰는 셋만 target library를 제외하고 내삽 입력 선택
 6. scaling library group 구성 또는 기존 group 검증
-7. fixed path cell의 primary PG pin과 자동 분류된 supply 역할 검증
+7. 앞서 조회한 전원 연결과 실제 active scaling group으로 최종 cell/PG pin 대상 확정
 8. scaling rail에 연결된 fixed-path cell/PG pin에만 target voltage와 temperature 적용 후 incremental `update_timing`
 9. 동일한 fixed path만 최종 report로 측정하며 key 끝의 원본 `#idx` 유지
 10. `report_delay_calculation`에서 scaling library 사용 증거 확인
@@ -335,21 +347,34 @@ RUN END: status=SUCCESS | phase=VERIFY_SCALING_RESULT | section=0.01 min | total
 
 1. `VERIFY_POWER_NETS`: 전체 supply net 조회, 설정한 하나를 scaling으로 매칭하고 나머지는 자동 fixed 처리
 2. `VERIFY_PARASITICS`: restore된 BEOL과 parasitic 온도 검사
-3. `PLAN_DESIGN_LIBRARIES`: instantiated library 분류와 내삽 입력 선택
-4. `PREPARE_SCALING_GROUPS`: scaling group 생성 또는 기존 group 검증
-5. `CLASSIFY_FIXED_PATH_POWER`: fixed-path cell과 설정한 supply 역할 검증
-6. `APPLY_TARGET_VOLTAGE_TEMP`: 목표 voltage/temperature 적용
-7. `UPDATE_TIMING_SI_POCV`: SI/POCV를 포함한 timing 갱신
-8. `GENERATE_TIMING_REPORT`: fixed path별 timing report 생성
-9. `VERIFY_SCALING_RESULT`: scaling library 적용 증거 검사
+3. `CLASSIFY_FIXED_PATH_SUPPLY`: group 생성 전 fixed-path cell의 실제 primary supply 연결 조회
+4. `PLAN_DESIGN_LIBRARIES`: scaling rail의 library 셋만 내삽 입력 선택
+5. `PREPARE_SCALING_GROUPS`: scaling group 생성 또는 기존 group 검증
+6. `CLASSIFY_FIXED_PATH_POWER`: 이미 조회한 전원 연결과 계획된 active group으로 V/T 대상 확정
+7. `APPLY_TARGET_VOLTAGE_TEMP`: 목표 voltage/temperature 적용
+8. `UPDATE_TIMING_SI_POCV`: SI/POCV를 포함한 timing 갱신
+9. `GENERATE_TIMING_REPORT`: fixed path별 timing report 생성
+10. `VERIFY_SCALING_RESULT`: scaling library 적용 증거 검사
 
 일반적으로 전체 시간의 대부분은 `UPDATE_TIMING_SI_POCV`와 fixed path 수에
 비례하는 `GENERATE_TIMING_REPORT`에서 사용됩니다. 정확한 시간은 설계 크기,
 SI aggressor 수, POCV 설정, RC fallback warning 수와 서버 부하에 따라 달라집니다.
 
-restore session에 기존 scaling group이 있으면 모든 fixed-path scalable family의
+restore session에 기존 scaling group이 있으면 scaling rail의 모든 fixed-path scalable family의
 계획된 입력 DB가 그 group들에 실제 포함됐는지도 검사합니다. 일부 family만 있는
 group이면 `Existing scaling groups do not cover...` 오류로 중단합니다.
+
+`FIXED-RAIL LIBRARY SETS (no interpolation check)`에는 다른 supply net에만
+연결되어 내삽 검사에서 제외한 셋을 표시합니다. `details/*.inputs.txt`에도
+`FIXED_RAIL_UNSCALED`와 제외 이유를 남깁니다. `CLASSIFY_FIXED_PATH_SUPPLY`에서
+조회한 연결을 같은 실행의 후속 단계에 재사용하므로 PG 연결을 두 번 조회하지 않습니다.
+
+이 순서와 rail 선택의 회귀 테스트는 저장소 루트에서 다음처럼 실행합니다.
+PrimeTime 라이선스 없이 mock collection으로 계획 단계의 조건을 검사합니다.
+
+```bash
+tclsh pt_si_re/pt/tests/test_supply_before_scaling.tcl
+```
 
 rail 분류 로그는 다음 형태입니다.
 
@@ -397,7 +422,7 @@ fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 �
 | `FP-001`~`FP-003` | fixed-path pin/instance 형식 또는 현재 design의 cell 조회 문제 |
 | `FP-004` | path cell과 연결된 lib_cell 개수 불일치 |
 | `FP-005` | 고정 library 제외 후 active scaling group을 사용하는 path cell이 없음 |
-| `FP-006` | scaling cell의 primary power PG pin을 찾지 못함 |
+| `FP-006` | fixed-path cell의 primary power PG pin 또는 연결을 확인하지 못함 |
 | `FP-007` | path cell의 supply가 restore된 supply map에서 확인되지 않음 |
 | `FP-008` | active scaling cell의 primary PG pin이 지정한 `SCALING_POWER_NET`에 연결되지 않음 |
 | `FP-009` | scaling cell을 포함하는 timing path가 핀·edge·constraint 조건으로 resolve되지 않음 |
