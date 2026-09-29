@@ -133,11 +133,12 @@ required diagnostic이 unavailable일 때
     그대로 사용하므로 이 진단 때문에 PrimeTime scaling을 다시 돌릴 필요는 없다.
 
 Scaling에 사용한 입력 DB 확인
-    최신 run_scaling_after_restore.tcl 결과 옆에는 다음 파일이 생긴다.
+    최신 run_scaling_after_restore.tcl 부산물은 결과 폴더의 details/에 저장된다.
 
-        <scaling-result>.rpt.inputs.txt
+        details/<scaling-result>.rpt.inputs.txt
 
     compare script가 이 파일을 찾으면 내용을 summary.txt 아래에 자동 복사한다.
+    예전처럼 report 옆에 저장된 inputs.txt도 자동으로 찾는다.
     예전 scaling 결과에는 이 파일이 없으므로 input plan만 unavailable로 표시된다.
 
 단위와 재실행
@@ -1049,7 +1050,7 @@ def write_summary_text(path, summary):
         lines.extend([
             "",
             "Scaling inputs used by PrimeTime",
-            "unavailable: adjacent <scaled-report>.inputs.txt was not found",
+            "unavailable: <scaled-report>.inputs.txt was not found in details/ or beside the report",
         ])
     path.write_text("\n".join(lines) + "\n")
 
@@ -1237,7 +1238,9 @@ def main():
         "scaled_report": str(args.scaled_rpt.resolve()),
         "ground_truth_report": str(args.ground_truth_rpt.resolve()),
     })
-    scaling_inputs_path = Path(str(args.scaled_rpt) + ".inputs.txt")
+    scaling_inputs_path = args.scaled_rpt.parent / "details" / (args.scaled_rpt.name + ".inputs.txt")
+    if not scaling_inputs_path.is_file():
+        scaling_inputs_path = Path(str(args.scaled_rpt) + ".inputs.txt")
     if scaling_inputs_path.is_file():
         summary["scaling_input_plan_path"] = str(scaling_inputs_path.resolve())
         summary["scaling_input_plan"] = scaling_inputs_path.read_text(errors="ignore")

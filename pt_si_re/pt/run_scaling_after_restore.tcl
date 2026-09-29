@@ -1015,7 +1015,8 @@ proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
             puts ""
         }
     }
-    set missing_file ${out_file}.missing
+    set missing_file [detail_path $out_file .missing]
+    file mkdir [file dirname $missing_file]
     set fp [open $missing_file w]
     puts $fp "requested=$processed measured=$measured missing=[llength $missing]"
     foreach item $missing {
@@ -1107,7 +1108,7 @@ proc auto_scaling::find_scaling_fixed_path {fixed delay_type pba_mode scaled_cel
 # The diagnostic file is created before searching. Every verification failure
 # records an ASCII status/code even when no delay calculation was possible.
 proc auto_scaling::verify_scaling_result {out fixed delay_type pba_mode scaled_cells} {
-    set evidence_file ${out}.dcalc
+    set evidence_file [detail_path $out .dcalc]
     set header "SCALING_VERIFICATION_STATUS: STARTED\nANALYSIS_DELAY_TYPE: $delay_type\n"
     write_text $evidence_file $header
     set dcalc_text ""
@@ -1266,9 +1267,45 @@ proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
 }
 
 proc auto_scaling::write_text {path contents} {
+    file mkdir [file dirname $path]
     set fp [open $path w]
     puts -nonewline $fp $contents
     close $fp
+}
+
+# Timing reports stay in RESULT_FOLDER; all companion files live in details/.
+proc auto_scaling::detail_path {out suffix} {
+    return [file join [file dirname $out] details "[file tail $out]$suffix"]
+}
+
+# Existing failed runs may still have the old adjacent companion files.
+proc auto_scaling::existing_detail_path {out suffix} {
+    set path [detail_path $out $suffix]
+    if {[file exists $path]} { return $path }
+    if {[file exists ${out}${suffix}]} { return ${out}${suffix} }
+    return $path
+}
+
+# Preserve existing contents when an old failed run is retried. Never choose
+# silently between two versions of the same companion file.
+proc auto_scaling::move_legacy_details {out} {
+    set moves {}
+    foreach suffix {.missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc .log} {
+        set old ${out}${suffix}
+        if {[catch {file type $old} type options]} {
+            if {[lrange [dict get $options -errorcode] 0 1] eq {POSIX ENOENT}} { continue }
+            return -options $options $type
+        }
+        if {$type ni {file link}} { error "Cannot move a non-file output detail: $old" }
+        set new [detail_path $out $suffix]
+        if {![catch {file type $new}]} {
+            error "SV-005: Both old and details/ versions exist; cannot safely merge: $new"
+        }
+        lappend moves [list $old $new]
+    }
+    file mkdir [file dirname [detail_path $out .log]]
+    foreach pair $moves { file rename -- {*}$pair }
+    return [llength $moves]
 }
 
 # Clear only this run's exact output names; never clear the result directory.
@@ -1278,15 +1315,23 @@ proc auto_scaling::reset_output_files {out {include_log 0}} {
     if {$include_log} { lappend suffixes .log }
     set previous {}
     foreach suffix $suffixes {
-        set path ${out}${suffix}
-        if {[catch {file type $path} type options]} {
-            if {[lrange [dict get $options -errorcode] 0 1] eq {POSIX ENOENT}} { continue }
-            return -options $options $type
+        if {$suffix eq ""} {
+            set paths [list $out]
+        } else {
+            # Clear both formats on a normal overwrite, including stale legacy
+            # evidence beside the report. Other corners/files are preserved.
+            set paths [list [detail_path $out $suffix] ${out}${suffix}]
         }
-        if {$type ni {file link}} {
-            error "Output path is not a file or symlink; refusing to remove it: $path"
+        foreach path $paths {
+            if {[catch {file type $path} type options]} {
+                if {[lrange [dict get $options -errorcode] 0 1] eq {POSIX ENOENT}} { continue }
+                return -options $options $type
+            }
+            if {$type ni {file link}} {
+                error "Output path is not a file or symlink; refusing to remove it: $path"
+            }
+            lappend previous $path
         }
-        lappend previous $path
     }
     foreach path $previous { file delete -- $path }
     return [llength $previous]
@@ -1583,7 +1628,7 @@ proc auto_scaling::run_after_restore {cfg} {
     reset_output_files $out
     file mkdir [file dirname $out]
     set inputs_text [scaling_inputs_text $plan]
-    write_text ${out}.inputs.txt $inputs_text
+    write_text [detail_path $out .inputs.txt] $inputs_text
     puts $inputs_text
     phase_done PLAN_DESIGN_LIBRARIES $phase_started
 
@@ -1609,7 +1654,7 @@ proc auto_scaling::run_after_restore {cfg} {
     redirect -variable groups_before {
         report_lib_groups -scaling -nosplit -show {voltage temperature process}
     }
-    write_text ${out}.libgroups.before $groups_before
+    write_text [detail_path $out .libgroups.before] $groups_before
 
     # restore session에 scaling group이 이미 있으면 그대로 재사용합니다.
     # 단, 목표 코너가 들어 있으면 leave-one-out이 아니므로 중단합니다.
@@ -1634,9 +1679,9 @@ proc auto_scaling::run_after_restore {cfg} {
     redirect -variable groups_after {
         report_lib_groups -scaling -nosplit -show {voltage temperature process}
     }
-    write_text ${out}.libgroups $groups_after
+    write_text [detail_path $out .libgroups] $groups_after
     if {[report_has_unapproved_corner $groups_after $plan $rail $target_v $target_t]} {
-        error "A non-exempt scaling group still contains the target corner. Scaling verification failed: ${out}.libgroups"
+        error "A non-exempt scaling group still contains the target corner. Scaling verification failed: [detail_path $out .libgroups]"
     }
     verify_planned_group_coverage $plan
     phase_done PREPARE_SCALING_GROUPS $phase_started
@@ -1671,7 +1716,7 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done UPDATE_TIMING_SI_POCV $phase_started
 
     set phase_started [phase_start GENERATE_TIMING_REPORT]
-    set fp [open ${out}.selection.tcl w]
+    set fp [open [detail_path $out .selection.tcl] w]
     puts $fp "# restore_session scaling selection record"
     set record $plan
     dict unset record fixed paths
@@ -1703,7 +1748,7 @@ proc auto_scaling::run_after_restore {cfg} {
 
     puts "DONE: restore-session scaling report = $out"
     puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
-    puts "VERIFY: scaling library evidence = ${out}.dcalc"
+    puts "VERIFY: scaling library evidence = [detail_path $out .dcalc]"
     return $out
 }
 
@@ -1726,7 +1771,7 @@ proc auto_scaling::verify_after_run {cfg} {
     set requested_out [file normalize [need $cfg out_rpt]]
     set out [file join [file dirname $requested_out] "restored_[file tail $requested_out]"]
     readable $out
-    set selection_file [readable ${out}.selection.tcl]
+    set selection_file [readable [existing_detail_path $out .selection.tcl]]
     set fp [open $selection_file r]
     fconfigure $fp -encoding utf-8
     set selection ""
@@ -1760,8 +1805,10 @@ proc auto_scaling::verify_after_run {cfg} {
     }
     set dt [option $cfg delay_type max]
     set fixed [read_fixed [dict get $selection fixed file] $dt]
+    move_legacy_details $out
+    set log_file [detail_path $out .log]
     set code [catch {
-        redirect -tee -append ${out}.log {
+        redirect -tee -append $log_file {
             puts "VERIFY ONLY START: same-session evidence retry | report=$out"
             puts "VERIFY ONLY: keeping groups, cell V/T, and timing reports unchanged."
             verify_restored_parasitics $cfg
@@ -1772,17 +1819,17 @@ proc auto_scaling::verify_after_run {cfg} {
             dict set verify_cfg fixed_library_names [dict get $retained names]
             set power [plan_fixed_path_power $fixed $verify_cfg]
             verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] [dict get $power scaled_cells]
-            puts "VERIFY ONLY END: status=SUCCESS | evidence=${out}.dcalc"
+            puts "VERIFY ONLY END: status=SUCCESS | evidence=[detail_path $out .dcalc]"
         }
     } result options]
     if {$code} {
-        set fp [open ${out}.log a]
+        set fp [open $log_file a]
         puts $fp "VERIFY ONLY END: status=FAILED"
         puts $fp "RUN ERROR: $result"
         close $fp
         return -options $options $result
     }
-    return ${out}.dcalc
+    return [detail_path $out .dcalc]
 }
 
 
@@ -1859,7 +1906,7 @@ proc auto_scaling::run_config_with_log {scaling_config} {
     set requested_out [file normalize [dict get $scaling_config out_rpt]]
     set actual_out [file join [file dirname $requested_out] \
         "restored_[file tail $requested_out]"]
-    set log_file ${actual_out}.log
+    set log_file [detail_path $actual_out .log]
     file mkdir [file dirname $log_file]
     set previous_count [reset_output_files $actual_out 1]
     set code [catch {

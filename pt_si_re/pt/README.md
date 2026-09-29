@@ -164,7 +164,7 @@ set FIXED_LIBRARY_VOLTAGE 0.685    ;# 실제 연결된 DB의 nominal 전압
 | `SCALING_AXIS` | `V`, `T`, `VT` 중 하나 |
 | `ANALYSIS` | setup은 `setup`, hold는 `hold` |
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
-| `RESULT_FOLDER` | 결과와 실행 로그를 저장할 새 폴더의 절대경로 |
+| `RESULT_FOLDER` | 결과 `.rpt`를 저장할 폴더의 절대경로. 부산물은 자동으로 `details/`에 저장 |
 | `SCALING_POWER_NET` | target voltage를 적용할 supply net 하나의 정확한 이름 |
 | `FIXED_LIBRARY_SET` | 그대로 유지할 셋 하나의 이름. 빈칸이면 예외 없음 |
 | `FIXED_LIBRARY_VOLTAGE` | 해당 셋에 실제 연결되어 있어야 하는 DB의 nominal 전압. DB 교체를 수행하지 않음 |
@@ -355,9 +355,9 @@ cell의 primary rail이 restore session의 supply 목록에 없으면 임의 처
 ```text
 FIXED PATHS RESULT: requested=294 measured=290 missing=4
 DONE: restore-session scaling report = <결과 파일>
-VERIFY: scaling library evidence = <결과 파일>.dcalc
+VERIFY: scaling library evidence = <RESULT_FOLDER>/details/<결과 rpt 이름>.dcalc
 RUN COMPLETE: Restored-session scaling and fixed-path reporting finished.
-RUN LOG: <RESULT_FOLDER>/<결과 rpt 이름>.log
+RUN LOG: <RESULT_FOLDER>/details/<결과 rpt 이름>.log
 ```
 
 스크립트는 같은 코너·축·analysis의 결과와 로그가 이미 있어도 **덮어쓰며 재실행**합니다.
@@ -428,7 +428,7 @@ auto_scaling::verify_after_run $scaling_config
 `scaling_config`는 실패한 실행의 설정이며 다시 만들지 않습니다. 재시도는 기존
 `.selection.tcl`과 fixed-path 파일을 읽어 대상을 확인하고 `.dcalc`를 갱신합니다.
 library group 생성, V/T 적용, 명시적인 `update_timing`, report 재생성은 호출하지
-않으며 기존 `.rpt`/`.missing`/입력 기록은 유지합니다. 로그는 기존 `.rpt.log`에
+않으며 기존 `.rpt`/`.missing`/입력 기록은 유지합니다. 로그는 `details/`의 기존 `.rpt.log`에
 추가하며 `VERIFY ONLY END: status=SUCCESS/FAILED`로 이번 검증 상태를 구분합니다.
 세션을 변경했거나 `scaling_config`가 남아 있지 않으면 이 복구 절차를 사용하지 않습니다.
 
@@ -441,23 +441,44 @@ library group 생성, V/T 적용, 명시적인 `update_timing`, report 재생성
 restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt
 ```
 
-같은 이름 뒤에 다음 파일이 생성됩니다.
+결과 폴더 최상위에는 timing report만 두고, 나머지 파일은 `details/`에 저장합니다.
+파일 이름에 코너·축·analysis가 있으므로 여러 코너가 같은 폴더를 사용해도 구분됩니다.
+
+```text
+<RESULT_FOLDER>/
+  restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt
+  details/
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.log
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.missing
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.inputs.txt
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.selection.tcl
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.libgroups.before
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.libgroups
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.dcalc
+```
+
+`details/`는 자동 생성되므로 `RESULT_FOLDER`만 설정하면 됩니다. 이전 형식으로
+report 옆에 남아 있는 같은 코너의 부산물은 일반 재실행 시 정리됩니다. 검증만
+재시도할 때는 기존 내용과 로그를 `details/`로 옮겨 보존하며, 같은 파일이 양쪽에
+있으면 임의로 합치지 않고 중단합니다. 다른 코너 파일은 변경하지 않습니다.
+
+각 파일의 의미는 다음과 같습니다.
 
 | 파일 | 확인 내용 |
 |---|---|
 | `.rpt` | fixed path별 PT scaling timing report와 slack |
-| `.rpt.missing` | 찾지 못했거나 timing이 완성되지 않은 fixed path |
-| `.rpt.inputs.txt` | family별 실제 입력 P/V/T/DB와 목표 코너의 사람이 읽기 쉬운 요약 |
-| `.rpt.log` | terminal에 표시된 scaling 실행 과정과 오류를 함께 저장한 log |
-| `.rpt.selection.tcl` | 선택된 library family와 scaling 입력 기록 |
-| `.rpt.libgroups.before` | 실행 전 scaling group |
-| `.rpt.libgroups` | 실행에 사용한 scaling group |
-| `.rpt.dcalc` | 실제 cell arc에서 scaling library가 사용된 증거 |
+| `details/<결과 rpt 이름>.missing` | 찾지 못했거나 timing이 완성되지 않은 fixed path |
+| `details/<결과 rpt 이름>.inputs.txt` | family별 실제 입력 P/V/T/DB와 목표 코너의 사람이 읽기 쉬운 요약 |
+| `details/<결과 rpt 이름>.log` | terminal에 표시된 scaling 실행 과정과 오류를 함께 저장한 log |
+| `details/<결과 rpt 이름>.selection.tcl` | 선택된 library family와 scaling 입력 기록 |
+| `details/<결과 rpt 이름>.libgroups.before` | 실행 전 scaling group |
+| `details/<결과 rpt 이름>.libgroups` | 실행에 사용한 scaling group |
+| `details/<결과 rpt 이름>.dcalc` | 실제 cell arc에서 scaling library가 사용된 증거 |
 
 다음 문자열이 `.dcalc`에 있어야 합니다.
 
 ```bash
-grep -n "Scaling libraries used" /company/work/pt_scaling_eval/scaling_output/*.dcalc
+grep -n "Scaling libraries used" /company/work/pt_scaling_eval/scaling_output/details/*.dcalc
 ```
 
 문자열이 없거나 `SLG-320`, `DEL-012`가 있으면 결과를 사용하지 않습니다.
@@ -468,7 +489,7 @@ Tcl도 `.dcalc`에서 이 두 오류 또는 외삽 취소 문구를 발견하면
 어떤 두 점 또는 네 점을 사용해 target을 계산했는지는 다음처럼 확인합니다.
 
 ```bash
-cat /company/work/pt_scaling_eval/scaling_output/*.rpt.inputs.txt
+cat /company/work/pt_scaling_eval/scaling_output/details/*.rpt.inputs.txt
 ```
 
 각 family 아래에 `INPUT 1`, `INPUT 2`와 필요하면 `INPUT 3`, `INPUT 4`가
@@ -478,7 +499,7 @@ process/voltage/temperature/DB 경로와 함께 표시되고, 마지막
 
 ```bash
 grep -nE "SLG-320|DEL-012|Error:|Fatal:" \
-    /company/work/pt_scaling_eval/scaling_output/*
+    /company/work/pt_scaling_eval/scaling_output/details/*
 ```
 
 ## 8. ground truth 생성

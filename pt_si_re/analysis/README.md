@@ -90,7 +90,8 @@ slack/arrival 관계식으로 required 오차를 유도합니다. `path_errors.t
 표시합니다. report에 `Path Type`도 없으면 실행할 때 `--analysis setup` 또는
 `--analysis hold`를 지정합니다.
 
-새 scaling report 옆에 `<scaled-report>.inputs.txt`가 있으면 그 내용을
+새 scaling report의 결과 폴더에서 `details/<scaled-report>.inputs.txt`를 먼저 찾고,
+없으면 예전처럼 report 옆의 `<scaled-report>.inputs.txt`도 찾습니다. 그 내용을
 `summary.txt`의 `Scaling inputs used by PrimeTime` 아래에도 복사합니다. 따라서
 MAE와 함께 각 library family가 사용한 입력 P/V/T/DB와 target을 한 파일에서
 확인할 수 있습니다.

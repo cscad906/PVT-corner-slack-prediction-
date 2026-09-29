@@ -261,6 +261,33 @@ class ReportDiagnosticsTests(unittest.TestCase):
         self.assertEqual(rerun.returncode, 0, rerun.stderr)
         self.assertTrue((self.root / "out" / "hold" / "ground_truth_run2" / "path_diagnostics.txt").exists())
 
+    def test_cli_input_plan_details_and_legacy_locations(self):
+        self.compare(timing_report(updates={"data_net1": 0.031}), timing_report())
+        legacy = self.root / "scaled.rpt.inputs.txt"
+        detail = self.root / "details" / legacy.name
+        detail.parent.mkdir()
+        legacy.write_text("LEGACY INPUT PLAN")
+        detail.write_text("CURRENT INPUT PLAN")
+        cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
+               str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")]
+        for run_number, expected, source in [(1, "CURRENT INPUT PLAN", detail),
+                                              (2, "LEGACY INPUT PLAN", legacy),
+                                              (3, None, None)]:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    universal_newlines=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            name = "ground_truth" if run_number == 1 else "ground_truth_run{}".format(run_number)
+            directory = self.root / "out" / "setup" / name
+            summary = json.loads((directory / "summary.json").read_text())
+            self.assertEqual(summary["scaling_input_plan"], expected)
+            self.assertEqual(summary["scaling_input_plan_path"],
+                             str(source.resolve()) if source is not None else None)
+            self.assertEqual(summary["compared_paths"], 1)
+            self.assertAlmostEqual(summary["mae_ps"], 11)
+            if source is not None:
+                self.assertIn(expected, (directory / "summary.txt").read_text())
+                source.unlink()
+
     def test_cli_infers_hold_from_min(self):
         self.compare(timing_report("hold"), timing_report("hold"))
         result = subprocess.run([sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
