@@ -12,6 +12,7 @@ library scaling을 실행하고, 동일한 fixed path의 ground truth와 비교�
 | 파일 | 용도 | 실행 환경 |
 |---|---|---|
 | `pt/run_scaling_after_restore.tcl` | restore session에서 PT scaling 및 fixed-path 측정 | `pt_shell` |
+| `pt/show_library_voltages.tcl` | 로드된 library의 Operating Conditions 전압/온도 목록 조회 | `pt_shell` |
 | `fixed_paths.tcl` | 모든 비교에 공통으로 사용할 경로 목록 | `pt_shell` |
 | `analysis/compare_scaling_mae.py` | scaling과 ground truth의 path별 오차 및 MAE 계산 | Linux shell |
 | `analysis/plot_ground_truth_slack.py` | ground-truth slack 통계 및 분포 생성 | Linux shell |
@@ -166,6 +167,21 @@ puts "SUPPLY_NETS=[get_object_name [get_supply_nets -quiet -hierarchy *]]"
 report_units
 report_lib_groups -scaling -show {voltage temperature process}
 ```
+
+로드된 library별 전압을 간단히 확인하려면 다음 조회 전용 Tcl을 실행합니다.
+
+```tcl
+source /path/to/repository/pt_si_re/pt/show_library_voltages.tcl
+```
+
+파일 내부에 설정할 항목은 없으며 `restore_session` 뒤 `source`만 하면 됩니다.
+각 library의 Operating Conditions에 정의된 전압·온도·condition 이름과 전체
+library 개수를 출력합니다. 조건이 여러 개면 전부 표시하고, 값을 읽을 수 없으면
+`UNAVAILABLE`로 표시합니다. 메모리에 로드된 모든 library를 대상으로 하므로
+현재 design에서 사용하지 않는 library도 포함될 수 있습니다.
+이 값은 library 기준 전압이며 셀별 `set_voltage` override나 multi-rail PG pin의
+모든 전압을 조회한 결과는 아닙니다. 이 조회는 전압·온도·scaling group을
+변경하거나 timing을 갱신하지 않으며 파일도 만들지 않습니다.
 
 확인 기준은 다음과 같습니다.
 
