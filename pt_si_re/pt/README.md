@@ -108,11 +108,14 @@ PG 연결을 확인할 수 없는 fixed-path cell은 고정이라고 추측하�
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
 
-특정 셋을 내삽하지 않고 가까운 전압 DB 하나로 계산하려면
-`FIXED_LIBRARY_SET`에 오류에 나온 셋 이름이나 공통 패턴을 입력하고
-`FIXED_LIBRARY_VOLTAGE`를 `"nearest"`로 둡니다. 셋 이름의 기본값은 빈칸이고,
-전압 선택 정책의 기본값은 `"nearest"`입니다. 빈칸이면 이 기능을 사용하지 않습니다.
-이는 PrimeTime 외삽이 아니라 사용자가 지정한 셋에만 적용하는 가까운 DB 근사입니다.
+특정 셋을 내삽에서 제외하고 restore 세션에 연결된 DB와 V/T를 유지하려면
+`FIXED_LIBRARY_SET`에 셋 이름이나 공통 패턴을 입력하고
+`FIXED_LIBRARY_VOLTAGE`를 기본값 `"restore"`로 둡니다. 다른 전압 DB를 고르거나
+셀을 재연결하지 않고, 해당 셀에 target 전압·온도를 적용하지 않습니다.
+여러 셋의 실제 DB nominal 전압이 달라도 공통 전압값을 입력할 필요가 없습니다.
+셋 이름이 빈칸이면 명시적 예외를 사용하지 않습니다. 고정 supply net에만 연결된
+셀은 이 옵션을 입력하지 않아도 자동으로 제외됩니다. 옵션의 존재나 DB 전압
+개수만으로 scaling 대상 여부를 판정하지 않습니다.
 
 숫자 등이 다른 여러 셋을 추가로 고정해야 하면 공통 이름 뒤에 `*`를 붙여
 한 번에 선택할 수 있습니다. 다음 예시의 `macro_`는 실제 셋의 공통 부분으로
@@ -120,7 +123,7 @@ restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 �
 
 ```tcl
 set FIXED_LIBRARY_SET "macro_*"
-set FIXED_LIBRARY_VOLTAGE "nearest"
+set FIXED_LIBRARY_VOLTAGE "restore"
 ```
 
 여러 이름/패턴을 공백으로 나열하는 `"macro_* io_*"`도 지원합니다. 정확한
@@ -130,7 +133,11 @@ fixed path에서 실제 사용하는 셋으로 제한하고, 하나라도 매칭
 입력은 중단합니다. `FIXED LIBRARY SET SELECTION`에 선택 개수와 이름을 표시합니다.
 `*`는 이름 중간에도 쓸 수 있습니다. 예를 들어 `block_rcmax_rev1`과
 `block_cmax_rev1`을 지정하려면 `"block_*_rev1"`로 선택할 수 있습니다.
-셋을 하나로 합치는 기능은 아닙니다. 각 셋 안에서 동일 process와 목표 온도의
+셋을 하나로 합치는 기능은 아닙니다. 기본 restore 정책은 각 셀의 기존 DB를 유지합니다.
+숫자를 입력하면 재연결 없이 기존 DB nominal 전압이 그 숫자와 같은지만 확인합니다.
+
+과거의 가까운 DB 근사를 의도적으로 사용할 때만 `"nearest"`를 명시합니다.
+이는 PrimeTime 외삽 기능이 아니며 기본 동작에서 실행하지 않습니다. 각 셋 안에서 동일 process와 목표 온도의
 로드된 DB 중 목표 전압에 가장 가까운 전압 하나를 선택합니다. BEOL이나 보조 rail
 전압 등 셋 이름의 다른 부분은 유지하며 다른 셋의 DB를 가져와 채우지 않습니다.
 후보가 0.475/0.685 V라면 목표 0.5 V에서는 0.475 V, 0.8 V에서는 0.685 V입니다.
@@ -210,9 +217,9 @@ set PROGRESS_INTERVAL_MINUTES 10
 
 set SCALING_POWER_NET "실제_scaling_rail_이름"
 
-# Optional: selected sets use the nearest loaded voltage DB.
+# Optional: selected sets keep their restored DB and conditions.
 set FIXED_LIBRARY_SET     ""          ;# 셋 이름/공통 패턴, 없으면 빈칸
-set FIXED_LIBRARY_VOLTAGE "nearest"   ;# 가까운 DB 선택. 숫자는 기존 DB 확인만 수행
+set FIXED_LIBRARY_VOLTAGE "restore"   ;# 현재 연결 DB 유지. 숫자는 nominal 전압 확인만 수행
 ```
 
 `PROGRESS_INTERVAL_MINUTES`는 긴 작업 중 현재 단계, 해당 단계 경과 시간과 전체
@@ -232,8 +239,8 @@ set FIXED_LIBRARY_VOLTAGE "nearest"   ;# 가까운 DB 선택. 숫자는 기존 D
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과 `.rpt`를 저장할 폴더의 절대경로. 부산물은 자동으로 `details/`에 저장 |
 | `SCALING_POWER_NET` | target voltage를 적용할 supply net 하나의 정확한 이름 |
-| `FIXED_LIBRARY_SET` | 내삽 대신 단일 DB를 사용할 셋 이름/공통 패턴. 여러 개는 공백으로 구분. 빈칸이면 예외 없음 |
-| `FIXED_LIBRARY_VOLTAGE` | 기본 `"nearest"`: 가까운 DB로 실제 재연결. 숫자: 기존 restore DB nominal 전압 확인, 재연결 없음 |
+| `FIXED_LIBRARY_SET` | 내삽에서 제외하고 기존 DB를 유지할 셋 이름/공통 패턴. 여러 개는 공백으로 구분. 빈칸이면 명시적 예외 없음 |
+| `FIXED_LIBRARY_VOLTAGE` | 기본 `"restore"`: 기존 DB와 V/T 유지. 숫자: 기존 DB nominal 전압 확인. `"nearest"`를 명시할 때만 가까운 DB로 재연결 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
 스크립트가 `ANALYSIS`와 다르면 실행을 중단합니다.

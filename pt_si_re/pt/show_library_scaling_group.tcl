@@ -295,6 +295,11 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
     puts "V CHECK: target=$target temperature=$temperature loaded_at_target_temperature=$loaded"
     puts "V CHECK: after_target_exclusion=$eligible lower=$lower upper=$upper status=$status"
     puts ""
+    if {$status eq "EXPLICIT_FIXED_SET" && [dict exists $cfg fixed_library_voltage] &&
+        [string equal -nocase [dict get $cfg fixed_library_voltage] restore]} {
+        puts "FIXED DB POLICY: restore; keep linked DB and restored V/T; no nearest selection or relinking."
+        puts ""
+    }
     if {$status eq "NEAREST_DB_POLICY"} {
         set family [dict get [lindex $members 0] family]
         set process [dict get [lindex $members 0] process]

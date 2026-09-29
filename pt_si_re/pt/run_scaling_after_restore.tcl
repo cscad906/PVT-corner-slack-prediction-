@@ -29,15 +29,17 @@ set PROGRESS_INTERVAL_MINUTES 10
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
 
-# Optional: use one DB for selected sets instead of interpolation.
+# Optional: keep selected sets at their restored DB/conditions, without interpolation.
 # Enter an exact set name, a common pattern such as "macro_*", or names/patterns
-# separated by spaces. Empty disables this option. "nearest" picks the loaded
+# separated by spaces. Empty disables this option. "restore" never relinks
+# cells or applies target V/T to these sets. Explicit "nearest" picks the loaded
 # DB closest to TARGET_VOLTAGE at the same process/temperature within EACH set
-# (BEOL/auxiliary-rail name parts stay separate). Only fixed-path cells on
-# SCALING_POWER_NET are relinked and analyzed at that DB's nominal voltage.
+# (BEOL/auxiliary-rail name parts stay separate). Under explicit nearest,
+# only fixed-path cells on SCALING_POWER_NET are relinked and analyzed at
+# that DB's nominal voltage.
 # A numeric value retains the old policy: verify the restored DB, never relink.
 set FIXED_LIBRARY_SET     ""
-set FIXED_LIBRARY_VOLTAGE "nearest" ;# "nearest", or expected restored DB voltage (V)
+set FIXED_LIBRARY_VOLTAGE "restore" ;# keep restored DB; optional numeric nominal-V check
 # ===================== END USER SETTINGS ======================
 
 namespace eval auto_scaling {
@@ -903,9 +905,9 @@ proc auto_scaling::plan {cfg} {
                 lappend chosen_families $family
             }
         }
-        set fixed_voltage [string trim [need $cfg fixed_library_voltage]]
+        set fixed_voltage [string tolower [string trim [option $cfg fixed_library_voltage restore]]]
         set nearest [string equal -nocase $fixed_voltage nearest]
-        if {!$nearest} { set fixed_voltage [number $fixed_voltage] }
+        if {$fixed_voltage ni {nearest restore}} { set fixed_voltage [number $fixed_voltage] }
         foreach row $rows {
             if {[lsearch -exact $fixed_families [dict get $row family]] >= 0} {
                 lappend fixed_library_rows $row
@@ -1363,8 +1365,9 @@ proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
     foreach row $rows {
         dict set policy [list [file normalize [dict get $row file]] [dict get $row lib_name]] $row
     }
-    set nearest [string equal -nocase [option $cfg fixed_library_voltage ""] nearest]
-    if {!$nearest} { set expected [number [need $cfg fixed_library_voltage]] }
+    set db_policy [string tolower [string trim [option $cfg fixed_library_voltage restore]]]
+    set check_voltage [expr {$db_policy ni {nearest restore}}]
+    if {$check_voltage} { set expected [number $db_policy] }
     set cells [fixed_path_cells $fixed]
     set libraries [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cells]]
     set decisions [dict create]
@@ -1382,7 +1385,7 @@ proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
         if {!$keep} { continue }
         set condition [report_operating_condition $lib $path]
         set actual [dict get $condition v]
-        if {!$nearest && ![same $actual $expected]} {
+        if {$check_voltage && ![same $actual $expected]} {
             error "FIXED_LIBRARY_SET is linked to $actual V, expected $expected V: $path. No DB was switched; restore the intended DB before running."
         }
         lappend names $name
@@ -2310,9 +2313,10 @@ proc auto_scaling::build_restore_config {} {
     set fixed_family [string trim $::FIXED_LIBRARY_SET]
     set fixed_voltage ""
     if {$fixed_family ne ""} {
-        if {[string equal -nocase [string trim $::FIXED_LIBRARY_VOLTAGE] nearest]} {
-            set fixed_voltage nearest
-        } else { set fixed_voltage [number $::FIXED_LIBRARY_VOLTAGE] }
+        set policy [string tolower [string trim $::FIXED_LIBRARY_VOLTAGE]]
+        if {$policy in {restore nearest}} {
+            set fixed_voltage $policy
+        } else { set fixed_voltage [number $policy] }
     }
 
     return [dict create \

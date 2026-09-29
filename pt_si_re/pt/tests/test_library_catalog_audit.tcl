@@ -115,6 +115,11 @@ dict set ::scaling_config fixed_library_voltage 0.685
 set text [query_text MEM_RCMAX]
 assert_contains $text "nearest_candidates=0 fixed_restore=2"
 assert_contains $text "status=EXPLICIT_FIXED_SET"
+dict set ::scaling_config fixed_library_voltage restore
+set text [query_text MEM_RCMAX]
+assert_contains $text "nearest_candidates=0 fixed_restore=2"
+assert_contains $text "FIXED DB POLICY: restore; keep linked DB and restored V/T"
+assert_absent $text "NEAREST DB CANDIDATE:"
 original_puts "PASS: detailed reasons, ordinary target exclusion, exact-target nearest eligibility and numeric restore policy remain distinct"
 
 # Scope comes from actual linked DB identity and cached PG classification,

@@ -3,6 +3,7 @@
 set ::auto_scaling_restored_load_only 1
 source [file join [file dirname [info script]] .. run_scaling_after_restore.tcl]
 unset ::auto_scaling_restored_load_only
+if {$::FIXED_LIBRARY_VOLTAGE ne "restore"} { error "Fixed sets must default to retaining the restored DB" }
 
 proc assert {value message} { if {!$value} { error $message } }
 proc expect_error {script pattern} {
@@ -191,6 +192,18 @@ set plan [auto_scaling::plan $cfg]
 assert [expr {[dict get $plan explicit_fixed_sets] eq {LIMITED_1 LIMITED_2}}] "Pattern expansion incorrect"
 assert [expr {[llength [dict get $plan fixed_library_rows]] == 4}] "One fixed set lost"
 assert [expr {[llength [dict get $plan groups]] == 1 && [dict get [lindex [dict get $plan groups] 0] family] eq "CORE"}] "Pattern leaked into core"
+# Restore policy never picks a closer DB, even beyond the loaded voltage grid.
+dict set cfg fixed_library_voltage restore
+set restore_plan [auto_scaling::plan $cfg]
+assert [expr {[dict get $restore_plan fixed_library_policy] eq "restore" &&
+    [llength [dict get $restore_plan nearest_library_rows]] == 0 &&
+    [llength [dict get $restore_plan groups]] == 1}] "Restore policy selected nearest DBs or interpolated fixed sets"
+assert [expr {[auto_scaling::plan_nearest_bindings $more_fixed $cfg $restore_plan] eq {}}] "Restore policy planned replacements"
+set default_cfg $cfg
+dict unset default_cfg fixed_library_voltage
+set default_plan [auto_scaling::plan $default_cfg]
+assert [expr {[llength [dict get $default_plan nearest_library_rows]] == 0}] "Omitted DB policy must keep restored DBs"
+puts "PASS: default/explicit restore keeps declared sets without nearest inputs or replacement planning; core remains interpolated"
 # Explicit nearest policy applies both inside and outside the limited grid.
 dict set cfg fixed_library_voltage nearest
 foreach {target expected} {0.54 0.475 0.76 0.685} {
@@ -228,10 +241,12 @@ lappend nearest_rows [lindex $nearest_rows 0]
 expect_error {auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX 0.5 25} {NL-001:*ambiguous*}
 puts "PASS: nearest 0.5/0.8, lower-voltage tie, exact target, BEOL/process/temperature kept separate, duplicate/missing DB rejection"
 
-# User settings accept the nearest keyword while numeric and blank behavior
+# User settings default to restore; explicit nearest, numeric and blank behavior
 # stay compatible. No PrimeTime session mutation occurs in config building.
 set ::SCALING_POWER_NET VDD_SCALE
 set ::FIXED_LIBRARY_SET "macro_*"
+set ::FIXED_LIBRARY_VOLTAGE RESTORE
+assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_voltage] eq "restore"}] "Restore user setting rejected"
 set ::FIXED_LIBRARY_VOLTAGE nearest
 assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_voltage] eq "nearest"}] "Nearest user setting rejected"
 set ::FIXED_LIBRARY_VOLTAGE 0.685
@@ -239,7 +254,7 @@ assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_volta
 set ::FIXED_LIBRARY_SET ""
 set ::FIXED_LIBRARY_VOLTAGE unused
 assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_voltage] eq ""}] "Blank fixed option must ignore voltage field"
-puts "PASS: user config nearest/numeric/blank policies"
+puts "PASS: user config restore/explicit-nearest/numeric/blank policies"
 
 # A cell using two primary rails still needs interpolation for its target rail.
 dict set ::pin_rail memory/VDDAUX VDD_SCALE
