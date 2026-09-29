@@ -10,7 +10,10 @@ PrimeTime에서 `source`하는 Tcl 파일은 `pt/` 디렉토리에 있습니다.
 
 ```bash
 python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt \
-    --output-dir results/pt_scaling_comparison
+    --analysis setup --output-dir results/pt_scaling_comparison
+
+python3 analysis/compare_scaling_mae.py scaled_hold.rpt ground_truth_hold.rpt \
+    --analysis hold --output-dir results/pt_scaling_comparison
 
 python3 analysis/compare_point_delays.py scaled.rpt ground_truth.rpt \
     --output-dir results/point_delay_comparison
@@ -31,9 +34,17 @@ python3 analysis/recover_fixed_paths_from_ground_truth.py ground_truth.rpt
 실패 block은 복원할 수 없으며, 스크립트가 제외 개수와 사유를 출력합니다.
 
 `--output-dir`을 생략하면 ground-truth report의 파일명을 target corner 이름으로
-사용해 `pt_scaling_comparison/<target-corner>/` 아래에 `path_errors.txt`,
-`summary.txt`, `summary.json`을 생성합니다. 같은 코너를 다시 실행하면 기존 결과를
-덮어쓰지 않고 `<target-corner>_run2`, `_run3` 폴더를 자동으로 만듭니다.
+사용해 `pt_scaling_comparison/setup/<target-corner>/` 또는
+`pt_scaling_comparison/hold/<target-corner>/` 아래에 `path_errors.txt`,
+`path_diagnostics.txt`, `summary.txt`, `summary.json`을 생성합니다.
+`--output-dir`은 setup/hold 폴더를 담는 상위 폴더입니다. 같은 코너를 다시 실행하면
+해당 분석 타입 안에서 `<target-corner>_run2`, `_run3` 폴더를 자동으로 만들어
+기존 결과를 덮어쓰지 않습니다. Setup과 hold의 실행 번호는 각각 관리합니다.
+
+`--analysis`를 생략하면 두 report의 `Path Type: max`는 setup, `min`은 hold로
+판별합니다. Path Type이 없거나 max/min이 섞여 있으면 결과 폴더를 만들기 전에
+중단하고 `--analysis setup` 또는 `--analysis hold`를 명시하도록 안내합니다.
+폴더 분류는 파일명에 포함된 setup/hold 문자열로 추측하지 않습니다.
 
 `path_errors.txt`는 외부 프로그램 없이 `less -S`로 볼 수 있는 고정폭 텍스트입니다.
 모든 path의 ground-truth slack, scaling slack, signed error, absolute error와 제외
@@ -85,9 +96,11 @@ MAE와 함께 각 library family가 사용한 입력 P/V/T/DB와 target을 한 �
 확인할 수 있습니다.
 
 ```bash
-cat results/pt_scaling_comparison/<target-corner>/summary.txt
-less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt
+cat results/pt_scaling_comparison/setup/<target-corner>/summary.txt
+less -S results/pt_scaling_comparison/setup/<target-corner>/path_errors.txt
 ```
+
+Hold 결과를 볼 때는 위 경로의 `setup`을 `hold`로 바꿉니다.
 
 `compare_scaling_mae.py`는 입력 `.rpt`의 slack을 항상 ns로 읽고 결과를 ps로
 저장합니다.
@@ -96,7 +109,7 @@ less -S results/pt_scaling_comparison/<target-corner>/path_errors.txt
 report만 사용하므로 GT 세션 접근이나 PrimeTime 재실행은 필요하지 않습니다.
 
 ```bash
-less -S results/pt_scaling_comparison/<target-corner>/path_diagnostics.txt
+less -S results/pt_scaling_comparison/setup/<target-corner>/path_diagnostics.txt
 ```
 
 경로마다 launch clock, data, capture clock의 `Incr`를 cell/net별로 합산하고,

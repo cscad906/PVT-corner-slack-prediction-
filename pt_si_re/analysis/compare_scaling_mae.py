@@ -22,7 +22,7 @@ Hold 결과 실행 방법
             /절대경로/restored_scaled_MFC_target_hold.rpt \
             /절대경로/MFC_ground_truth_target_hold.rpt \
             --analysis hold \
-            --output-dir mfc_scaling_comparison_hold
+            --output-dir mfc_scaling_comparison
 
 입력 파일 순서
     첫 번째 파일: run_scaling_after_restore.tcl이 만든 PT scaling 결과 .rpt
@@ -35,11 +35,19 @@ Hold 결과 실행 방법
         ### FIXED_PATH idx=... key=...
 
 실행이 끝난 뒤 확인 방법
-    ground-truth 파일명을 기준으로 결과 하위 폴더가 자동 생성된다.
+    결과는 출력 폴더 / setup 또는 hold / GT 파일명(확장자 제외) 아래에 저장된다.
+    같은 코너 이름이어도 setup과 hold 결과는 각각의 분석 타입 폴더에 저장된다.
 
-        cat  mfc_scaling_comparison/*/summary.txt
-        less -S mfc_scaling_comparison/*/path_errors.txt
-        less -S mfc_scaling_comparison/*/path_diagnostics.txt
+        mfc_scaling_comparison/setup/<코너이름>/summary.txt
+        mfc_scaling_comparison/hold/<코너이름>/summary.txt
+
+        cat  mfc_scaling_comparison/*/*/summary.txt
+        less -S mfc_scaling_comparison/setup/*/path_errors.txt
+        less -S mfc_scaling_comparison/setup/*/path_diagnostics.txt
+
+    Hold 결과를 볼 때는 위 경로의 setup을 hold로 바꾼다.
+    --analysis를 생략하면 report의 Path Type: max/min에서 setup/hold를 자동 판별한다.
+    Path Type이 없거나 두 타입이 섞여 있으면 --analysis setup 또는 hold를 명시해야 한다.
 
     summary.txt
         MAE/RMSE/bias, 최대 절대오차, fixed-path WNS와 WNS 오차율,
@@ -993,6 +1001,7 @@ def write_summary_text(path, summary):
         f"scaled report       : {summary['scaled_report']}",
         f"ground truth report : {summary['ground_truth_report']}",
         f"input/output unit   : {summary['input_unit']} / {summary['output_unit']}",
+        f"analysis            : {summary.get('analysis', 'unavailable')}",
         f"scaled blocks       : {summary['scaled_blocks']}",
         f"scaled resolved     : {summary['scaled_resolved']}",
         f"ground truth blocks : {summary['ground_truth_blocks']}",
@@ -1166,6 +1175,23 @@ def safe_corner_name(report_path):
     return name or "target_corner"
 
 
+def resolve_output_analysis(scaled, truth, requested_analysis):
+    """Choose the setup/hold output directory without guessing from report names."""
+    if requested_analysis is not None:
+        return requested_analysis
+    # 명령행 지정이 없으면 양쪽 report에서 읽은 Path Type으로 폴더를 결정한다.
+    # 정보가 없거나 max/min이 섞인 경우 setup을 임의의 기본값으로 선택하지 않는다.
+    path_types = {item.path_type for report in (scaled, truth) for item in report.values()
+                  if item.path_type is not None}
+    if path_types == {"max"}:
+        return "setup"
+    if path_types == {"min"}:
+        return "hold"
+    raise ValueError(
+        "Cannot determine one analysis type from Path Type rows. "
+        "Pass --analysis setup or --analysis hold explicitly.")
+
+
 def create_result_dir(output_root, corner_name):
     """Atomically create a new corner directory without overwriting a run."""
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1188,7 +1214,7 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("pt_scaling_comparison"),
                         help="\ucf54\ub108\ubcc4 \uacb0\uacfc\ub97c \uc800\uc7a5\ud560 \uc0c1\uc704 \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
     parser.add_argument("--analysis", choices=("setup", "hold"), default=None,
-                        help="Path Type row\uac00 \uc5c6\uc744 \ub54c required-time \uc624\ucc28 \uc720\ub3c4\uc5d0 \uc0ac\uc6a9")
+                        help="Setup/hold analysis and output subdirectory; infer from Path Type when omitted")
     args = parser.parse_args()
 
     for path in (args.scaled_rpt, args.ground_truth_rpt):
@@ -1197,11 +1223,17 @@ def main():
 
     scaled = parse_report(args.scaled_rpt)
     truth = parse_report(args.ground_truth_rpt)
+    try:
+        analysis_type = resolve_output_analysis(scaled, truth, args.analysis)
+    except ValueError as error:
+        parser.error(str(error))
     rows, summary = evaluate(scaled, truth, NS_TO_PS, args.analysis)
     summary["path_diagnostics"] = diagnose_paths(rows, scaled, truth, args.analysis)
     summary.update({
         "input_unit": "ns",
         "output_unit": "ps",
+        "analysis": analysis_type,
+        "analysis_source": "command_line" if args.analysis is not None else "report_path_type",
         "scaled_report": str(args.scaled_rpt.resolve()),
         "ground_truth_report": str(args.ground_truth_rpt.resolve()),
     })
@@ -1214,7 +1246,8 @@ def main():
         summary["scaling_input_plan"] = None
 
     corner_name = safe_corner_name(args.ground_truth_rpt)
-    result_dir = create_result_dir(args.output_dir, corner_name)
+    # 출력 폴더 -> setup/hold -> 코너 순서로 저장하고 재실행은 해당 타입 안에서 _run2를 만든다.
+    result_dir = create_result_dir(args.output_dir / analysis_type, corner_name)
     path_text_path = result_dir / "path_errors.txt"
     diagnostics_path = result_dir / "path_diagnostics.txt"
     summary_text_path = result_dir / "summary.txt"
@@ -1226,6 +1259,7 @@ def main():
         json.dump(summary, output, indent=2, ensure_ascii=False)
 
     print("=== PrimeTime scaling vs ground truth ===")
+    print(f"analysis       : {analysis_type}")
     print(f"compared paths : {summary['compared_paths']}")
     print(f"excluded paths : {summary['excluded_paths']}")
     print(f"shared keys    : {summary['shared_path_keys']}")

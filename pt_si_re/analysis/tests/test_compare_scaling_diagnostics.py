@@ -226,16 +226,67 @@ class ReportDiagnosticsTests(unittest.TestCase):
                str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        directory = self.root / "out" / "ground_truth"
+        directory = self.root / "out" / "setup" / "ground_truth"
         summary = json.loads((directory / "summary.json").read_text())
+        self.assertEqual(summary["analysis"], "setup")
+        self.assertEqual(summary["analysis_source"], "report_path_type")
         self.assertEqual(summary["path_diagnostics"]["status_counts"], {"EXPLAINED": 1})
         self.assertIn("DELAY_SHARE", result.stdout)
         self.assertIn("Path delay reconstruction", (directory / "summary.txt").read_text())
         self.assertIn("data_net", (directory / "path_diagnostics.txt").read_text())
         rerun = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(rerun.returncode, 0, rerun.stderr)
-        self.assertTrue((self.root / "out" / "ground_truth_run2" / "path_diagnostics.txt").exists())
+        self.assertTrue((self.root / "out" / "setup" / "ground_truth_run2" / "path_diagnostics.txt").exists())
         self.assertEqual(json.loads((directory / "summary.json").read_text()), summary)
+
+    def test_cli_setup_hold_same_corner_are_separate(self):
+        cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
+               str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")]
+        self.compare(timing_report(), timing_report())
+        setup_result = subprocess.run(cmd + ["--analysis", "setup"], stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(setup_result.returncode, 0, setup_result.stderr)
+        setup_path = self.root / "out" / "setup" / "ground_truth" / "summary.json"
+        setup_bytes = setup_path.read_bytes()
+        self.compare(timing_report("hold"), timing_report("hold"))
+        hold_result = subprocess.run(cmd + ["--analysis", "hold"], stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(hold_result.returncode, 0, hold_result.stderr)
+        hold_dir = self.root / "out" / "hold" / "ground_truth"
+        self.assertEqual(json.loads((hold_dir / "summary.json").read_text())["analysis"], "hold")
+        self.assertEqual(setup_path.read_bytes(), setup_bytes)
+        self.assertFalse((self.root / "out" / "hold" / "ground_truth_run2").exists())
+        rerun = subprocess.run(cmd + ["--analysis", "hold"], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(rerun.returncode, 0, rerun.stderr)
+        self.assertTrue((self.root / "out" / "hold" / "ground_truth_run2" / "path_diagnostics.txt").exists())
+
+    def test_cli_infers_hold_from_min(self):
+        self.compare(timing_report("hold"), timing_report("hold"))
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
+                                 str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary_path = self.root / "out" / "hold" / "ground_truth" / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        self.assertEqual(summary["analysis"], "hold")
+        self.assertEqual(summary["analysis_source"], "report_path_type")
+
+    def test_cli_missing_or_mixed_type_requires_explicit_analysis(self):
+        cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
+               str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")]
+        sparse = "### FIXED_PATH idx=1 key=A\nslack (MET) 0.100\n"
+        for pred, gt in [(sparse, sparse), (timing_report(), timing_report("hold"))]:
+            self.compare(pred, gt)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Pass --analysis setup or --analysis hold explicitly", result.stderr)
+            self.assertFalse((self.root / "out").exists())
+        self.compare(sparse, sparse)
+        result = subprocess.run(cmd + ["--analysis", "hold"], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "out" / "hold" / "ground_truth" / "summary.json").is_file())
 
     def test_real_example_report_reconstructs_all_paths(self):
         example = SCRIPT.parents[1] / "example/final_output_example/TT_0p8V_25C_fixed_annotated.txt"
