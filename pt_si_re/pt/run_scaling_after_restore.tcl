@@ -113,7 +113,7 @@ proc auto_scaling::start_progress_monitor {interval_minutes} {
     variable progress_phase_epoch
 
     if {![string is integer -strict $interval_minutes] || $interval_minutes <= 0} {
-        error "PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
+        error "PROGRESS_INTERVAL_MINUTES must be a positive integer."
     }
     set progress_total_epoch [clock seconds]
     set progress_total_ms [clock milliseconds]
@@ -148,10 +148,10 @@ done
             $progress_file [pid] $interval_seconds >@stdout 2>/dev/null &]
     } reason]} {
         set progress_monitor_pids {}
-        puts "WARNING: 상태 감시 프로세스를 시작하지 못했습니다: $reason"
+        puts "WARNING: Could not start the progress monitor: $reason"
     }
     puts "RUN START: PT_PID=[pid] | progress_interval=$interval_minutes min"
-    puts "PROGRESS MONITOR: ${interval_minutes}분마다 현재 단계, 단계 경과 시간, 전체 경과 시간을 출력합니다."
+    puts "PROGRESS MONITOR: current phase, phase elapsed time, and total elapsed time every $interval_minutes minute(s)."
     flush stdout
 }
 
@@ -201,30 +201,30 @@ proc auto_scaling::verify_restored_parasitics {cfg} {
     set requested_raw [need $cfg target_beol]
     set requested [canonical_beol $requested_raw]
     if {$requested eq ""} {
-        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다: '$requested_raw'"
+        error "TARGET_BEOL is empty or has no valid name characters: '$requested_raw'"
     }
 
     set design [current_design]
     if {[catch {set corner_name [get_attribute $design parasitics_corner_name]} reason] ||
         [string trim $corner_name] eq ""} {
-        error "복원된 parasitic의 BEOL을 확인할 수 없습니다. SPEF/GPD의 // CORNER_NAME이 필요합니다. TARGET_BEOL=$requested"
+        error "Cannot determine restored parasitic BEOL. SPEF/GPD CORNER_NAME is required. TARGET_BEOL=$requested"
     }
     set actual [canonical_beol $corner_name]
     if {$actual eq ""} {
-        error "복원된 parasitic CORNER_NAME이 비어 있거나 이름으로 사용할 문자가 없습니다: '$corner_name'"
+        error "Restored parasitic CORNER_NAME is empty or invalid: '$corner_name'"
     }
     if {$actual ne $requested} {
-        error "BEOL 불일치: TARGET_BEOL=$requested, restore session parasitic=$corner_name ($actual). 목표 BEOL scenario/session을 활성화한 뒤 다시 실행하세요."
+        error "BEOL mismatch: TARGET_BEOL=$requested, restored parasitic=$corner_name ($actual). Activate the target BEOL scenario/session before running."
     }
 
     if {[catch {
         set parasitic_t [number [get_attribute $design parasitics_operating_temperature]]
     } reason]} {
-        error "복원된 parasitic 온도를 확인할 수 없습니다. SPEF/GPD의 // OPERATING_TEMPERATURE가 필요합니다: $reason"
+        error "Cannot determine restored parasitic temperature. SPEF/GPD OPERATING_TEMPERATURE is required: $reason"
     }
     set target_t [number [need $cfg target_t]]
     if {![same $parasitic_t $target_t]} {
-        error "Parasitic 온도 불일치: TARGET_TEMPERATURE=$target_t C, restore session parasitic=$parasitic_t C. 목표 온도 scenario/session을 활성화한 뒤 다시 실행하세요."
+        error "Parasitic temperature mismatch: TARGET_TEMPERATURE=$target_t C, restored parasitic=$parasitic_t C. Activate the target temperature scenario/session before running."
     }
 
     puts "TARGET BEOL: $requested"
@@ -233,7 +233,26 @@ proc auto_scaling::verify_restored_parasitics {cfg} {
         temperature $parasitic_t]
 }
 
-# Exact target-temperature extraction only: never use a nearest-temperature SPEF.
+# Read the original union idx from the key, including cut/recovered path lists.
+# Never substitute the position in the current list for a stored path identity.
+proc auto_scaling::fixed_path_indices {paths} {
+    set indices {}
+    set seen [dict create]
+    foreach item $paths {
+        set key [lindex $item 0]
+        if {![regexp {#([0-9]+)$} $key -> digits] ||
+            [scan $digits %d idx] != 1 || $idx < 1} {
+            error "FP-010: Original fixed-path idx is missing or invalid in key='$key'. Expected a key ending in #<positive idx>; paths will not be renumbered."
+        }
+        if {[dict exists $seen $idx]} {
+            error "FP-011: Duplicate original fixed-path idx=$idx in keys '[dict get $seen $idx]' and '$key'."
+        }
+        dict set seen $idx $key
+        lappend indices $idx
+    }
+    return $indices
+}
+
 proc auto_scaling::read_fixed {path expected_type} {
     set path [readable $path]
     set fh [open $path r]
@@ -284,6 +303,7 @@ proc auto_scaling::read_fixed {path expected_type} {
             foreach edge $edges { if {$edge ni {r f}} { error "Invalid edge '$edge': $key" } }
         }
     }
+    fixed_path_indices $paths
     return [dict create file $path dtype $dtype count [llength $paths] paths $paths]
 }
 
@@ -701,7 +721,7 @@ proc auto_scaling::plan {cfg} {
     set tt [number [need $cfg target_t]]
     set beol [canonical_beol [need $cfg target_beol]]
     if {$beol eq ""} {
-        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다."
+        error "TARGET_BEOL is empty or has no valid name characters."
     }
     set mode [string toupper [need $cfg mode]]
     if {[lsearch -exact [list V T VT] $mode] < 0} {
@@ -713,7 +733,7 @@ proc auto_scaling::plan {cfg} {
         set fixed [read_fixed [dict get $cfg fixed_tcl] [option $cfg delay_type max]]
     }
     if {$fixed eq ""} {
-        error "현재 fixed-path-only scaling 모드에서는 FIXED_PATH_FILE이 반드시 필요합니다."
+        error "FP-000: FIXED_PATH_FILE is required for fixed-path-only scaling."
     }
 
     set cat [catalog $cfg]
@@ -911,7 +931,7 @@ proc auto_scaling::catalog {cfg} {
         foreach item [lrange $ignored 0 2] {
             append detail "\n  [dict get $item path]: [dict get $item reason]"
         }
-        error "Restore session의 파일명과 report_lib에서 P/V/T를 식별할 library를 찾지 못했습니다.$detail"
+        error "No loaded library P/V/T could be identified from filenames or report_lib.$detail"
     }
     puts "LOADED PVT LIBRARIES: [llength $rows]"
     if {[llength $ignored]} {
@@ -931,19 +951,20 @@ proc auto_scaling::fixed_path_edge_opt {base_opt dir} {
 
 proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
     variable progress_total_ms
+    set indices [fixed_path_indices $paths]
     set measured 0
     set missing {}
-    set idx 0
+    set processed 0
     set total [llength $paths]
     set progress_started_ms [clock milliseconds]
-    foreach item $paths {
-        incr idx
-        if {$idx == 1 || $idx % 100 == 0 || $idx == $total} {
+    foreach item $paths idx $indices {
+        incr processed
+        if {$processed == 1 || $processed % 100 == 0 || $processed == $total} {
             set now_ms [clock milliseconds]
             set elapsed_min [expr {($now_ms - $progress_started_ms) / 60000.0}]
             set total_min [expr {($now_ms - $progress_total_ms) / 60000.0}]
             puts [format "FIXED PATH PROGRESS: %d/%d | section=%.2f min | total=%.2f min" \
-                $idx $total $elapsed_min $total_min]
+                $processed $total $elapsed_min $total_min]
             flush stdout
         }
         lassign $item key from to through edges
@@ -996,20 +1017,20 @@ proc auto_scaling::report_fixed_paths {out_file paths delay_type pba_mode} {
     }
     set missing_file ${out_file}.missing
     set fp [open $missing_file w]
-    puts $fp "requested=$idx measured=$measured missing=[llength $missing]"
+    puts $fp "requested=$processed measured=$measured missing=[llength $missing]"
     foreach item $missing {
         puts $fp "idx=[dict get $item idx] key=[dict get $item key] status=[dict get $item status]"
     }
     close $fp
 
-    puts "FIXED PATHS RESULT: requested=$idx measured=$measured missing=[llength $missing]"
+    puts "FIXED PATHS RESULT: requested=$processed measured=$measured missing=[llength $missing]"
     if {$measured == 0} {
         error "No fixed path was measured successfully. Inspect $out_file and $missing_file"
     }
     if {[llength $missing]} {
         puts "WARNING: [llength $missing] known/invalid fixed path(s) were skipped. Details: $missing_file"
     }
-    return [dict create requested $idx measured $measured \
+    return [dict create requested $processed measured $measured \
         missing [llength $missing] missing_file $missing_file]
 }
 
@@ -1056,7 +1077,7 @@ proc auto_scaling::find_scaling_fixed_path {fixed delay_type pba_mode scaled_cel
             }
         }
     }
-    error "Scaling 대상 fixed-path cell을 포함하면서 실제로 resolve되는 timing path를 찾지 못했습니다."
+    error "FP-009: No timing path resolved through the scalable fixed-path cells. Check path pins/edges, analysis type, and timing constraints."
 }
 
 proc auto_scaling::report_has_corner {text rail voltage temperature} {
@@ -1187,6 +1208,27 @@ proc auto_scaling::write_text {path contents} {
     close $fp
 }
 
+# Clear only this run's exact output names; never clear the result directory.
+# Remove old sidecars too, so a failed rerun cannot retain old success evidence.
+proc auto_scaling::reset_output_files {out {include_log 0}} {
+    set suffixes {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc}
+    if {$include_log} { lappend suffixes .log }
+    set previous {}
+    foreach suffix $suffixes {
+        set path ${out}${suffix}
+        if {[catch {file type $path} type options]} {
+            if {[lrange [dict get $options -errorcode] 0 1] eq {POSIX ENOENT}} { continue }
+            return -options $options $type
+        }
+        if {$type ni {file link}} {
+            error "Output path is not a file or symlink; refusing to remove it: $path"
+        }
+        lappend previous $path
+    }
+    foreach path $previous { file delete -- $path }
+    return [llength $previous]
+}
+
 proc auto_scaling::scaling_inputs_text {plan} {
     set lines {}
     lappend lines "PrimeTime scaling input plan"
@@ -1244,7 +1286,7 @@ proc auto_scaling::fixed_path_cells {fixed} {
         foreach pin [concat [list $from] $through [list $to]] {
             set slash [string last "/" $pin]
             if {$slash <= 0} {
-                error "FIXED_PATHS pin에서 instance 이름을 분리하지 못했습니다: $pin"
+                error "FP-001: Cannot extract an instance name from FIXED_PATHS pin: $pin"
             }
             lappend cell_names [string range $pin 0 [expr {$slash-1}]]
         }
@@ -1258,10 +1300,10 @@ proc auto_scaling::fixed_path_cells {fixed} {
                 lappend missing $cell_name
             }
         }
-        error "FIXED_PATHS의 cell을 현재 design에서 정확히 찾지 못했습니다: [lrange $missing 0 19]"
+        error "FP-002: FIXED_PATHS cells were not found uniquely in the current design: [lrange $missing 0 19]"
     }
     if {![sizeof_collection $cells]} {
-        error "FIXED_PATHS에서 scaling 범위로 사용할 cell을 찾지 못했습니다."
+        error "FP-003: No cells were found in FIXED_PATHS for the scaling scope."
     }
     return $cells
 }
@@ -1279,7 +1321,7 @@ proc auto_scaling::resolve_configured_supply_roles {cfg} {
     set supply_full_names [lsort -unique $supply_full_names]
     puts "RESTORED SUPPLY NETS: count=[llength $supply_full_names] names=$supply_full_names"
     if {![dict size $available]} {
-        error "restore session에 supply net이 없습니다. scaling power-net 설정을 검증할 수 없습니다."
+        error "No supply nets were found in the restored session; cannot verify the scaling power net."
     }
 
     # 명시한 scaling net만 scaling으로 바꾸고 나머지는 모두 fixed로 둡니다.
@@ -1288,15 +1330,15 @@ proc auto_scaling::resolve_configured_supply_roles {cfg} {
     set scaling_matches {}
     foreach requested [dict get $cfg scaling_power_nets] {
         if {![dict exists $available $requested]} {
-            error "설정한 scaling power net '$requested'을 restore session에서 찾지 못했습니다. 사용 가능한 supply net: $supply_full_names"
+            error "Configured scaling power net '$requested' was not found. Available supply nets: $supply_full_names"
         }
         set matches [lsort -unique [dict get $available $requested]]
         if {[llength $matches] != 1} {
-            error "설정한 scaling power net '$requested'이 여러 hierarchical net과 일치합니다: $matches. full_name을 입력하세요."
+            error "Configured scaling power net '$requested' matches multiple hierarchical nets: $matches. Use its full_name."
         }
         set actual [lindex $matches 0]
         if {[dict get $roles $actual] eq "scaling"} {
-            error "같은 scaling power net '$actual'이 두 번 설정되었습니다."
+            error "Scaling power net '$actual' was configured twice."
         }
         dict set roles $actual scaling
         lappend scaling_matches $actual
@@ -1321,7 +1363,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     # design instance를 다시 조회하지 않으므로 이 단계의 범위도 fixed path뿐입니다.
     set path_lib_cells [get_attribute $path_cells lib_cell]
     if {[sizeof_collection $path_lib_cells] != [sizeof_collection $path_cells]} {
-        error "일부 FIXED_PATHS cell의 lib_cell을 확인하지 못했습니다."
+        error "FP-004: Cannot resolve lib_cell for every FIXED_PATHS cell. cells=[sizeof_collection $path_cells] lib_cells=[sizeof_collection $path_lib_cells]"
     }
     set used_lib_cells [get_lib_cells -quiet -of_objects $path_cells]
     set used_libs [get_libs -quiet -of_objects $used_lib_cells]
@@ -1339,7 +1381,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     foreach cell_name [get_object_name $path_cells] \
             lib_cell_name [get_object_name $path_lib_cells] {
         set slash [string first "/" $lib_cell_name]
-        if {$slash <= 0} { error "lib_cell에서 library 이름을 분리하지 못했습니다: $lib_cell_name" }
+        if {$slash <= 0} { error "Cannot extract a library name from lib_cell: $lib_cell_name" }
         set lib_name [string range $lib_cell_name 0 [expr {$slash-1}]]
         if {[dict exists $scalable_lib_names $lib_name]} {
             lappend scalable_names $cell_name
@@ -1350,7 +1392,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     set scalable_candidates [get_cells -quiet -exact $scalable_names]
     set static_path_cells [get_cells -quiet -exact $static_names]
     if {$scalable_candidates eq "" || ![sizeof_collection $scalable_candidates]} {
-        error "FIXED_PATHS 안에 active scaling group을 사용하는 cell이 없습니다."
+        error "FP-005: No fixed-path cell uses an active scaling group after fixed-library exclusions. path_cells=[sizeof_collection $path_cells] explicit_fixed_libraries=[llength $explicit_fixed_names]"
     }
 
     if {[dict exists $cfg configured_supply_roles]} {
@@ -1361,7 +1403,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     set pg_pins [get_pg_pins -of_objects $scalable_candidates]
     set primary_pg [filter_collection $pg_pins {type == primary_power}]
     if {$primary_pg eq "" || ![sizeof_collection $primary_pg]} {
-        error "FIXED_PATHS scaling cell에서 type=primary_power PG pin을 찾지 못했습니다."
+        error "FP-006: No type=primary_power PG pins were found on scalable FIXED_PATHS cells. scalable_cells=[sizeof_collection $scalable_candidates]"
     }
 
     set target_cell_names [dict create]
@@ -1386,7 +1428,7 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
         set full_name [get_attribute $pg full_name]
         set suffix "/$pin_name"
         if {![string match "*$suffix" $full_name]} {
-            error "PG pin full_name에서 cell 이름을 분리하지 못했습니다: $full_name"
+            error "Cannot extract a cell name from PG pin full_name: $full_name"
         }
         set cell_name [string range $full_name 0 end-[string length $suffix]]
         if {[dict get $roles $supply_name] eq "scaling"} {
@@ -1399,10 +1441,10 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
     }
     set unknown_rails [lsort -unique $unknown_rails]
     if {[llength $unknown_rails]} {
-        error "FIXED_PATHS scaling cell의 primary power rail 중 restore session의 supply net 목록에 없는 rail이 있습니다: $unknown_rails"
+        error "FP-007: Scalable FIXED_PATHS cells have primary supply rails absent from the restored supply-net map: $unknown_rails"
     }
     if {![dict size $target_cell_names]} {
-        error "FIXED_PATHS에서 SCALING_POWER_NET에 연결된 scalable cell을 찾지 못했습니다."
+        error "FP-008: No scalable FIXED_PATHS cell has a primary PG pin on SCALING_POWER_NET. scalable_cells=[sizeof_collection $scalable_candidates] primary_pins=[sizeof_collection $primary_pg] fixed_rail_cells=[dict size $fixed_cell_names]"
     }
 
     set target_cells [get_cells -quiet -exact [dict keys $target_cell_names]]
@@ -1437,14 +1479,14 @@ proc auto_scaling::run_after_restore {cfg} {
         set_temperature set_voltage update_timing get_timing_paths
     } {
         if {![llength [info commands ::$command]]} {
-            error "이 파일은 restore_session을 완료한 pt_shell에서만 실행할 수 있습니다."
+            error "Source this file in pt_shell after restore_session."
         }
     }
     if {![sizeof_collection [get_designs -quiet *]]} {
-        error "복원된 design이 없습니다. 먼저 restore_session <session_directory>를 실행하세요."
+        error "No restored design was found. Run restore_session <session_directory> first."
     }
     if {![sizeof_collection [get_libs -quiet *]]} {
-        error "복원된 library가 없습니다. restore_session 결과를 확인하세요."
+        error "No restored libraries were found. Check restore_session."
     }
 
     # 시간이 오래 걸리는 library 계획 전에 supply net 조회/설정을 먼저 검증합니다.
@@ -1475,11 +1517,7 @@ proc auto_scaling::run_after_restore {cfg} {
 
     set original_out [file normalize [dict get $cfg out_rpt]]
     set out [file join [file dirname $original_out] "restored_[file tail $original_out]"]
-    foreach suffix {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc} {
-        if {[file exists ${out}${suffix}]} {
-            error "Output already exists: ${out}${suffix}. 기존 결과를 보존하기 위해 덮어쓰지 않습니다."
-        }
-    }
+    reset_output_files $out
     file mkdir [file dirname $out]
     set inputs_text [scaling_inputs_text $plan]
     write_text ${out}.inputs.txt $inputs_text
@@ -1515,17 +1553,17 @@ proc auto_scaling::run_after_restore {cfg} {
     set has_existing_group [regexp -line {^Group[[:space:]]+[0-9]+} $groups_before]
     if {$has_existing_group} {
         if {[report_has_unapproved_corner $groups_before $plan $rail $target_v $target_t]} {
-            error "기존 scaling group에 목표 코너 $target_v V/$target_t C가 포함되어 있습니다. 이 세션에서는 목표 DB를 제외한 scaling 결과를 만들 수 없습니다."
+            error "An existing non-exempt scaling group contains target $target_v V/$target_t C. Target-excluded scaling cannot run with this group."
         }
-        puts "RESTORE MODE: 기존 scaling group을 재사용합니다."
+        puts "RESTORE MODE: Reusing existing scaling groups."
     } else {
-        puts "RESTORE MODE: 목표 코너를 제외한 [llength $scaling_sets]개 scaling group을 생성합니다."
+        puts "RESTORE MODE: Creating [llength $scaling_sets] scaling groups with the target corner excluded."
         foreach scaling_set $scaling_sets {
             set set_name [dict get $scaling_set name]
             set dbs [dict get $scaling_set dbs]
             puts "DEFINE SCALING LIBRARY SET: $set_name"
             if {[catch {define_scaling_lib_group $dbs} problem]} {
-                error "Scaling group 생성 실패($set_name): $problem. 이 library set의 DB들이 같은 cell/pin 구성을 갖는지 확인하세요."
+                error "Scaling group creation failed ($set_name): $problem. Check that the DBs model the same cells/pins."
             }
         }
     }
@@ -1535,7 +1573,7 @@ proc auto_scaling::run_after_restore {cfg} {
     }
     write_text ${out}.libgroups $groups_after
     if {[report_has_unapproved_corner $groups_after $plan $rail $target_v $target_t]} {
-        error "생성된 scaling group에 목표 코너가 남아 있습니다. 결과를 사용하지 마세요: ${out}.libgroups"
+        error "A non-exempt scaling group still contains the target corner. Scaling verification failed: ${out}.libgroups"
     }
     verify_planned_group_coverage $plan
     phase_done PREPARE_SCALING_GROUPS $phase_started
@@ -1572,11 +1610,11 @@ proc auto_scaling::run_after_restore {cfg} {
     set phase_started [phase_start GENERATE_TIMING_REPORT]
     set paths [find_scaling_fixed_path $fixed $dt [option $cfg pba_mode ""] $scaled_cells]
     if {![sizeof_collection $paths]} {
-        error "목표 조건에서 timing path가 없습니다. 복원된 constraint와 analysis type을 확인하세요."
+        error "No timing path exists at the target conditions. Check restored constraints and analysis type."
     }
 
     set fp [open ${out}.selection.tcl w]
-    puts $fp "# restore_session 기반 scaling 선택 기록"
+    puts $fp "# restore_session scaling selection record"
     set record $plan
     dict unset record fixed paths
     if {[dict exists $record fixed cell_names]} { dict unset record fixed cell_names }
@@ -1597,7 +1635,7 @@ proc auto_scaling::run_after_restore {cfg} {
     set fixed_result [report_fixed_paths $out [dict get $fixed paths] \
         $dt [option $cfg pba_mode ""]]
     if {![file exists $out] || [file size $out] == 0} {
-        error "Timing report가 생성되지 않았습니다: $out"
+        error "Timing report was not created or is empty: $out"
     }
     phase_done GENERATE_TIMING_REPORT $phase_started
 
@@ -1625,13 +1663,13 @@ proc auto_scaling::run_after_restore {cfg} {
         }
         set prev_pin $pin
     }
-    if {!$arc_found} { error "Scaling 사용 여부를 검증할 cell arc를 찾지 못했습니다." }
+    if {!$arc_found} { error "No cell arc was found to verify scaling-library use." }
     write_text ${out}.dcalc $dcalc_text
     if {[regexp -nocase {SLG-320|DEL-012|scaling extrapolation problem|due to extrapolation in scaling} $dcalc_text]} {
-        error "report_delay_calculation에서 scaling 외삽/적용 취소 오류가 검출되었습니다. 결과를 사용하지 마세요: ${out}.dcalc"
+        error "report_delay_calculation detected scaling extrapolation/cancellation. Scaling verification failed: ${out}.dcalc"
     }
     if {[string first "Scaling libraries used" $dcalc_text] < 0} {
-        error "report_delay_calculation에서 scaling library 사용 증거를 찾지 못했습니다. 결과를 사용하지 마세요: ${out}.dcalc"
+        error "report_delay_calculation did not show scaling-library use. Scaling verification failed: ${out}.dcalc"
     }
     phase_done VERIFY_SCALING_RESULT $phase_started
 
@@ -1663,7 +1701,7 @@ proc auto_scaling::build_restore_config {} {
         FIXED_LIBRARY_SET FIXED_LIBRARY_VOLTAGE
     } {
         if {![info exists ::$name]} {
-            error "TCL 맨 위 USER SETTINGS에 $name 설정이 없습니다."
+            error "USER SETTINGS is missing $name."
         }
     }
 
@@ -1671,35 +1709,35 @@ proc auto_scaling::build_restore_config {} {
     switch -- $analysis {
         setup { set delay_type max }
         hold  { set delay_type min }
-        default { error "ANALYSIS는 setup 또는 hold여야 합니다." }
+        default { error "ANALYSIS must be setup or hold." }
     }
 
     set voltage [number $::TARGET_VOLTAGE]
     set temperature [number $::TARGET_TEMPERATURE]
     set axis [string toupper $::SCALING_AXIS]
     if {[lsearch -exact {V T VT} $axis] < 0} {
-        error "SCALING_AXIS는 V, T 또는 VT여야 합니다."
+        error "SCALING_AXIS must be V, T, or VT."
     }
     set progress_minutes $::PROGRESS_INTERVAL_MINUTES
     if {![string is integer -strict $progress_minutes] || $progress_minutes <= 0} {
-        error "PROGRESS_INTERVAL_MINUTES는 1 이상의 정수여야 합니다."
+        error "PROGRESS_INTERVAL_MINUTES must be a positive integer."
     }
     set vtag [string map {. p - m} [format %.12g $voltage]]
     set ttag [string map {. p - m} [format %.12g $temperature]]
     set beol [canonical_beol $::TARGET_BEOL]
     if {$beol eq ""} {
-        error "TARGET_BEOL이 비어 있거나 이름으로 사용할 문자가 없습니다."
+        error "TARGET_BEOL is empty or has no valid name characters."
     }
     set process $::TARGET_PROCESS
     if {[string trim $process] eq ""} {
-        error "TARGET_PROCESS가 비어 있습니다."
+        error "TARGET_PROCESS is empty."
     }
     set filename "scaled_[string toupper $process]_${vtag}V_${ttag}C_${beol}_${axis}_${analysis}.rpt"
 
     foreach {setting_name setting_value} [list \
         SCALING_POWER_NET $::SCALING_POWER_NET] {
         if {[string trim $setting_value] eq ""} {
-            error "TCL 맨 위 USER SETTINGS의 $setting_name 값을 설정해야 합니다."
+            error "Set $setting_name in USER SETTINGS at the top of this Tcl."
         }
     }
     set scaling_power_nets [list $::SCALING_POWER_NET]
@@ -1729,13 +1767,12 @@ proc auto_scaling::run_config_with_log {scaling_config} {
         "restored_[file tail $requested_out]"]
     set log_file ${actual_out}.log
     file mkdir [file dirname $log_file]
-    if {[file exists $log_file]} {
-        error "Output already exists: $log_file. 기존 log를 보존하기 위해 덮어쓰지 않습니다."
-    }
+    set previous_count [reset_output_files $actual_out 1]
     set code [catch {
         redirect -tee -file $log_file {
+            puts "OUTPUT MODE: overwrite | previous_files_removed=$previous_count"
             set scaling_result [run_after_restore_monitored $scaling_config]
-            puts "RUN 완료: 복원 세션 기반 scaling과 fixed-path report 생성이 끝났습니다."
+            puts "RUN COMPLETE: Restored-session scaling and fixed-path reporting finished."
         }
     } result options]
     if {$code} {

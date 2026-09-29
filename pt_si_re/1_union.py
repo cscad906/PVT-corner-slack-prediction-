@@ -13,6 +13,8 @@
     --mode를 생략하면 setup이 기본값이고 fixed_paths.tcl에 DTYPE=max가 들어간다.
     hold에서는 반드시 --mode hold를 넣어야 하며 DTYPE=min이 들어간다.
     --dir의 corners는 단순한 폴더 이름이며 setup/hold를 결정하지 않는다.
+    생성된 Tcl은 key 끝의 #번호를 원본 idx로 사용한다. 7_cut.py로 경로를
+    선택해도 report의 idx를 다시 1번부터 매기지 않는다.
 
 가장 먼저 볼 옵션
     --mode setup|hold
@@ -908,10 +910,25 @@ proc edge_opt {base dir} {
     return "-$base"
 }
 
-set idx 0
+# Preserve the original union index after selecting/cutting FIXED_PATHS.
+set seen_idx [dict create]
 foreach item $FIXED_PATHS {
-    incr idx
+    set key [lindex $item 0]
+    if {![regexp {#([0-9]+)$} $key -> digits] ||
+        [scan $digits %d idx] != 1 || $idx < 1} {
+        error "FP-010: Original fixed-path idx is missing or invalid in key='$key'. Paths will not be renumbered."
+    }
+    if {[dict exists $seen_idx $idx]} {
+        error "FP-011: Duplicate original fixed-path idx=$idx."
+    }
+    dict set seen_idx $idx 1
+}
+set requested 0
+foreach item $FIXED_PATHS {
+    incr requested
     set key  [lindex $item 0]
+    regexp {#([0-9]+)$} $key -> digits
+    scan $digits %d idx
     set frm  [lindex $item 1]
     set to   [lindex $item 2]
     set thr  [lindex $item 3]
@@ -960,7 +977,7 @@ proc count_measured {f} {
 
 set NGOT [count_measured $OUT]
 puts ""
-puts "  paths requested : $idx"
+puts "  paths requested : $requested"
 puts "  paths measured  : $NGOT"
 puts "  output file     : $OUT"
 if {$NGOT == 0} {
@@ -975,8 +992,8 @@ if {$NGOT == 0} {
     puts ""
     puts "    code   : E-NOMEASURED"
     puts "=================================================================="
-} elseif {$NGOT < $idx} {
-    puts "  WARNING: [expr {$idx - $NGOT}] paths were not captured."
+} elseif {$NGOT < $requested} {
+    puts "  WARNING: [expr {$requested - $NGOT}] paths were not captured."
     puts "           a small drop is normal -- a path can disappear in another"
     puts "           corner.  if the drop is large, check the Error lines in $OUT."
 }

@@ -287,7 +287,7 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 6. scaling library group 구성 또는 기존 group 검증
 7. fixed path cell의 primary PG pin과 자동 분류된 supply 역할 검증
 8. scaling rail에 연결된 fixed-path cell/PG pin에만 target voltage와 temperature 적용 후 incremental `update_timing`
-9. 동일한 fixed path만 최종 report로 측정
+9. 동일한 fixed path만 최종 report로 측정하며 key 끝의 원본 `#idx` 유지
 10. `report_delay_calculation`에서 scaling library 사용 증거 확인
 
 실행 직후부터 각 단계의 시작과 완료 시간이 다음처럼 표시됩니다. 작업이 한
@@ -356,12 +356,42 @@ cell의 primary rail이 restore session의 supply 목록에 없으면 임의 처
 FIXED PATHS RESULT: requested=294 measured=290 missing=4
 DONE: restore-session scaling report = <결과 파일>
 VERIFY: scaling library evidence = <결과 파일>.dcalc
-RUN 완료: 복원 세션 기반 scaling과 fixed-path report 생성이 끝났습니다.
+RUN COMPLETE: Restored-session scaling and fixed-path reporting finished.
 RUN LOG: <RESULT_FOLDER>/<결과 rpt 이름>.log
 ```
 
-스크립트는 기존 결과를 덮어쓰지 않습니다. `Output already exists`가 나오면
-이전 결과를 보존하고 `RESULT_FOLDER`를 새 폴더로 변경합니다.
+스크립트는 같은 코너·축·analysis의 결과와 로그가 이미 있어도 **덮어쓰며 재실행**합니다.
+실행을 시작할 때 해당 `.rpt`와 아래 표의 부가 파일을 정리하고 로그를 새로 기록합니다.
+재실행이 중간에 실패해도 이전 `.dcalc`나 report가 새 결과처럼 남지 않도록 합니다.
+다른 코너/analysis의 파일과 결과 폴더 내 다른 파일은 삭제하지 않습니다.
+별도 덮어쓰기 설정은 필요 없으며, 로그에 `OUTPUT MODE: overwrite`가 표시됩니다.
+
+Tcl이 출력하는 안내·오류 문구는 영어로 표시합니다. 소스의 한국어 주석은 유지하며,
+UTF-8/EUC-KR 표시 환경 차이 때문에 오류 본문이 깨지는 것을 방지합니다.
+fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 이름을 전달할 필요가 없습니다.
+
+| 번호 | 의미 |
+|---|---|
+| `FP-000` | `FIXED_PATH_FILE` 설정 누락 |
+| `FP-001`~`FP-003` | fixed-path pin/instance 형식 또는 현재 design의 cell 조회 문제 |
+| `FP-004` | path cell과 연결된 lib_cell 개수 불일치 |
+| `FP-005` | 고정 library 제외 후 active scaling group을 사용하는 path cell이 없음 |
+| `FP-006` | scaling cell의 primary power PG pin을 찾지 못함 |
+| `FP-007` | path cell의 supply가 restore된 supply map에서 확인되지 않음 |
+| `FP-008` | active scaling cell의 primary PG pin이 지정한 `SCALING_POWER_NET`에 연결되지 않음 |
+| `FP-009` | scaling cell을 포함하는 timing path가 핀·edge·constraint 조건으로 resolve되지 않음 |
+| `FP-010` | key 끝에 유효한 원본 `#idx`가 없음; 임의로 재번호를 매기지 않고 중단 |
+| `FP-011` | 서로 다른 경로에 같은 원본 idx가 있어 중단 |
+
+`FP-005`는 실제 scaling 대상이 남아 있는지, `FP-008`은 rail 선택과 PG 연결이
+맞는지 확인해야 합니다. 번호만으로 fixed path 파일 자체가 잘못되었다고 단정하지 않습니다.
+
+`### FIXED_PATH idx=`와 `.missing`의 `idx=`에는 fixed-path key 끝의 원본 번호를
+그대로 사용합니다. 예를 들어 `7_cut.py`로 `#7`, `#42`, `#105`만 남겼으면
+결과 idx도 `7, 42, 105`이며, 42번 측정이 실패해도 그 번호를 유지합니다.
+경로 출력 순서는 입력 목록과 같고, 진행률과 `requested`는 원본 idx와 별도로
+실제 처리한 경로 수를 셉니다. 기존 fixed-path 파일을 새로 만들 필요는 없습니다.
+새로 `1_union.py`가 생성하는 Tcl의 직접 실행도 같은 규칙을 사용합니다.
 
 ## 7. scaling 결과 파일
 
