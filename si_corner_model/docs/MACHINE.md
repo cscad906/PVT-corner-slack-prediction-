@@ -422,12 +422,16 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
   |---|---|
   | `mean predicted slack (ps)` | 예측 평균 |
   | `mean measured slack (ps)` | **실측 평균.** 측정된 코너만, 나머지는 빈칸 |
+  | `mean absolute error (ps)` | **MAE.** 경로별 \|예측−실측\| 의 평균 |
+  | `worst absolute error (ps)` | 그 코너에서 가장 큰 오차 |
   | `smallest slack (ps)` | 가장 작은 slack (WNS) |
   | `sum of negative slacks (ps)` | 음수 slack 합 |
   | `paths with negative slack (out of N)` | 음수 경로 수 |
   | `max clock frequency (MHz)` | 그 코너에서 가능한 최대 주파수 |
 
-  위 두 줄을 나란히 보면 그 코너 예측이 실측과 얼마나 맞는지 바로 보인다. 경로별
+  평균끼리 비교하면 안 된다 — 20 ps 높게 본 경로와 20 ps 낮게 본 경로가 상쇄된다.
+  **MAE 줄이 실제 성적**이고, 한 경로만 크게 틀려도 그 코너는 못 쓰므로 worst 도 같이
+  본다. 경로별
   오차가 필요하면 `runs/<mode>/<회로>/<온도>/predictions_hidden.csv` 에
   `truth_ps / model_ps / model_err_ps` 가 있다
 - 서버에서 보기:

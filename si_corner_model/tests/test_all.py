@@ -1124,6 +1124,8 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     rows_by = {r[2]: r for r in summ[1:]}
     assert [r[2] for r in summ[1:]] == ["mean predicted slack (ps)",
                                         "mean measured slack (ps)",
+                                        "mean absolute error (ps)",
+                                        "worst absolute error (ps)",
                                         "smallest slack (ps)",
                                         "sum of negative slacks (ps)",
                                         "paths with negative slack (out of 12)",
@@ -1137,6 +1139,14 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     for t, pr in zip(kinds_row, pred_row):
         if t:
             assert abs(float(t) - float(pr)) < 50.0
+    # the error rows exist exactly where a measurement does, and the worst is
+    # never smaller than the mean
+    mae = rows_by["mean absolute error (ps)"][3:]
+    wae = rows_by["worst absolute error (ps)"][3:]
+    assert [bool(x) for x in mae] == [bool(x) for x in kinds_row]
+    for a, b in zip(mae, wae):
+        if a:
+            assert float(b) >= float(a) - 1e-9
     # the fixture's reports carry a 2 ns period, and Fmax is where the worst
     # path reaches zero slack: 1 / (2 ns - worst slack)
     fm = [float(x) for x in rows_by["max clock frequency (MHz)"][3:] if x]

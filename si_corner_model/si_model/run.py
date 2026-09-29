@@ -2325,6 +2325,19 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                 w.writerow([d, "", "mean predicted slack (ps)"] + [f1(x) for x in mp])
                 if any(np.isfinite(x) for x in mt):
                     w.writerow([d, "", "mean measured slack (ps)"] + [f1(x) for x in mt])
+                    # Comparing the two averages above hides the error: a path
+                    # predicted 20 ps high and one 20 ps low cancel. These two
+                    # rows are per path, so nothing cancels -- the mean is the
+                    # usual score and the worst is the one a timing sign-off
+                    # cares about, since a single bad path is a bad corner.
+                    def _err(k, f):
+                        e = np.abs(vals[:, k] - truth[:, k])
+                        return float(f(e[np.isfinite(e)])) if np.isfinite(e).any() \
+                            else np.nan
+                    w.writerow([d, "", "mean absolute error (ps)"]
+                               + [f1(_err(k, np.mean)) for k in keep])
+                    w.writerow([d, "", "worst absolute error (ps)"]
+                               + [f1(_err(k, np.max)) for k in keep])
                 w.writerow([d, "", "smallest slack (ps)"] + [f1(x) for x in worst])
                 w.writerow([d, "", "sum of negative slacks (ps)"] + [f1(x) for x in neg])
                 w.writerow([d, "", "paths with negative slack (out of %d)" % len(keys)]
