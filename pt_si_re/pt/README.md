@@ -444,6 +444,30 @@ fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 �
 실제 처리한 경로 수를 셉니다. 기존 fixed-path 파일을 새로 만들 필요는 없습니다.
 새로 `1_union.py`가 생성하는 Tcl의 직접 실행도 같은 규칙을 사용합니다.
 
+### `CLASSIFY_FIXED_PATH_SUPPLY`에서 `FP-002`가 난 경우
+
+fixed path에서 추출한 instance 이름을 현재 디자인에서 유일하게 찾지 못한
+오류입니다. 다른 코너에서 성공했더라도 이번 restore 디자인/조회 위치/실제로
+읽힌 fixed-path 파일이 같은지 확인해야 합니다. 오류만으로 전체 파일 불일치인지
+일부 오래되거나 잘못된 path인지 판단할 수 없습니다.
+
+오류가 난 같은 pt_shell에서 다음 조회 전용 파일을 source합니다.
+
+```tcl
+source /path/to/repository/pt_si_re/pt/check_fixed_path_cells.tcl
+```
+
+설정 항목은 없으며 원래 `scaling_config`의 fixed-path 파일을 읽습니다.
+실제 파일 절대경로와 디자인을 표시하고, 최상위에서 cell을 조회한 뒤 원래
+`current_instance`로 돌아옵니다. 이름 대신 `COUNTS`와 원본 path idx를 출력합니다.
+`NONE_MATCH`는 추출한 셀 이름을 하나도 찾지 못한 경우, `PARTIAL_MATCH`는 일부만
+못 찾은 경우입니다. `affected_paths`는 해당 셀이 포함된 fixed path 개수입니다.
+`SAMPLE`의 `pin_matches=1 pin_owner_cells=1`인데 `cell_matches=0`이면 pin 객체는
+존재하므로 문자열로 추출한 cell 이름 처리 문제를 먼저 확인합니다.
+`ALL_CELLS_MATCH`는 cell 조회 통과이며 timing path/PG 연결이 정상이라는 뜻은
+아닙니다. 이 조회는 V/T나 timing을 변경하지 않고 path를 삭제/제외하지 않습니다.
+담당자에게 이름을 복사하기 어려우면 `FIXED CELL CHECK`와 `COUNTS` 두 줄만 전달합니다.
+
 ### `VERIFY_SCALING_RESULT`에서 cell arc 오류가 난 경우
 
 기존 검증 코드는 scaling cell의 핀이 하나라도 있는 첫 경로를 골랐습니다.
