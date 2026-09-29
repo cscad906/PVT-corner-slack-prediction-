@@ -90,6 +90,13 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
         set status CANNOT_BRACKET
     }
     if {[dict exists $cfg fixed_library_set] &&
+        [llength [info commands ::auto_scaling::resolve_fixed_families]]} {
+        set selected [::auto_scaling::resolve_fixed_families \
+            [dict get $cfg fixed_library_set] [dict get $cfg catalog_families] 0]
+        if {[lsearch -exact $selected [dict get [lindex $members 0] family]] >= 0} {
+            set status EXPLICIT_FIXED_SET
+        }
+    } elseif {[dict exists $cfg fixed_library_set] &&
         [string equal -nocase [dict get $cfg fixed_library_set] [dict get [lindex $members 0] family]]} {
         set status EXPLICIT_FIXED_SET
     }
@@ -136,7 +143,11 @@ proc library_scaling_group_report::show_library_set {set_name} {
     set catalog [::auto_scaling::catalog $cfg]
     set members {}
     set matching_processes {}
+    set catalog_families {}
     foreach row [dict get $catalog rows] {
+        if {$process eq "" || [dict get $row process] eq $process} {
+            lappend catalog_families [dict get $row family]
+        }
         if {![string equal -nocase [dict get $row family] $set_name]} { continue }
         lappend matching_processes [dict get $row process]
         if {$process ne "" && [dict get $row process] ne $process} { continue }
@@ -151,6 +162,7 @@ proc library_scaling_group_report::show_library_set {set_name} {
     if {[dict exists $cfg target_v] && [dict exists $cfg target_t]} {
         puts "SCALING RUN TARGET: voltage=[dict get $cfg target_v] V temperature=[dict get $cfg target_t] C axis=[dict get $cfg mode]"
     }
+    dict set cfg catalog_families [lsort -unique $catalog_families]
     show_voltage_range $members $cfg
     # The catalog includes target and other-temperature libraries that the
     # scaling planner may exclude. These are NOT claimed to be active inputs.

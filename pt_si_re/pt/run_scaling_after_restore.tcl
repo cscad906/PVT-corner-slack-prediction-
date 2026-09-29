@@ -29,8 +29,10 @@ set PROGRESS_INTERVAL_MINUTES 10
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
 
-# Optional: keep ONE library set at its RESTORED DB/conditions instead of scaling.
-# Enter the set name from "library set '...'"; leave empty to disable.
+# Optional: keep selected sets at their RESTORED DB/conditions instead of scaling.
+# Enter an exact set name, a common pattern such as "macro_*", or names/patterns
+# separated by spaces. Empty disables this option. All matches must be linked
+# at FIXED_LIBRARY_VOLTAGE. Matching does not merge sets or relink any cells.
 # This never relinks a 0.475 V cell to a 0.685 V DB. A mismatch stops the run.
 set FIXED_LIBRARY_SET     ""
 set FIXED_LIBRARY_VOLTAGE 0.685 ;# expected nominal voltage of the linked DB (V)
@@ -321,9 +323,17 @@ proc auto_scaling::process_name {text} {
 # PrimeTime scaling용 PVT library는 한 파일에 operating condition이 하나여야
 # 자동 선택이 명확합니다. 여러 개이면 잘못 고르지 않고 중단합니다.
 proc auto_scaling::report_operating_condition {lib path} {
-    if {[catch {
+    # The default two report digits turn 0.685 into 0.69. Read sufficient
+    # precision for matching without exposing float32 representation noise,
+    # then restore the user's setting even when report_lib fails. This does
+    # not change library/cell conditions.
+    set saved_digits [get_app_var report_default_significant_digits]
+    if {$saved_digits != 6} { set_app_var report_default_significant_digits 6 }
+    set report_failed [catch {
         redirect -variable report_text { report_lib -nosplit $lib }
-    } reason]} {
+    } reason]
+    if {$saved_digits != 6} { set_app_var report_default_significant_digits $saved_digits }
+    if {$report_failed} {
         error "report_lib failed for $path: $reason"
     }
 
@@ -719,6 +729,38 @@ proc auto_scaling::plan_one_family {rows process family tv tt mode} {
     return [dict create family $family mode $mode selected $selected excluded $excluded]
 }
 
+# Select declared fixed sets without guessing the meaning of numeric tokens.
+# Exact names take precedence; only * and ? are wildcard operators.
+# Brackets and backslashes in library-set names stay literal.
+proc auto_scaling::resolve_fixed_families {spec families {strict 1}} {
+    set spec [string trim $spec]
+    if {$spec eq ""} { return {} }
+    foreach family $families {
+        if {[string equal -nocase $spec $family]} { return [list $family] }
+    }
+    if {[catch {llength $spec}] || ![llength $spec]} {
+        error "FIXED_LIBRARY_SET must be empty, an exact name, or names/patterns separated by spaces."
+    }
+    set selected {}
+    foreach selector $spec {
+        set matches {}
+        foreach family $families {
+            if {[string equal -nocase $selector $family]} { lappend matches $family }
+        }
+        if {![llength $matches] && [regexp {[*?]} $selector]} {
+            set pattern [string map [list "\\" "\\\\" "\[" "\\\[" "\]" "\\\]"] $selector]
+            foreach family $families {
+                if {[string match -nocase $pattern $family]} { lappend matches $family }
+            }
+        }
+        if {![llength $matches] && $strict} {
+            error "FIXED_LIBRARY_SET selector '$selector' is not a selected fixed-path library set or matching pattern. Available: $families"
+        }
+        set selected [concat $selected $matches]
+    }
+    return [lsort -unique $selected]
+}
+
 proc auto_scaling::plan {cfg} {
     set process [string toupper [need $cfg target_process]]
     set tv [number [need $cfg target_v]]
@@ -828,27 +870,24 @@ proc auto_scaling::plan {cfg} {
     set selected {}
     set excluded {}
     set fixed_library_rows {}
-    set fixed_family [string trim [option $cfg fixed_library_set ""]]
-    if {$fixed_family ne ""} {
-        set matched_family ""
-        foreach family $fixed_matches {
-            if {[string equal -nocase $family $fixed_family]} { set matched_family $family }
-        }
-        if {$matched_family eq ""} {
-            error "FIXED_LIBRARY_SET '$fixed_family' is not a selected fixed-path library set. Available: $fixed_matches"
-        }
-        set fixed_family $matched_family
-        # A declared fixed set can be on another rail; still validate its DB.
-        if {[lsearch -exact $chosen_families $fixed_family] < 0} {
-            lappend chosen_families $fixed_family
+    set fixed_families [resolve_fixed_families [option $cfg fixed_library_set ""] $fixed_matches]
+    if {[llength $fixed_families]} {
+        # A declared fixed set can be on another rail; still validate every DB.
+        foreach family $fixed_families {
+            if {[lsearch -exact $chosen_families $family] < 0} {
+                lappend chosen_families $family
+            }
         }
         set fixed_voltage [number [need $cfg fixed_library_voltage]]
         foreach row $rows {
-            if {[dict get $row family] eq $fixed_family} { lappend fixed_library_rows $row }
+            if {[lsearch -exact $fixed_families [dict get $row family]] >= 0} {
+                lappend fixed_library_rows $row
+            }
         }
+        puts "FIXED LIBRARY SET SELECTION: count=[llength $fixed_families] names=$fixed_families expected_linked_db_voltage=$fixed_voltage V"
     }
     foreach family $chosen_families {
-        if {$family eq $fixed_family} {
+        if {[lsearch -exact $fixed_families $family] >= 0} {
             set static_sets [lsort -unique [concat $static_sets [list $family]]]
             puts "EXPLICIT FIXED LIBRARY SET: $family | expected_linked_db_voltage=$fixed_voltage V | restore conditions unchanged"
             continue
@@ -895,6 +934,7 @@ proc auto_scaling::plan {cfg} {
     dict set result fixed_rail_sets $fixed_rail_sets
     dict set result scaling_library_rows $scaling_library_rows
     dict set result fixed_library_rows $fixed_library_rows
+    dict set result explicit_fixed_sets $fixed_families
     dict set result selected $selected
     dict set result excluded $excluded
     dict set result catalog $rows

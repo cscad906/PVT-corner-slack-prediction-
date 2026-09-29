@@ -124,6 +124,56 @@ dict unset cfg fixed_library_set
 dict unset cfg fixed_library_voltage
 puts "PASS: explicit fixed exception preserved on both fixed and target rails"
 
+# One common pattern selects numbered variants without merging families.
+set families {macro_1 macro_2 CORE {literal[1]} literal1 {space name} space name {star*}}
+assert [expr {[auto_scaling::resolve_fixed_families "macro_*" $families] eq {macro_1 macro_2}}] "Numbered variants not selected"
+assert [expr {[auto_scaling::resolve_fixed_families "macro_1 macro_2" $families] eq {macro_1 macro_2}}] "Multiple exact names not selected"
+assert [expr {[auto_scaling::resolve_fixed_families "" $families] eq {}}] "Blank option changed"
+assert [expr {[auto_scaling::resolve_fixed_families {literal[1]} $families] eq {{literal[1]}}}] "Literal brackets changed"
+assert [expr {[auto_scaling::resolve_fixed_families {literal[1]*} $families] eq {{literal[1]}}}] "Pattern matched brackets as a character class"
+assert [expr {[auto_scaling::resolve_fixed_families "space name" $families] eq {{space name}}}] "Exact name with spaces lost precedence"
+assert [expr {[auto_scaling::resolve_fixed_families {star*} $families] eq [list {star*}]}] "Exact star name lost precedence"
+expect_error {auto_scaling::resolve_fixed_families "absent_*" $families} {*not a selected fixed-path library set*}
+assert [expr {[auto_scaling::resolve_fixed_families "absent_*" $families 0] eq {}}] "Read-only non-strict query failed"
+
+# Two fixed-path sets on the selected rail must both be declared fixed while
+# CORE keeps its interpolation and target-exclusion rules.
+rename auto_scaling::catalog auto_scaling::base_test_catalog
+proc auto_scaling::catalog {cfg} {
+    set data [base_test_catalog $cfg]
+    foreach family {LIMITED_1 LIMITED_2} {
+        foreach v {0.475 0.685} {
+            dict lappend data rows [dict create process SSPG v $v t 25 family $family \
+                lib_name $family file [format /fixture/%s_%s.db $family $v]]
+        }
+    }
+    return $data
+}
+dict set ::cell_lib memory LIMITED_1/INV
+dict set ::cell_lib memory2 LIMITED_2/INV
+dict set ::pin_rail memory/VDD VDD_SCALE
+dict set ::pin_rail memory2/VDD VDD_SCALE
+set more_fixed $fixed
+dict set more_fixed paths {{path#42 launch/Q memory/Z {logic/A logic/Z memory2/A memory2/Z memory/A}}}
+dict set cfg resolved_fixed $more_fixed
+dict set cfg target_v 0.76
+dict set cfg fixed_library_set "LIMITED_*"
+dict set cfg fixed_library_voltage 0.685
+set plan [auto_scaling::plan $cfg]
+assert [expr {[dict get $plan explicit_fixed_sets] eq {LIMITED_1 LIMITED_2}}] "Pattern expansion incorrect"
+assert [expr {[llength [dict get $plan fixed_library_rows]] == 4}] "One fixed set lost"
+assert [expr {[llength [dict get $plan groups]] == 1 && [dict get [lindex [dict get $plan groups] 0] family] eq "CORE"}] "Pattern leaked into core"
+rename auto_scaling::catalog {}
+rename auto_scaling::base_test_catalog auto_scaling::catalog
+dict set ::cell_lib memory LIMITED/INV
+dict unset ::cell_lib memory2
+dict set ::pin_rail memory/VDD VDD_FIXED
+dict unset ::pin_rail memory2/VDD
+dict set cfg resolved_fixed $fixed
+dict unset cfg fixed_library_set
+dict unset cfg fixed_library_voltage
+puts "PASS: numbered patterns, multiple/exact/blank selectors, literal brackets/spaces/stars, unmatched rejection, two fixed sets with core still scaled"
+
 # A cell using two primary rails still needs interpolation for its target rail.
 dict set ::pin_rail memory/VDDAUX VDD_SCALE
 dict set cfg target_v 0.76
@@ -160,4 +210,30 @@ dict set ::pin_rail launch/VDD VDD_FIXED
 dict set ::pin_rail logic/VDD VDD_FIXED
 expect_error {auto_scaling::plan $cfg} {FP-008:*}
 puts "PASS: unknown/missing supplies and no target-rail cells stop before interpolation"
+
+# Library conditions must not turn 0.685 V into 0.69 V. Preserve the user's
+# report precision on success/error, including an originally higher setting.
+proc get_app_var {name} { return $::report_digits }
+proc set_app_var {name value} { set ::report_digits $value; lappend ::precision_changes $value }
+proc redirect {option variable body} {
+    upvar 1 $variable captured
+    set captured [uplevel 1 $body]
+}
+proc report_lib {args} {
+    if {$::fail_report} { error "Fixture report failure" }
+    return "Operating Conditions:\nName Process Temp Voltage\nNOM 1.0 25 [format %.*f $::report_digits 0.685]\n\n"
+}
+foreach saved {2 6 11} {
+    set ::report_digits $saved
+    set ::precision_changes {}
+    set ::fail_report 0
+    set condition [auto_scaling::report_operating_condition LIB /fixture/lib.db]
+    assert [expr {abs([dict get $condition v] - 0.685) < 1e-8}] "Nominal voltage was rounded"
+    assert [expr {$::report_digits == $saved}] "Report precision not restored on success"
+    if {$saved == 6} { assert [expr {$::precision_changes eq {}}] "Matching precision changed unnecessarily" }
+    set ::fail_report 1
+    expect_error {auto_scaling::report_operating_condition LIB /fixture/lib.db} {*Fixture report failure*}
+    assert [expr {$::report_digits == $saved}] "Report precision not restored on error"
+}
+puts "PASS: exact nominal voltage read without rounding, report precision preserved on success/failure"
 puts "ALL SUPPLY-BEFORE-SCALING TESTS PASSED"
