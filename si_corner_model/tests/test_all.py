@@ -1121,14 +1121,26 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
         assert idx == sorted(idx), "paths must be in FIXED_PATH idx order"
     assert summ[0][:3] == ["design", "", "summary"]
     assert [c + " slack (ps)" for c in summ[0][3:]] == head[3:]
-    assert [r[2] for r in summ[1:]] == ["smallest slack (ps)",
+    rows_by = {r[2]: r for r in summ[1:]}
+    assert [r[2] for r in summ[1:]] == ["mean predicted slack (ps)",
+                                        "mean measured slack (ps)",
+                                        "smallest slack (ps)",
                                         "sum of negative slacks (ps)",
                                         "paths with negative slack (out of 12)",
                                         "max clock frequency (MHz)"]
+    # measured columns carry a measured average, unmeasured ones stay blank,
+    # and where both exist they are the same order of magnitude
+    kinds_row = rows_by["mean measured slack (ps)"][3:]
+    pred_row = rows_by["mean predicted slack (ps)"][3:]
+    assert any(x for x in kinds_row) and any(not x for x in kinds_row), \
+        "a sweep has both measured and unmeasured corners"
+    for t, pr in zip(kinds_row, pred_row):
+        if t:
+            assert abs(float(t) - float(pr)) < 50.0
     # the fixture's reports carry a 2 ns period, and Fmax is where the worst
     # path reaches zero slack: 1 / (2 ns - worst slack)
-    fm = [float(x) for x in summ[4][3:] if x]
-    ws = [float(x) for x in summ[1][3:] if x]
+    fm = [float(x) for x in rows_by["max clock frequency (MHz)"][3:] if x]
+    ws = [float(x) for x in rows_by["smallest slack (ps)"][3:] if x]
     assert fm and len(fm) == len(ws)
     assert all(abs(f - 1000.0 / (2.0 - w / 1000.0)) < 0.5 for f, w in zip(fm, ws))
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]

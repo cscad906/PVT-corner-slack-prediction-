@@ -2089,6 +2089,7 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
 
     K = len(req)
     vals = np.full((tr.N, K), np.nan)
+    truth = np.full((tr.N, K), np.nan)      # measured slack where there is one
     kinds = []
     ex_ci, ex_col, q_m, q_b, q_col = [], [], [], [], []
     for k, (v, l) in enumerate(req):
@@ -2105,6 +2106,7 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
             q_m.append([v, frame[l][0]]); q_b.append([v, frame[l][1]]); q_col.append(k)
     if ex_ci:
         vals[:, ex_col] = tr.predict_corners(np.asarray(ex_ci))
+        truth[:, ex_col] = tr.slack_ps.cpu().numpy()[:, np.asarray(ex_ci)]
     if q_m:
         vals[:, q_col] = tr.predict_coords(np.asarray(q_m), np.asarray(q_b))
     # capture edge - launch edge, per path (ns). One period for a single-cycle
@@ -2122,7 +2124,7 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     pidx = tr.ds.get("path_idx")
     pidx = (np.arange(len(keys)) if pidx is None
             else np.asarray(pidx, np.int64))
-    return keys, pidx, vals, kinds, (vmin, vmax), gap
+    return keys, pidx, vals, kinds, (vmin, vmax), gap, truth
 
 
 def _apply_period(m: dict, gap, vals, period: "float | None"):
@@ -2237,9 +2239,14 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             print("  skipped: --at/--sweep supports slack models only", flush=True)
             continue
         try:
-            keys, pidx, vals, kinds, (vmin, vmax), gap = _predict_one_model(
+            keys, pidx, vals, kinds, (vmin, vmax), gap, truth = _predict_one_model(
                 m, req, weights)
             gap, base_T, eff_T = _apply_period(m, gap, vals, period)
+            # the measurement moves with the period by the same identity, so
+            # comparing it against a shifted prediction stays honest
+            if base_T is not None and period is not None:
+                truth += (np.where(np.isfinite(gap), gap, 0.0)
+                          * (period / base_T - 1.0))[:, None] * 1000.0
         except Exception as e:
             failed.append((f"predict:{m['name']}", repr(e)))
             traceback.print_exc()
@@ -2259,7 +2266,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                 c, float(np.nanmin(col)), float(col[col < 0].sum()),
                 int((col < 0).sum()), N,
                 ("  %8.1f MHz" % fm) if np.isfinite(fm) else ""), flush=True)
-        results.append((m, keys, pidx, vals, kinds, gap, base_T, eff_T))
+        results.append((m, keys, pidx, vals, kinds, gap, base_T, eff_T, truth))
     if not results:
         return [], failed
 
@@ -2290,7 +2297,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             # its rows carry their own meaning and unit, and one is a count.
             w.writerow(["design", "path_idx", "path_key"]
                        + ["%s slack (ps)" % cols[k] for k in keep])
-            for m, keys, pidx, vals, _, _, _, _ in grp:
+            for m, keys, pidx, vals, _, _, _, _, _ in grp:
                 for i in np.argsort(pidx, kind="stable"):
                     w.writerow([m["design"], int(pidx[i]), keys[i]]
                                + [f1(vals[i, k]) for k in keep])
@@ -2299,7 +2306,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             # in path_idx it stretched that narrow column to the label's width
             # in every `column -t` view of the file
             w.writerow(["design", "", "summary"] + [cols[k] for k in keep])
-            for m, keys, _, vals, kinds, gap, base_T, eff_T in grp:
+            for m, keys, _, vals, kinds, gap, base_T, eff_T, truth in grp:
                 fin = {k: kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
                        for k in keep}
                 worst = [float(np.nanmin(vals[:, k])) if fin[k] else np.nan for k in keep]
@@ -2308,6 +2315,16 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                 # the count alone: "52/33412" in a cell is read as a date by Excel
                 nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else "" for k in keep]
                 d = m["design"]
+                # averages first: what was predicted, and what was measured
+                # where a measurement exists -- the two a reader compares.
+                # Blank at a corner nobody measured.
+                mp = [float(np.nanmean(vals[:, k])) if fin[k] else np.nan for k in keep]
+                mt = [float(np.nanmean(truth[:, k]))
+                      if fin[k] and np.isfinite(truth[:, k]).any() else np.nan
+                      for k in keep]
+                w.writerow([d, "", "mean predicted slack (ps)"] + [f1(x) for x in mp])
+                if any(np.isfinite(x) for x in mt):
+                    w.writerow([d, "", "mean measured slack (ps)"] + [f1(x) for x in mt])
                 w.writerow([d, "", "smallest slack (ps)"] + [f1(x) for x in worst])
                 w.writerow([d, "", "sum of negative slacks (ps)"] + [f1(x) for x in neg])
                 w.writerow([d, "", "paths with negative slack (out of %d)" % len(keys)]

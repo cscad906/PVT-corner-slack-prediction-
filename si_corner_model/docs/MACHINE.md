@@ -415,9 +415,21 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
   - `path_idx` = 리포트의 `### FIXED_PATH idx=<n>` 의 n
   - `path_key` = 같은 줄의 `key=` (시작점->끝점)
   - 값 = 예측 slack (ps)
-- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 회로별 요약 3줄:
-  `smallest slack (ps)` / `sum of negative slacks (ps)` / `paths with negative slack (out of N)`.
-  맨 아래라 엑셀 정렬·필터에 섞이지 않는다 (빈 줄에서 범위가 끊김)
+- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 회로별 요약. 맨 아래라 엑셀 정렬·필터에
+  섞이지 않는다 (빈 줄에서 범위가 끊김):
+
+  | 줄 | 뜻 |
+  |---|---|
+  | `mean predicted slack (ps)` | 예측 평균 |
+  | `mean measured slack (ps)` | **실측 평균.** 측정된 코너만, 나머지는 빈칸 |
+  | `smallest slack (ps)` | 가장 작은 slack (WNS) |
+  | `sum of negative slacks (ps)` | 음수 slack 합 |
+  | `paths with negative slack (out of N)` | 음수 경로 수 |
+  | `max clock frequency (MHz)` | 그 코너에서 가능한 최대 주파수 |
+
+  위 두 줄을 나란히 보면 그 코너 예측이 실측과 얼마나 맞는지 바로 보인다. 경로별
+  오차가 필요하면 `runs/<mode>/<회로>/<온도>/predictions_hidden.csv` 에
+  `truth_ps / model_ps / model_err_ps` 가 있다
 - 서버에서 보기:
   ```
   column -s, -t runs/setup/_all/predict_m25_*.csv | less -S    # 전체
