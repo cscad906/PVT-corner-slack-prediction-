@@ -2367,6 +2367,8 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
     header = None
     rows = 0
     missing = []
+    # per (design, temp, corner): n, sum truth, sum model, sum |err|, worst |err|
+    agg, order = {}, []
     with open(out_fp, "w", newline="", encoding="utf-8") as out:
         w = csv.writer(out)
         for m in models:
@@ -2382,8 +2384,38 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
                     w.writerow(header)
                 assert ["design", "temp"] + head == header, f"{fp}: column mismatch"
                 for row in r:
+                    # each per-model file carries its own per-corner block after
+                    # a blank line. Copying those as data rows would put summary
+                    # lines in among the paths, so they are recomputed here over
+                    # every model instead.
+                    if not row or row[0] == "summary":
+                        continue
                     w.writerow([m["design"], m["temp"]] + row)
                     rows += 1
+                    key = (m["design"], str(m["temp"]), row[1])
+                    if key not in agg:
+                        agg[key] = [0, 0.0, 0.0, 0.0, 0.0]
+                        order.append(key)
+                    a = agg[key]
+                    a[0] += 1
+                    a[2] += float(row[3])
+                    if row[2]:
+                        a[1] += float(row[2])
+                        e = abs(float(row[3]) - float(row[2]))
+                        a[3] += e
+                        a[4] = max(a[4], e)
+        if order:
+            w.writerow([])
+            w.writerow(["design", "temp", "summary", "corner", "mean_truth_ps",
+                        "mean_model_ps", "mean_abs_err_ps", "worst_abs_err_ps"])
+            for d, t, cn in order:
+                n, st, sm, se, wo = agg[(d, t, cn)]
+                has_truth = st != 0.0 or se != 0.0
+                w.writerow([d, t, "summary", cn,
+                            "%.3f" % (st / n) if has_truth else "",
+                            "%.3f" % (sm / n),
+                            "%.3f" % (se / n) if has_truth else "",
+                            "%.3f" % wo if has_truth else ""])
     assert header is not None, \
         f"nothing to merge (predictions_{corners}.csv). Run predict first."
     if missing:
@@ -2434,6 +2466,10 @@ def _corner_table(csv_fp: str) -> list:
     with open(csv_fp, newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
+            # the file ends with a per-corner block after a blank line; those
+            # rows are a summary OF these, not more of them
+            if not row.get("design") or row.get("path_key") == "summary":
+                continue
             key = (row["design"], row["temp"], row["corner"])
             a = acc.setdefault(key, {"n": 0, "n_truth": 0, "sum": 0.0, "worst": 0.0})
             a["n"] += 1

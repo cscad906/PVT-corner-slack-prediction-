@@ -429,6 +429,11 @@ bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어�
   | `paths with negative slack (out of N)` | 음수 경로 수 |
   | `max clock frequency (MHz)` | 그 코너에서 가능한 최대 주파수 |
 
+  `predictions_hidden.csv` 도 같은 모양으로 끝난다 — 빈 줄 다음에 코너별
+  `mean_truth_ps / mean_model_ps / mean_abs_err_ps / worst_abs_err_ps`. 합본
+  (`_all/predictions_hidden.csv`) 은 그 줄들을 경로 사이에 섞지 않고 전 모델에 대해
+  다시 계산해서 맨 아래에 붙인다.
+
   평균끼리 비교하면 안 된다 — 20 ps 높게 본 경로와 20 ps 낮게 본 경로가 상쇄된다.
   **MAE 줄이 실제 성적**이고, 한 경로만 크게 틀려도 그 코너는 못 쓰므로 worst 도 같이
   본다. 경로별

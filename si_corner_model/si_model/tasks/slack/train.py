@@ -937,9 +937,36 @@ class Trainer:
                         f.write(f"{keys[p]},{cn},{t:.3f},{md:.3f},{md - t:.3f}\n")
                     else:                     # pure inference -> prediction only
                         f.write(f"{keys[p]},{cn},,{md:.3f},\n")
+            self._write_pred_summary(f, corners, truth, pred)
         print(f"[PRED] wrote {out_dir}/predictions_{tag}.csv (+.npz): "
               f"{self.N} paths x {len(idx)} corners", flush=True)
         return pred
+
+    @staticmethod
+    def _write_pred_summary(f, corners, truth, pred) -> None:
+        """Per-corner block under the path rows, after one blank line.
+
+        The rows above are per path; this is the same thing per corner, so the
+        answer to 'how good is this corner' does not need a spreadsheet. Its
+        own header, because its columns are not the path rows' columns -- the
+        predict files are laid out the same way, and stage_merge knows to skip
+        rows marked `summary` rather than copy them as data.
+
+        Comparing the two means would hide the error (a path 20 ps high and one
+        20 ps low cancel), so the absolute error is computed per path first.
+        """
+        f.write("\n")
+        f.write("summary,corner,mean_truth_ps,mean_model_ps,"
+                "mean_abs_err_ps,worst_abs_err_ps\n")
+        for k, cn in enumerate(corners):
+            t, md = truth[:, k], pred[:, k]
+            ok = np.isfinite(t)
+            if ok.any():
+                e = np.abs(md[ok] - t[ok])
+                f.write("summary,%s,%.3f,%.3f,%.3f,%.3f\n"
+                        % (cn, t[ok].mean(), md.mean(), e.mean(), e.max()))
+            else:                      # a pure-inference corner: no truth
+                f.write("summary,%s,,%.3f,,\n" % (cn, md.mean()))
 
     def report(self, out_dir: str, best_ep: int) -> dict:
         rows = {}

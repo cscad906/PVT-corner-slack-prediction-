@@ -1025,13 +1025,18 @@ def test_predict_replays_the_training_base(real_tree, tmp_path, monkeypatch):
     build(m["cfg"])
     stage_train(m)
     fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
-    trained = [float(r["model_ps"]) for r in _csv.DictReader(open(fp))]
+    def _preds(path):
+        # the file ends with a per-corner summary block after a blank line
+        return [float(r["model_ps"]) for r in _csv.DictReader(open(path))
+                if r.get("path_key") not in (None, "", "summary")]
+
+    trained = _preds(fp)
 
     # everything the base selection could decide, decided the other way
     m2 = model({"select_on": "seen_loo", "weighting": "plain",
                 "level_coords": "declared"})
     stage_predict(m2, "hidden")
-    replayed = [float(r["model_ps"]) for r in _csv.DictReader(open(fp))]
+    replayed = _preds(fp)
 
     assert np.allclose(trained, replayed, atol=1e-9), (
         "predict re-chose the base instead of replaying the trained one")
@@ -1620,3 +1625,57 @@ def test_clock_edge_row_column_layouts():
     p0 = next(iter(parse_annotated(fp).values()))
     assert (p0.launch_edge, p0.capture_edge) == (0.0, 2.0), \
         (p0.launch_edge, p0.capture_edge)
+
+
+def test_predictions_file_carries_a_per_corner_summary(real_tree, tmp_path, monkeypatch):
+    """predictions_<tag>.csv ends with a per-corner block, and merge rebuilds
+    it rather than copying it in among the paths.
+
+    The per-model file is what merge concatenates, so summary rows appended to
+    it would have landed in the middle of the merged path rows and been read
+    back as data by anything that parses it -- _corner_table included.
+    """
+    pytest.importorskip("torch")
+    import csv as _csv
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import (expand, load_project, select, stage_merge,
+                              stage_train)
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    p["designs"] = ["boomcore"]
+    p["files"]["crosstalk_subdir"] = None
+    p["train"]["epochs"] = 1
+    p["train"]["device"] = "cpu"
+    m = select(expand(p), design="boomcore", temp="m25")[0]
+    build(m["cfg"])
+    stage_train(m)
+
+    fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
+    rows = list(_csv.reader(open(fp, encoding="utf-8")))
+    b = rows.index([])
+    paths, summ = rows[1:b], rows[b + 1:]
+    assert summ[0] == ["summary", "corner", "mean_truth_ps", "mean_model_ps",
+                       "mean_abs_err_ps", "worst_abs_err_ps"]
+    assert len(summ) - 1 == len({r[1] for r in paths}), "one row per corner"
+    for r in summ[1:]:
+        want = [(float(x[2]), float(x[3])) for x in paths if x[1] == r[1]]
+        assert abs(float(r[2]) - sum(t for t, _ in want) / len(want)) < 1e-3
+        assert abs(float(r[3]) - sum(md for _, md in want) / len(want)) < 1e-3
+        err = [abs(md - t) for t, md in want]
+        assert abs(float(r[4]) - sum(err) / len(err)) < 1e-3
+        assert abs(float(r[5]) - max(err)) < 1e-3
+
+    stage_merge([m], p, "hidden")
+    mg = list(_csv.reader(open("runs/setup/_all/predictions_hidden.csv",
+                               encoding="utf-8")))
+    mb = mg.index([])
+    assert all(r[2] != "summary" for r in mg[1:mb]), "no summary row among the paths"
+    assert len(mg[1:mb]) == len(paths)
+    assert mg[mb + 1] == ["design", "temp", "summary", "corner", "mean_truth_ps",
+                          "mean_model_ps", "mean_abs_err_ps", "worst_abs_err_ps"]
+    by = {r[3]: r for r in mg[mb + 2:]}
+    for r in summ[1:]:
+        assert by[r[1]][4:] == r[2:], "merged summary must agree with the model's"
