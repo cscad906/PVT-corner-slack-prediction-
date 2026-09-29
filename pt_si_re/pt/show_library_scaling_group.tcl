@@ -95,6 +95,10 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
             [dict get $cfg fixed_library_set] [dict get $cfg catalog_families] 0]
         if {[lsearch -exact $selected [dict get [lindex $members 0] family]] >= 0} {
             set status EXPLICIT_FIXED_SET
+            if {[dict exists $cfg fixed_library_voltage] &&
+                [string equal -nocase [dict get $cfg fixed_library_voltage] nearest]} {
+                set status NEAREST_DB_POLICY
+            }
         }
     } elseif {[dict exists $cfg fixed_library_set] &&
         [string equal -nocase [dict get $cfg fixed_library_set] [dict get [lindex $members 0] family]]} {
@@ -102,6 +106,16 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
     }
     puts "V CHECK: target=$target temperature=$temperature loaded_at_target_temperature=$loaded"
     puts "V CHECK: after_target_exclusion=$eligible lower=$lower upper=$upper status=$status"
+    if {$status eq "NEAREST_DB_POLICY"} {
+        set family [dict get [lindex $members 0] family]
+        set process [dict get [lindex $members 0] process]
+        if {[catch {set chosen [::auto_scaling::nearest_library_row $members $process $family $target $temperature]} reason]} {
+            puts "NEAREST DB CANDIDATE: UNAVAILABLE | $reason"
+        } else {
+            puts "NEAREST DB CANDIDATE: voltage=[dict get $chosen v] V LIB=[dict get $chosen lib_name] DB=[dict get $chosen file]"
+        }
+        puts "NOTE: nearest selection includes exact target points; candidate lookup does not prove instance binding or target-rail scope."
+    }
     puts "NOTE: V CHECK uses catalog values and planner rules, not effective PG-pin voltages or a full scaling validation."
 }
 

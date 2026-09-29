@@ -96,7 +96,7 @@ fixed path 밖의 cell과 SI aggressor는 restore 상태를 유지합니다.
 restore 상태를 유지합니다. 같은 셋이 고정 rail과 scaling rail 양쪽에 사용되면
 그 셋은 내삽 검사하되 실제 전압 변경은 scaling rail의 cell/PG pin에만 적용합니다.
 따라서 scaling rail의 셋에서 양쪽 입력이 부족하면 여전히 `Cannot bracket`로
-중단합니다. 범위 밖 target을 가까운 DB로 자동 대체하는 기능은 없습니다.
+중단합니다. 추가로 지정하지 않은 셋은 범위 밖 target을 가까운 DB로 대체하지 않습니다.
 PG 연결을 확인할 수 없는 fixed-path cell은 고정이라고 추측하지 않고
 `FP-006` 또는 `FP-007`로 중단합니다.
 
@@ -104,11 +104,11 @@ PG 연결을 확인할 수 없는 fixed-path cell은 고정이라고 추측하�
 restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 통과하는 path는
 부분적으로만 scaling될 수 있으므로 결과 해석 시 구분해야 합니다.
 
-여러 코너가 있어도 특정 셋을 고정 DB로 유지하려면 `FIXED_LIBRARY_SET`에
-오류에 나온 셋 이름을 입력하고 `FIXED_LIBRARY_VOLTAGE`에 현재 연결되어 있어야
-하는 DB의 nominal 전압을 입력합니다. 셋 이름은 기본값이 빈칸이며,
-전압 기본값은 0.685 V입니다. 지정한 셋만 내삽 입력 선택과 목표 DB 제외에서
-예외 처리하고, 그 셀은 `set_voltage` 및 `set_temperature` 대상에서 제외합니다.
+특정 셋을 내삽하지 않고 가까운 전압 DB 하나로 계산하려면
+`FIXED_LIBRARY_SET`에 오류에 나온 셋 이름이나 공통 패턴을 입력하고
+`FIXED_LIBRARY_VOLTAGE`를 `"nearest"`로 둡니다. 셋 이름의 기본값은 빈칸이고,
+전압 선택 정책의 기본값은 `"nearest"`입니다. 빈칸이면 이 기능을 사용하지 않습니다.
+이는 PrimeTime 외삽이 아니라 사용자가 지정한 셋에만 적용하는 가까운 DB 근사입니다.
 
 숫자 등이 다른 여러 셋을 추가로 고정해야 하면 공통 이름 뒤에 `*`를 붙여
 한 번에 선택할 수 있습니다. 다음 예시의 `macro_`는 실제 셋의 공통 부분으로
@@ -116,7 +116,7 @@ restore session에 연결된 DB를 그대로 사용합니다. 해당 block을 �
 
 ```tcl
 set FIXED_LIBRARY_SET "macro_*"
-set FIXED_LIBRARY_VOLTAGE 0.685
+set FIXED_LIBRARY_VOLTAGE "nearest"
 ```
 
 여러 이름/패턴을 공백으로 나열하는 `"macro_* io_*"`도 지원합니다. 정확한
@@ -124,13 +124,42 @@ set FIXED_LIBRARY_VOLTAGE 0.685
 와일드카드입니다. 이름의 대괄호는 문자 그대로 처리합니다. 선택 범위는
 fixed path에서 실제 사용하는 셋으로 제한하고, 하나라도 매칭하지 않는
 입력은 중단합니다. `FIXED LIBRARY SET SELECTION`에 선택 개수와 이름을 표시합니다.
-셋을 하나로 합치는 기능이 아니며 각 셋의 DB는 그대로 유지합니다.
-`FIXED_LIBRARY_VOLTAGE`는 선택된 모든 셋에 공통으로 적용되는 예상 nominal
-전압입니다. 실제 연결 DB 전압이 다른 셋을 자동으로 그 전압의 DB로 교체하거나
-무시하지 않습니다. 고정 rail에만 있는 셋은 이 옵션 없이도 자동 제외됩니다.
+`*`는 이름 중간에도 쓸 수 있습니다. 예를 들어 `block_rcmax_rev1`과
+`block_cmax_rev1`을 지정하려면 `"block_*_rev1"`로 선택할 수 있습니다.
+셋을 하나로 합치는 기능은 아닙니다. 각 셋 안에서 동일 process와 목표 온도의
+로드된 DB 중 목표 전압에 가장 가까운 전압 하나를 선택합니다. BEOL이나 보조 rail
+전압 등 셋 이름의 다른 부분은 유지하며 다른 셋의 DB를 가져와 채우지 않습니다.
+후보가 0.475/0.685 V라면 목표 0.5 V에서는 0.475 V, 0.8 V에서는 0.685 V입니다.
+거리가 같으면 낮은 전압을 선택합니다. 같은 선택 전압의 revision이 여러 개거나
+목표 온도의 후보가 없으면 중단합니다. exact target DB도 이 정책에서는 선택할 수 있습니다.
 
-이 설정은 다른 DB로 교체하는 기능이 아닙니다. fixed path에서 실제 사용하는
-library의 `report_lib` 전압이 지정 값과 일치하는지 변경 전에 검증합니다.
+선택한 DB로 실제 재연결하는 범위는 해당 셋의 fixed-path cell 중
+`SCALING_POWER_NET`에 연결된 cell뿐입니다. 같은 셋의 다른 고정 rail cell과
+fixed path 밖의 cell은 restore 상태를 유지합니다. 같은 셀 이름과 signal-pin
+이름/방향을 사전 확인하고, PrimeTime `size_cell`의 기능 동등성 검사를 거쳐
+재연결합니다. PG-pin 이름/종류와 supply 연결이 달라지면 중단하고 원래 DB로
+되돌리기를 시도합니다. 이때 `eco_strict_pin_name_equivalence`는 일시적으로
+켜고 원래 설정으로 복구합니다.
+
+재연결된 cell은 선택 DB의 nominal 전압으로 계산하며 hold용 min 전압도 같은
+값을 적용합니다. 해당 cell에서 원래 scaling supply에 연결된 PG pin만 변경하고,
+다른 PG pin과 supply net의 전압은 유지합니다. 온도는 선택 DB의 목표 온도를 씁니다.
+선택 DB에 별도의 min library 연결이 있으면 그 DB도 같은 nominal 전압/온도인지
+확인하고, 다르면 재연결 전에 `NL-002`로 중단합니다. 같은 전압/온도의 min 연결은
+유지하며 `MIN_DB`에 기록합니다. 다른 cell에도 영향을 주는 library 전체의
+max/min 관계를 이 스크립트가 바꾸지는 않습니다.
+로그의 `NEAREST DB BINDING VERIFIED`는 모든 해당 cell의 실제 연결 DB 경로를
+검증한 결과입니다. `NEAREST_DB_BOUND`에는 목표 전압, 선택 전압, cell 개수와 DB가
+표시되고 같은 내용이 `details/*.rpt.inputs.txt` 및 `.selection.tcl`에 저장됩니다.
+일반 내삽 셋의 대표 arc 검증 결과 `.dcalc`는 그대로 생성됩니다.
+
+기존처럼 재연결 없이 restore DB를 유지하려면 `FIXED_LIBRARY_VOLTAGE`에
+`0.685` 같은 숫자를 넣습니다. 이 경우 선택된 모든 셋에 공통으로 적용되는 예상
+nominal 전압을 실제 연결 DB와 비교하며, 다른 전압 DB가 연결되어 있으면 중단합니다.
+고정 rail에만 있는 셋은 이 옵션 없이도 자동 제외됩니다.
+
+숫자를 입력하는 기존 정책에서는 fixed path에서 실제 사용하는 library의
+`report_lib` 전압이 지정 값과 일치하는지 변경 전에 검증합니다.
 전압 확인 시에는 보고서 자릿수를 일시적으로 높여 0.685 V를 0.69 V로
 오인하지 않도록 하고, 확인 후 원래 보고서 자릿수 설정을 복구합니다.
 0.475 V DB가 연결되어 있다면 0.685 V DB가 메모리에 있어도 중단합니다.
@@ -177,9 +206,9 @@ set PROGRESS_INTERVAL_MINUTES 10
 
 set SCALING_POWER_NET "실제_scaling_rail_이름"
 
-# Optional: this set keeps the DB already linked in the restored session.
-set FIXED_LIBRARY_SET     ""       ;# 고정할 셋 이름, 없으면 빈칸
-set FIXED_LIBRARY_VOLTAGE 0.685    ;# 실제 연결된 DB의 nominal 전압
+# Optional: selected sets use the nearest loaded voltage DB.
+set FIXED_LIBRARY_SET     ""          ;# 셋 이름/공통 패턴, 없으면 빈칸
+set FIXED_LIBRARY_VOLTAGE "nearest"   ;# 가까운 DB 선택. 숫자는 기존 DB 확인만 수행
 ```
 
 `PROGRESS_INTERVAL_MINUTES`는 긴 작업 중 현재 단계, 해당 단계 경과 시간과 전체
@@ -199,8 +228,8 @@ set FIXED_LIBRARY_VOLTAGE 0.685    ;# 실제 연결된 DB의 nominal 전압
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과 `.rpt`를 저장할 폴더의 절대경로. 부산물은 자동으로 `details/`에 저장 |
 | `SCALING_POWER_NET` | target voltage를 적용할 supply net 하나의 정확한 이름 |
-| `FIXED_LIBRARY_SET` | 그대로 유지할 셋 하나의 이름. 빈칸이면 예외 없음 |
-| `FIXED_LIBRARY_VOLTAGE` | 해당 셋에 실제 연결되어 있어야 하는 DB의 nominal 전압. DB 교체를 수행하지 않음 |
+| `FIXED_LIBRARY_SET` | 내삽 대신 단일 DB를 사용할 셋 이름/공통 패턴. 여러 개는 공백으로 구분. 빈칸이면 예외 없음 |
+| `FIXED_LIBRARY_VOLTAGE` | 기본 `"nearest"`: 가까운 DB로 실제 재연결. 숫자: 기존 restore DB nominal 전압 확인, 재연결 없음 |
 
 setup용 `fixed_paths.tcl`은 내부 `DTYPE`이 `max`, hold용은 `min`이어야 합니다.
 스크립트가 `ANALYSIS`와 다르면 실행을 중단합니다.
@@ -337,12 +366,13 @@ source /company/work/pt_scaling_eval/config/run_scaling_after_restore.tcl
 2. 현재 parasitic의 BEOL과 온도 확인
 3. fixed path cell의 primary PG pin과 실제 supply 연결을 먼저 조회
 4. restore된 library의 process/voltage/temperature 조사
-5. 지정한 scaling net의 fixed-path cell이 쓰는 셋만 target library를 제외하고 내삽 입력 선택
+5. 지정한 scaling net의 fixed-path cell이 쓰는 셋의 내삽 입력 선택; 지정 예외 셋은 가까운 DB 선택 및 재연결 사전 검사
 6. scaling library group 구성 또는 기존 group 검증
-7. 앞서 조회한 전원 연결과 실제 active scaling group으로 최종 cell/PG pin 대상 확정
-8. scaling rail에 연결된 fixed-path cell/PG pin에만 target voltage와 temperature 적용 후 incremental `update_timing`
-9. 동일한 fixed path만 최종 report로 측정하며 key 끝의 원본 `#idx` 유지
-10. `report_delay_calculation`에서 scaling library 사용 증거 확인
+7. nearest 정책이면 지정 셋의 target-rail fixed-path cell을 가까운 DB로 재연결하고 DB nominal 전압/온도 적용
+8. 앞서 조회한 전원 연결과 실제 active scaling group으로 일반 내삽 cell/PG pin 대상 확정
+9. 내삽 cell에는 target voltage/temperature 적용 후 `update_timing`
+10. 동일한 fixed path만 최종 report로 측정하며 key 끝의 원본 `#idx` 유지
+11. nearest 셀의 실제 연결 DB 및 `report_delay_calculation`의 일반 내삽 증거 확인
 
 실행 직후부터 각 단계의 시작과 완료 시간이 다음처럼 표시됩니다. 작업이 한
 단계에서 오래 걸리면 별도 감시 프로세스가 기본 10분 간격으로 현재 단계,
@@ -369,13 +399,14 @@ RUN END: status=SUCCESS | phase=VERIFY_SCALING_RESULT | section=0.01 min | total
 1. `VERIFY_POWER_NETS`: 전체 supply net 조회, 설정한 하나를 scaling으로 매칭하고 나머지는 자동 fixed 처리
 2. `VERIFY_PARASITICS`: restore된 BEOL과 parasitic 온도 검사
 3. `CLASSIFY_FIXED_PATH_SUPPLY`: group 생성 전 fixed-path cell의 실제 primary supply 연결 조회
-4. `PLAN_DESIGN_LIBRARIES`: scaling rail의 library 셋만 내삽 입력 선택
+4. `PLAN_DESIGN_LIBRARIES`: 일반 셋 내삽 입력 및 nearest 셋 DB 선택/사전 검사
 5. `PREPARE_SCALING_GROUPS`: scaling group 생성 또는 기존 group 검증
-6. `CLASSIFY_FIXED_PATH_POWER`: 이미 조회한 전원 연결과 계획된 active group으로 V/T 대상 확정
-7. `APPLY_TARGET_VOLTAGE_TEMP`: 목표 voltage/temperature 적용
-8. `UPDATE_TIMING_SI_POCV`: SI/POCV를 포함한 timing 갱신
-9. `GENERATE_TIMING_REPORT`: fixed path별 timing report 생성
-10. `VERIFY_SCALING_RESULT`: scaling library 적용 증거 검사
+6. `APPLY_NEAREST_LIBRARY_DB`: nearest 정책일 때만 DB 재연결, PG 연결 보존 확인 및 nominal V/T 적용
+7. `CLASSIFY_FIXED_PATH_POWER`: 이미 조회한 전원 연결과 계획된 active group으로 일반 내삽 V/T 대상 확정
+8. `APPLY_TARGET_VOLTAGE_TEMP`: 내삽 대상의 목표 voltage/temperature 적용
+9. `UPDATE_TIMING_SI_POCV`: SI/POCV를 포함한 timing 갱신
+10. `GENERATE_TIMING_REPORT`: fixed path별 timing report 생성
+11. `VERIFY_SCALING_RESULT`: nearest DB 연결 및 일반 내삽 증거 검사
 
 일반적으로 전체 시간의 대부분은 `UPDATE_TIMING_SI_POCV`와 fixed path 수에
 비례하는 `GENERATE_TIMING_REPORT`에서 사용됩니다. 정확한 시간은 설계 크기,
@@ -388,7 +419,8 @@ group이면 `Existing scaling groups do not cover...` 오류로 중단합니다.
 `FIXED-RAIL LIBRARY SETS (no interpolation check)`에는 다른 supply net에만
 연결되어 내삽 검사에서 제외한 셋을 표시합니다. `details/*.inputs.txt`에도
 `FIXED_RAIL_UNSCALED`와 제외 이유를 남깁니다. `CLASSIFY_FIXED_PATH_SUPPLY`에서
-조회한 연결을 같은 실행의 후속 단계에 재사용하므로 PG 연결을 두 번 조회하지 않습니다.
+조회한 연결을 같은 실행의 후속 대상 선택에 재사용합니다. nearest 재연결이 있으면
+그 셀들의 PG 연결이 유지됐는지 확인하기 위한 별도 조회만 추가합니다.
 
 이 순서와 rail 선택의 회귀 테스트는 저장소 루트에서 다음처럼 실행합니다.
 PrimeTime 라이선스 없이 mock collection으로 계획 단계의 조건을 검사합니다.
@@ -454,6 +486,10 @@ fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 �
 | `SV-003` | delay calculation에서 외삽 또는 scaling 취소 감지 |
 | `SV-004` | `Scaling libraries used` 적용 증거 없음 |
 | `SV-005` | 검증 재시도 시 저장된 실행 정보와 현재 design/config 불일치 |
+| `NL-001` | 가까운 DB의 동일 process/목표 온도 후보가 없거나 선택 전압의 revision이 여러 개 |
+| `NL-002` | DB/동일 이름 셀 조회, signal pin, 실제 V/T 또는 min-library 매핑 사전 검사 실패 |
+| `NL-003` | 재연결 후 PG-pin/supply 연결이 달라짐. 재연결 중 실패하면 원래 DB로 되돌리기 시도 |
+| `NL-004` | 실제 cell 연결 DB가 선택한 가까운 DB와 다르거나 min-library 매핑이 변경됨 |
 
 `FP-005`는 실제 scaling 대상이 남아 있는지, `FP-008`은 rail 선택과 PG 연결이
 맞는지 확인해야 합니다. 번호만으로 fixed path 파일 자체가 잘못되었다고 단정하지 않습니다.

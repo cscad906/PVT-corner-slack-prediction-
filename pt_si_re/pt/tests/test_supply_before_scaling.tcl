@@ -163,6 +163,17 @@ set plan [auto_scaling::plan $cfg]
 assert [expr {[dict get $plan explicit_fixed_sets] eq {LIMITED_1 LIMITED_2}}] "Pattern expansion incorrect"
 assert [expr {[llength [dict get $plan fixed_library_rows]] == 4}] "One fixed set lost"
 assert [expr {[llength [dict get $plan groups]] == 1 && [dict get [lindex [dict get $plan groups] 0] family] eq "CORE"}] "Pattern leaked into core"
+# Explicit nearest policy applies both inside and outside the limited grid.
+dict set cfg fixed_library_voltage nearest
+foreach {target expected} {0.54 0.475 0.76 0.685} {
+    dict set cfg target_v $target
+    set nearest_plan [auto_scaling::plan $cfg]
+    assert [expr {[llength [dict get $nearest_plan nearest_library_rows]] == 2}] "Nearest policy lost a matched set"
+    foreach row [dict get $nearest_plan nearest_library_rows] {
+        assert [expr {abs([dict get $row v] - $expected) < 1e-8}] "Wrong nearest voltage"
+    }
+    assert [expr {[llength [dict get $nearest_plan groups]] == 1}] "Nearest sets entered interpolation groups"
+}
 rename auto_scaling::catalog {}
 rename auto_scaling::base_test_catalog auto_scaling::catalog
 dict set ::cell_lib memory LIMITED/INV
@@ -173,6 +184,34 @@ dict set cfg resolved_fixed $fixed
 dict unset cfg fixed_library_set
 dict unset cfg fixed_library_voltage
 puts "PASS: numbered patterns, multiple/exact/blank selectors, literal brackets/spaces/stars, unmatched rejection, two fixed sets with core still scaled"
+
+set nearest_rows {}
+foreach {family voltage temp} {MEM_RCMAX 0.475 25 MEM_RCMAX 0.685 25 MEM_CMAX 0.5 25 MEM_RCMAX 0.5 125} {
+    lappend nearest_rows [dict create family $family process SSPG v $voltage t $temp \
+        lib_name $family file /fixture/$family.db]
+}
+foreach {target expected} {0.5 0.475 0.8 0.685 0.58 0.475 0.685 0.685} {
+    set row [auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX $target 25]
+    assert [expr {abs([dict get $row v] - $expected) < 1e-8}] "Nearest family/temperature/tie/exact-point rule failed"
+}
+expect_error {auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX 0.5 -25} {NL-001:*}
+expect_error {auto_scaling::nearest_library_row $nearest_rows FF MEM_RCMAX 0.5 25} {NL-001:*}
+lappend nearest_rows [lindex $nearest_rows 0]
+expect_error {auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX 0.5 25} {NL-001:*ambiguous*}
+puts "PASS: nearest 0.5/0.8, lower-voltage tie, exact target, BEOL/process/temperature kept separate, duplicate/missing DB rejection"
+
+# User settings accept the nearest keyword while numeric and blank behavior
+# stay compatible. No PrimeTime session mutation occurs in config building.
+set ::SCALING_POWER_NET VDD_SCALE
+set ::FIXED_LIBRARY_SET "macro_*"
+set ::FIXED_LIBRARY_VOLTAGE nearest
+assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_voltage] eq "nearest"}] "Nearest user setting rejected"
+set ::FIXED_LIBRARY_VOLTAGE 0.685
+assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_voltage] == 0.685}] "Numeric restore setting changed"
+set ::FIXED_LIBRARY_SET ""
+set ::FIXED_LIBRARY_VOLTAGE unused
+assert [expr {[dict get [auto_scaling::build_restore_config] fixed_library_voltage] eq ""}] "Blank fixed option must ignore voltage field"
+puts "PASS: user config nearest/numeric/blank policies"
 
 # A cell using two primary rails still needs interpolation for its target rail.
 dict set ::pin_rail memory/VDDAUX VDD_SCALE

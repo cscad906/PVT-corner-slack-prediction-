@@ -29,13 +29,15 @@ set PROGRESS_INTERVAL_MINUTES 10
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
 
-# Optional: keep selected sets at their RESTORED DB/conditions instead of scaling.
+# Optional: use one DB for selected sets instead of interpolation.
 # Enter an exact set name, a common pattern such as "macro_*", or names/patterns
-# separated by spaces. Empty disables this option. All matches must be linked
-# at FIXED_LIBRARY_VOLTAGE. Matching does not merge sets or relink any cells.
-# This never relinks a 0.475 V cell to a 0.685 V DB. A mismatch stops the run.
+# separated by spaces. Empty disables this option. "nearest" picks the loaded
+# DB closest to TARGET_VOLTAGE at the same process/temperature within EACH set
+# (BEOL/auxiliary-rail name parts stay separate). Only fixed-path cells on
+# SCALING_POWER_NET are relinked and analyzed at that DB's nominal voltage.
+# A numeric value retains the old policy: verify the restored DB, never relink.
 set FIXED_LIBRARY_SET     ""
-set FIXED_LIBRARY_VOLTAGE 0.685 ;# expected nominal voltage of the linked DB (V)
+set FIXED_LIBRARY_VOLTAGE "nearest" ;# "nearest", or expected restored DB voltage (V)
 # ===================== END USER SETTINGS ======================
 
 namespace eval auto_scaling {
@@ -761,6 +763,36 @@ proc auto_scaling::resolve_fixed_families {spec families {strict 1}} {
     return [lsort -unique $selected]
 }
 
+# This is a nearest-DB approximation, not interpolation or extrapolation.
+# Never combine BEOL/auxiliary-rail variants or temperatures to fill gaps.
+proc auto_scaling::nearest_library_row {rows process family tv tt} {
+    set best {}
+    set distance Inf
+    foreach row $rows {
+        if {[dict get $row process] ne $process || [dict get $row family] ne $family ||
+            ![same [dict get $row t] $tt]} { continue }
+        set d [expr {abs([dict get $row v] - $tv)}]
+        if {$d < $distance - 1e-8} {
+            set best [list $row]
+            set distance $d
+        } elseif {abs($d - $distance) < 1e-8} {
+            lappend best $row
+        }
+    }
+    if {![llength $best]} {
+        error "NL-001: No loaded DB at the requested process/temperature for nearest selection: set=$family process=$process temperature=$tt C"
+    }
+    # Equal distances: use the lower voltage, then reject duplicate revisions.
+    set voltage [dict get [lindex $best 0] v]
+    foreach row $best { if {[dict get $row v] < $voltage} { set voltage [dict get $row v] } }
+    set selected {}
+    foreach row $best { if {[same [dict get $row v] $voltage]} { lappend selected $row } }
+    if {[llength $selected] != 1} {
+        error "NL-001: Nearest DB is ambiguous: set=$family voltage=$voltage V temperature=$tt C found=[llength $selected]. Different revisions are not merged."
+    }
+    return [lindex $selected 0]
+}
+
 proc auto_scaling::plan {cfg} {
     set process [string toupper [need $cfg target_process]]
     set tv [number [need $cfg target_v]]
@@ -870,6 +902,7 @@ proc auto_scaling::plan {cfg} {
     set selected {}
     set excluded {}
     set fixed_library_rows {}
+    set nearest_library_rows {}
     set fixed_families [resolve_fixed_families [option $cfg fixed_library_set ""] $fixed_matches]
     if {[llength $fixed_families]} {
         # A declared fixed set can be on another rail; still validate every DB.
@@ -878,18 +911,31 @@ proc auto_scaling::plan {cfg} {
                 lappend chosen_families $family
             }
         }
-        set fixed_voltage [number [need $cfg fixed_library_voltage]]
+        set fixed_voltage [string trim [need $cfg fixed_library_voltage]]
+        set nearest [string equal -nocase $fixed_voltage nearest]
+        if {!$nearest} { set fixed_voltage [number $fixed_voltage] }
         foreach row $rows {
             if {[lsearch -exact $fixed_families [dict get $row family]] >= 0} {
                 lappend fixed_library_rows $row
             }
         }
-        puts "FIXED LIBRARY SET SELECTION: count=[llength $fixed_families] names=$fixed_families expected_linked_db_voltage=$fixed_voltage V"
+        puts "FIXED LIBRARY SET SELECTION: count=[llength $fixed_families] names=$fixed_families db_policy=$fixed_voltage"
+        if {$nearest} {
+            foreach family $fixed_families {
+                if {[lsearch -exact $rail_matches $family] < 0} {
+                    puts "NEAREST DB SKIPPED: set=$family reason=fixed_rail_only restore_DB_unchanged"
+                    continue
+                }
+                set row [nearest_library_row $rows $process $family $tv $tt]
+                lappend nearest_library_rows $row
+                puts "NEAREST DB SELECTED: set=$family target=$tv V selected=[dict get $row v] V temperature=$tt C LIB=[dict get $row lib_name] DB=[dict get $row file]"
+            }
+        }
     }
     foreach family $chosen_families {
         if {[lsearch -exact $fixed_families $family] >= 0} {
             set static_sets [lsort -unique [concat $static_sets [list $family]]]
-            puts "EXPLICIT FIXED LIBRARY SET: $family | expected_linked_db_voltage=$fixed_voltage V | restore conditions unchanged"
+            puts "EXPLICIT FIXED LIBRARY SET: $family | db_policy=$fixed_voltage | interpolation disabled"
             continue
         }
         set family_mode [family_scaling_mode $rows $process $family $tv $tt $mode]
@@ -935,6 +981,8 @@ proc auto_scaling::plan {cfg} {
     dict set result scaling_library_rows $scaling_library_rows
     dict set result fixed_library_rows $fixed_library_rows
     dict set result explicit_fixed_sets $fixed_families
+    dict set result nearest_library_rows $nearest_library_rows
+    dict set result fixed_library_policy [expr {[string equal -nocase [option $cfg fixed_library_voltage ""] nearest] ? "nearest" : "restore"}]
     dict set result selected $selected
     dict set result excluded $excluded
     dict set result catalog $rows
@@ -973,7 +1021,7 @@ proc auto_scaling::plan {cfg} {
     puts "SCALING COVERAGE: inputs $n_input DB of [llength $rows] loaded PVT librar\
 [expr {[llength $rows] == 1 ? "y" : "ies"}]"
     if {[llength $static_sets]} {
-        puts "SCALING COVERAGE: static set(s) kept at their original corner: $static_sets"
+        puts "SCALING COVERAGE: static set(s) not interpolated: $static_sets"
     }
     puts "SCALING COVERAGE: unclassified fixed-path libraries kept unscaled: [llength $unclassified_used]"
     return $result
@@ -1323,7 +1371,8 @@ proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
     foreach row $rows {
         dict set policy [list [file normalize [dict get $row file]] [dict get $row lib_name]] $row
     }
-    set expected [number [need $cfg fixed_library_voltage]]
+    set nearest [string equal -nocase [option $cfg fixed_library_voltage ""] nearest]
+    if {!$nearest} { set expected [number [need $cfg fixed_library_voltage]] }
     set cells [fixed_path_cells $fixed]
     set libraries [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cells]]
     set decisions [dict create]
@@ -1341,7 +1390,7 @@ proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
         if {!$keep} { continue }
         set condition [report_operating_condition $lib $path]
         set actual [dict get $condition v]
-        if {![same $actual $expected]} {
+        if {!$nearest && ![same $actual $expected]} {
             error "FIXED_LIBRARY_SET is linked to $actual V, expected $expected V: $path. No DB was switched; restore the intended DB before running."
         }
         lappend names $name
@@ -1355,6 +1404,212 @@ proc auto_scaling::validate_fixed_restore_libraries {fixed cfg} {
         error "FIXED_LIBRARY_SET does not match any actual linked fixed-path library. No DB was switched."
     }
     return [dict create names [lsort -unique $names] records $records]
+}
+
+proc auto_scaling::pg_connection_signature {cells} {
+    set signature {}
+    foreach_in_collection pg [get_pg_pins -of_objects $cells] {
+        set net [get_supply_nets -quiet -of_objects $pg]
+        if {[sizeof_collection $net] == 1} {
+            set supply [get_attribute $net full_name]
+        } else { set supply [get_attribute $pg supply_connection] }
+        lappend signature [list [get_attribute $pg full_name] [get_attribute $pg type] $supply]
+    }
+    return [lsort $signature]
+}
+
+proc auto_scaling::signal_pin_signature {lib_cell} {
+    set signature {}
+    foreach_in_collection pin [get_lib_pins -quiet -of_objects $lib_cell] {
+        lappend signature [list [file tail [get_attribute $pin full_name]] [get_attribute $pin direction]]
+    }
+    return [lsort $signature]
+}
+
+# Read-only preflight for ALL replacements before the first size_cell. Group
+# instances by old reference to avoid a library/PG lookup for every path pin.
+proc auto_scaling::plan_nearest_bindings {fixed cfg plan} {
+    set nearest_rows [option $plan nearest_library_rows {}]
+    if {![llength $nearest_rows]} { return {} }
+    set by_family [dict create]
+    foreach row $nearest_rows { dict set by_family [dict get $row family] $row }
+    set policy [dict create]
+    foreach row [dict get $plan fixed_library_rows] {
+        dict set policy [list [file normalize [dict get $row file]] [dict get $row lib_name]] $row
+    }
+    set cells [dict get [dict get $cfg fixed_path_supply] target_cells]
+    set lib_cells [get_attribute $cells lib_cell]
+    if {[sizeof_collection $lib_cells] != [sizeof_collection $cells]} {
+        error "NL-002: Cannot resolve every nearest-selection instance's library cell."
+    }
+    set used [dict create]
+    foreach_in_collection lib [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cells]] {
+        set name [get_attribute $lib full_name]
+        set path [file normalize [get_attribute $lib source_file_name]]
+        if {[dict exists $used $name] && [dict get $used $name] ne $path} {
+            error "NL-002: Target-rail instances use different DBs with the same internal library name '$name'; cannot safely group references."
+        }
+        dict set used $name $path
+    }
+    set groups [dict create]
+    foreach name [get_object_name $cells] ref [get_object_name $lib_cells] {
+        set slash [string first / $ref]
+        set lib_name [string range $ref 0 [expr {$slash-1}]]
+        if {![dict exists $used $lib_name]} { continue }
+        set key [list [dict get $used $lib_name] $lib_name]
+        if {![dict exists $policy $key]} { continue }
+        set family [dict get [dict get $policy $key] family]
+        if {![dict exists $by_family $family]} { continue }
+        dict lappend groups [list $key $ref $family] $name
+    }
+    set bindings {}
+    set seen_families [dict create]
+    dict for {key names} $groups {
+        lassign $key old_key old_ref family
+        set row [dict get $by_family $family]
+        set new_key [list [file normalize [dict get $row file]] [dict get $row lib_name]]
+        set base [string range $old_ref [expr {[string first / $old_ref]+1}] end]
+        set exact "[dict get $row file]:[dict get $row lib_name]/$base"
+        set target [get_lib_cells -quiet -exact [list $exact]]
+        if {[sizeof_collection $target] != 1} {
+            error "NL-002: Nearest DB lacks a unique same-name cell: $exact count=[sizeof_collection $target]"
+        }
+        set instances [get_cells -quiet -exact $names]
+        set old [get_lib_cells -quiet -of_objects [index_collection $instances 0]]
+        if {[signal_pin_signature $old] ne [signal_pin_signature $target]} {
+            error "NL-002: Nearest DB signal-pin names/directions differ: set=$family cell=$base. No cells relinked."
+        }
+        set target_lib [get_libs -quiet -of_objects $target]
+        set actual [report_operating_condition $target_lib [dict get $row file]]
+        if {![same [dict get $actual v] [dict get $row v]] || ![same [dict get $actual t] [dict get $row t]]} {
+            error "NL-002: Nearest DB's actual V/T differs from its catalog values: $exact"
+        }
+        # A restored max->min mapping can silently use another voltage DB
+        # during hold/early analysis. Keep the mapping, but require the same
+        # selected nominal V/T; never rewrite a library-wide relationship.
+        set min_file [get_attribute -quiet $target_lib min_source_file_name]
+        dict set row min_file ""
+        if {$min_file ne ""} {
+            set min_file [file normalize $min_file]
+            dict set row min_file $min_file
+            set min_lib [get_libs -quiet -exact [list [get_attribute $target_lib min_extended_name]]]
+            if {[sizeof_collection $min_lib] != 1} {
+                error "NL-002: Nearest DB's mapped min library is not uniquely loaded: $min_file"
+            }
+            set min_condition [report_operating_condition $min_lib $min_file]
+            if {![same [dict get $min_condition v] [dict get $row v]] ||
+                ![same [dict get $min_condition t] [dict get $row t]]} {
+                error "NL-002: Nearest DB has a min-library mapping at different V/T: selected=[dict get $row v] V/[dict get $row t] C min=[dict get $min_condition v] V/[dict get $min_condition t] C DB=$min_file. No cells relinked; library-wide min mappings were not changed."
+            }
+            puts "NEAREST MIN DB VERIFIED: set=$family nominal_voltage=[dict get $row v] V temperature=[dict get $row t] C DB=$min_file"
+        }
+        lappend bindings [dict create row $row cell_names $names old_cell $old target_cell $target \
+            changed [expr {$old_key ne $new_key}] pg_before [pg_connection_signature $instances]]
+        dict set seen_families $family 1
+    }
+    foreach row $nearest_rows {
+        if {![dict exists $seen_families [dict get $row family]]} {
+            error "NL-002: Selected nearest set has no actual target-rail fixed-path instances: [dict get $row family]"
+        }
+    }
+    return $bindings
+}
+
+# Verify concrete DB identity for every bound instance, not just a name or
+# a list of loaded candidates. Also used by the same-session evidence retry.
+proc auto_scaling::verify_nearest_bindings {records} {
+    foreach record $records {
+        set row [dict get $record row]
+        set names [dict get $record cell_names]
+        set cells [get_cells -quiet -exact $names]
+        if {[sizeof_collection $cells] != [llength $names]} {
+            error "NL-004: Nearest-selected instances are missing or ambiguous."
+        }
+        set libs [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cells]]
+        if {[sizeof_collection $libs] != 1 ||
+            [get_attribute $libs full_name] ne [dict get $row lib_name] ||
+            [file normalize [get_attribute $libs source_file_name]] ne [file normalize [dict get $row file]]} {
+            error "NL-004: Instances are not linked to the selected nearest DB: set=[dict get $row family]"
+        }
+        if {[dict exists $row min_file]} {
+            set actual_min [get_attribute -quiet $libs min_source_file_name]
+            if {$actual_min ne ""} { set actual_min [file normalize $actual_min] }
+            if {$actual_min ne [dict get $row min_file]} {
+                error "NL-004: Nearest DB's min-library mapping changed after preflight: set=[dict get $row family]"
+            }
+        }
+        puts "NEAREST DB BINDING VERIFIED: set=[dict get $row family] cells=[llength $names] nominal_voltage=[dict get $row v] V LIB=[dict get $row lib_name] DB=[dict get $row file]"
+    }
+}
+
+proc auto_scaling::apply_nearest_bindings {bindings} {
+    set saved_strict [get_app_var eco_strict_pin_name_equivalence]
+    set_app_var eco_strict_pin_name_equivalence true
+    set changed {}
+    set records {}
+    set code [catch {
+        foreach binding $bindings {
+            set names [dict get $binding cell_names]
+            set cells [get_cells -quiet -exact $names]
+            if {[dict get $binding changed]} {
+                # size_cell checks functional/timing-arc equivalence natively.
+                # Track before the call so partial failures are rolled back.
+                lappend changed $binding
+                check_status size_cell [list size_cell $cells [dict get $binding target_cell]]
+            }
+            set cells [get_cells -quiet -exact $names]
+            if {[pg_connection_signature $cells] ne [dict get $binding pg_before]} {
+                error "NL-003: PG-pin names/types or supply connections changed during nearest DB relinking."
+            }
+            lappend records [dict create row [dict get $binding row] cell_names $names \
+                changed [dict get $binding changed]]
+        }
+        verify_nearest_bindings $records
+    } result options]
+    if {$code} {
+        foreach binding [lreverse $changed] {
+            foreach name [dict get $binding cell_names] {
+                if {[catch {
+                    set cell [get_cells -quiet -exact $name]
+                    set current [get_lib_cells -quiet -of_objects $cell]
+                    if {[compare_collections $current [dict get $binding old_cell]] != 0} {
+                        check_status rollback_size_cell [list size_cell $cell [dict get $binding old_cell]]
+                    }
+                } rollback]} {
+                    puts "NL-003 ROLLBACK FAILED: $rollback. Restore a fresh session before retrying."
+                }
+            }
+        }
+    }
+    set_app_var eco_strict_pin_name_equivalence $saved_strict
+    if {$code} { return -options $options $result }
+    return $records
+}
+
+# Analyze the selected DB at its OWN nominal voltage, including hold (-min).
+# Apply only the original target-rail PG pins; other supplies remain unchanged.
+proc auto_scaling::apply_nearest_conditions {records supply} {
+    foreach record $records {
+        set row [dict get $record row]
+        set names [dict get $record cell_names]
+        set voltage [dict get $row v]
+        check_status nearest_set_temperature [list set_temperature [dict get $row t] \
+            -object_list [get_cells -quiet -exact $names]]
+        set selected [dict create]
+        foreach name $names { dict set selected $name 1 }
+        foreach group [dict get $supply voltage_groups] {
+            set count 0
+            foreach name [dict get $group cell_names] {
+                if {![dict exists $selected $name]} { continue }
+                check_status nearest_set_voltage [list set_voltage $voltage -min $voltage \
+                    -cell [get_cells -quiet -exact $name] -pg_pin_name [dict get $group pin_name]]
+                incr count
+            }
+            if {$count} {
+                puts "NEAREST DB VOLTAGE APPLIED: set=[dict get $row family] nominal_voltage=$voltage V min_voltage=$voltage V pg_pin=[dict get $group pin_name] cells=$count"
+            }
+        }
+    }
 }
 
 proc auto_scaling::write_text {path contents} {
@@ -1466,8 +1721,16 @@ proc auto_scaling::scaling_inputs_text {plan} {
         lappend lines "FIXED_RAIL_UNSCALED family=$family reason=no_fixed_path_cell_on_scaling_power_net"
     }
     foreach row [option $plan fixed_restore_records {}] {
-        lappend lines "EXPLICIT_FIXED_RESTORE family=[dict get $row family] lib=[dict get $row lib_name] nominal_voltage=[dict get $row v] V temperature=[dict get $row t] C"
+        set label EXPLICIT_FIXED_RESTORE
+        if {[option $plan fixed_library_policy restore] eq "nearest"} { set label FIXED_DB_USED }
+        lappend lines "$label family=[dict get $row family] lib=[dict get $row lib_name] nominal_voltage=[dict get $row v] V temperature=[dict get $row t] C"
         lappend lines "  DB=[dict get $row file]"
+    }
+    foreach record [option $plan nearest_binding_records {}] {
+        set row [dict get $record row]
+        lappend lines "NEAREST_DB_BOUND family=[dict get $row family] target_voltage=[dict get $plan v] V selected_voltage=[dict get $row v] V temperature=[dict get $row t] C cells=[llength [dict get $record cell_names]] lib=[dict get $row lib_name]"
+        lappend lines "  DB=[dict get $row file]"
+        if {[option $row min_file ""] ne ""} { lappend lines "  MIN_DB=[dict get $row min_file]" }
     }
     foreach lib [dict get $plan unclassified_used] {
         lappend lines "UNCLASSIFIED_UNSCALED lib=$lib"
@@ -1754,6 +2017,7 @@ proc auto_scaling::run_after_restore {cfg} {
     set fixed [expr {[dict exists $plan fixed] ? [dict get $plan fixed] : ""}]
     dict set restored_cfg fixed_library_rows [dict get $plan fixed_library_rows]
     set fixed_restore [validate_fixed_restore_libraries $fixed $restored_cfg]
+    set nearest_bindings [plan_nearest_bindings $fixed $restored_cfg $plan]
     dict set restored_cfg fixed_library_names [dict get $fixed_restore names]
     set scaling_library_names {}
     foreach row [dict get $plan scaling_library_rows] {
@@ -1827,6 +2091,22 @@ proc auto_scaling::run_after_restore {cfg} {
     verify_planned_group_coverage $plan
     phase_done PREPARE_SCALING_GROUPS $phase_started
 
+    if {[llength $nearest_bindings]} {
+        set phase_started [phase_start APPLY_NEAREST_LIBRARY_DB]
+        set nearest_records [apply_nearest_bindings $nearest_bindings]
+        apply_nearest_conditions $nearest_records $supply
+        dict set plan nearest_binding_records $nearest_records
+        set fixed_restore [validate_fixed_restore_libraries $fixed $restored_cfg]
+        dict set restored_cfg fixed_library_names [dict get $fixed_restore names]
+        dict set plan fixed_restore_records [dict get $fixed_restore records]
+        write_text [detail_path $out .inputs.txt] [scaling_inputs_text $plan]
+        foreach record $nearest_records {
+            set row [dict get $record row]
+            puts "NEAREST_DB_BOUND family=[dict get $row family] target_voltage=$target_v V selected_voltage=[dict get $row v] V cells=[llength [dict get $record cell_names]] lib=[dict get $row lib_name] DB=[dict get $row file]"
+        }
+        phase_done APPLY_NEAREST_LIBRARY_DB $phase_started
+    }
+
     set phase_started [phase_start CLASSIFY_FIXED_PATH_POWER]
     set power_plan [plan_fixed_path_power $fixed $restored_cfg]
     set scaled_cells [dict get $power_plan scaled_cells]
@@ -1884,6 +2164,7 @@ proc auto_scaling::run_after_restore {cfg} {
     phase_done GENERATE_TIMING_REPORT $phase_started
 
     set phase_started [phase_start VERIFY_SCALING_RESULT]
+    verify_nearest_bindings [option $plan nearest_binding_records {}]
     verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] $scaled_cells
     phase_done VERIFY_SCALING_RESULT $phase_started
 
@@ -1957,6 +2238,7 @@ proc auto_scaling::verify_after_run {cfg} {
             set verify_cfg $cfg
             dict set verify_cfg fixed_library_rows [option $selection fixed_library_rows {}]
             set retained [validate_fixed_restore_libraries $fixed $verify_cfg]
+            verify_nearest_bindings [option $selection nearest_binding_records {}]
             dict set verify_cfg fixed_library_names [dict get $retained names]
             if {[dict exists $selection scaling_library_rows]} {
                 set scaling_names {}
@@ -2033,7 +2315,11 @@ proc auto_scaling::build_restore_config {} {
 
     set fixed_family [string trim $::FIXED_LIBRARY_SET]
     set fixed_voltage ""
-    if {$fixed_family ne ""} { set fixed_voltage [number $::FIXED_LIBRARY_VOLTAGE] }
+    if {$fixed_family ne ""} {
+        if {[string equal -nocase [string trim $::FIXED_LIBRARY_VOLTAGE] nearest]} {
+            set fixed_voltage nearest
+        } else { set fixed_voltage [number $::FIXED_LIBRARY_VOLTAGE] }
+    }
 
     return [dict create \
         target_process $process \
