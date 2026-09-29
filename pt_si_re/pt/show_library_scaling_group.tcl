@@ -36,18 +36,21 @@ proc library_scaling_group_report::show_recorded_scope {set_name cfg} {
     if {![info exists ::auto_scaling::last_library_scope] ||
         $::auto_scaling::last_library_scope eq ""} {
         puts "RECORDED SET SCOPE: UNAVAILABLE (no scope captured by the current scaling script)"
+        puts ""
         return
     }
     set scope $::auto_scaling::last_library_scope
     dict for {key value} [dict get $scope context] {
         if {![dict exists $cfg $key] || [dict get $cfg $key] ne $value} {
             puts "RECORDED SET SCOPE: UNAVAILABLE (scaling configuration changed since planning)"
+            puts ""
             return
         }
     }
     if {[llength [info commands ::current_design]] &&
         [get_object_name [current_design]] ne [dict get $scope design_name]} {
         puts "RECORDED SET SCOPE: UNAVAILABLE (current design changed since planning)"
+        puts ""
         return
     }
     set fixed [dict get $scope fixed_result]
@@ -66,6 +69,7 @@ proc library_scaling_group_report::show_recorded_scope {set_name cfg} {
     } else {
         puts "SCOPE NOTE: this set is not required for interpolation on the configured target rail."
     }
+    puts ""
     set seen [dict create]
     foreach row [dict get $scope rows] {
         if {![string equal -nocase [dict get $row family] $set_name]} { continue }
@@ -75,8 +79,10 @@ proc library_scaling_group_report::show_recorded_scope {set_name cfg} {
         dict set seen $key 1
         puts "SCOPE LINKED LIB: [dict get $row lib_name]"
         puts "  DB=[dict get $row file]"
+        puts ""
     }
     puts "SCOPE NOTE: recorded before V/T changes or nearest-DB relinking; this is not a fresh scan of the current session."
+    puts ""
 }
 
 # Explain catalog/filter decisions without changing the scaling inputs. A row
@@ -167,10 +173,15 @@ proc library_scaling_group_report::show_catalog_audit {catalog set_name cfg} {
         lappend skipped [dict create lib_name $name path $path reason $reason]
     }
     puts "CATALOG AUDIT: raw_loaded=[sizeof_collection $loaded] parsed=[llength $rows] unparsed=[llength $ignored] not_cataloged=[llength $skipped]"
+    puts ""
     puts "CATALOG VOLTAGES (all parsed sets/processes/temperatures; NOT scaling inputs): [lsort -real -unique $voltages]"
+    puts ""
     puts "SET LOOKUP AUDIT: members=[dict get $counts SET_MEMBER] other_set=[dict get $counts OTHER_LIBRARY_SET] same_set_other_process=[dict get $counts OTHER_PROCESS]"
+    puts ""
     puts "V INPUT AUDIT: candidates=[dict get $input_counts V_INPUT_CANDIDATE] other_temperature=[dict get $input_counts OTHER_TEMPERATURE] excluded_target=[dict get $input_counts EXCLUDED_TARGET_POINT] nearest_candidates=[dict get $input_counts NEAREST_DB_CANDIDATE] fixed_restore=[dict get $input_counts FIXED_RESTORE_DB]"
+    puts ""
     puts "QUERY SCOPE: range audit uses library metadata; fixed-path/supply scope is reported separately from cached planning provenance."
+    puts ""
     show_recorded_scope $set_name $cfg
     if {$verbose} {
         set number 0
@@ -181,6 +192,7 @@ proc library_scaling_group_report::show_catalog_audit {catalog set_name cfg} {
             puts "  LIB=[dict get $row lib_name]"
             puts "  SET=[dict get $row family]"
             puts "  DB=[dict get $row file]"
+            puts ""
         }
     }
     foreach section [list [list UNPARSED $ignored] [list NOT_CATALOGED $skipped]] {
@@ -189,13 +201,16 @@ proc library_scaling_group_report::show_catalog_audit {catalog set_name cfg} {
         foreach row [lrange $items 0 [expr {$limit-1}]] {
             puts "$label: LIB=[dict get $row lib_name] reason=[dict get $row reason]"
             puts "  DB=[dict get $row path]"
+            puts ""
         }
         if {[llength $items] > $limit} {
             puts "$label: remaining=[expr {[llength $items]-$limit}] (set SHOW_ALL_LOADED_LIBRARIES 1 for all entries)"
+            puts ""
         }
     }
     if {!$verbose} {
         puts "DETAIL OPTION: set SHOW_ALL_LOADED_LIBRARIES 1 at the top of this query Tcl to print every loaded-library decision."
+        puts ""
     }
 }
 
@@ -229,6 +244,7 @@ proc library_scaling_group_report::failed_set_name {} {
     }
     puts "AUTO-SELECTED FAILED LIBRARY SET: $set_name"
     puts "AUTO-SELECT SOURCE: $log_file"
+    puts ""
     return $set_name
 }
 
@@ -278,6 +294,7 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
     }
     puts "V CHECK: target=$target temperature=$temperature loaded_at_target_temperature=$loaded"
     puts "V CHECK: after_target_exclusion=$eligible lower=$lower upper=$upper status=$status"
+    puts ""
     if {$status eq "NEAREST_DB_POLICY"} {
         set family [dict get [lindex $members 0] family]
         set process [dict get [lindex $members 0] process]
@@ -287,8 +304,10 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
             puts "NEAREST DB CANDIDATE: voltage=[dict get $chosen v] V LIB=[dict get $chosen lib_name] DB=[dict get $chosen file]"
         }
         puts "NOTE: nearest selection includes exact target points; candidate lookup does not prove instance binding or target-rail scope."
+        puts ""
     }
     puts "NOTE: V CHECK uses catalog values and planner rules, not effective PG-pin voltages or a full scaling validation."
+    puts ""
 }
 
 proc library_scaling_group_report::show_current_group {libraries seen_name} {
@@ -307,7 +326,12 @@ proc library_scaling_group_report::show_current_group {libraries seen_name} {
         report_lib_groups -scaling -objects $libraries -nosplit \
             -show {voltage temperature process extended_name}
     }
-    puts $group_report
+    # Keep native columns/text, with one blank line between table rows.
+    foreach line [split $group_report "\n"] {
+        if {[string trim $line] eq ""} { continue }
+        puts $line
+        puts ""
+    }
     return 1
 }
 
@@ -326,6 +350,7 @@ proc library_scaling_group_report::show_library_set {set_name} {
         set process [string toupper [dict get $cfg target_process]]
     }
     puts "LIBRARY SET LOOKUP: using the scaling script's loaded-library catalog (read-only)."
+    puts ""
     set catalog [::auto_scaling::catalog $cfg]
     set members {}
     set matching_processes {}
@@ -350,15 +375,19 @@ proc library_scaling_group_report::show_library_set {set_name} {
     if {[dict exists $cfg target_v] && [dict exists $cfg target_t]} {
         puts "SCALING RUN TARGET: voltage=[dict get $cfg target_v] V temperature=[dict get $cfg target_t] C axis=[dict get $cfg mode]"
     }
+    puts ""
     show_voltage_range $members $cfg
     # The catalog includes target and other-temperature libraries that the
     # scaling planner may exclude. These are NOT claimed to be active inputs.
     puts "NOTE: loaded set members below are NOT necessarily active scaling inputs."
+    puts ""
     foreach row $members {
         puts "LIB=[dict get $row lib_name] | voltage=[dict get $row v] V | temperature=[dict get $row t] C | process=[dict get $row process]"
         puts "  DB=[dict get $row file]"
+        puts ""
     }
     puts "CURRENT PRIMETIME SCALING GROUPS FOR THESE MEMBERS:"
+    puts ""
     set seen [dict create]
     set no_group_count 0
     set unresolved_count 0
@@ -368,14 +397,17 @@ proc library_scaling_group_report::show_library_set {set_name} {
         if {[sizeof_collection $library] != 1} {
             incr unresolved_count
             puts "CURRENT GROUP: UNAVAILABLE | $extended_name"
+            puts ""
             continue
         }
         if {![show_current_group $library seen]} {
             incr no_group_count
             puts "CURRENT GROUP: NONE | $extended_name"
+            puts ""
         }
     }
     puts "SET SUMMARY: members=[llength $members] current_groups=[dict size $seen] ungrouped=$no_group_count unresolved=$unresolved_count"
+    puts ""
     puts "NOTE: catalog voltages use the scaling script's PVT parser; the native group tables show actual group rail voltages. Neither shows effective cell/PG-pin overrides."
 }
 
@@ -410,6 +442,7 @@ proc library_scaling_group_report::run {library_name} {
         error "Library name '$library_name' matches $count loaded libraries. Set LIBRARY_NAME to one exact extended_name below:\n  [join $choices "\n  "]"
     }
     puts "SELECTED LIBRARY: [get_object_name $libraries]"
+    puts ""
 
     # Membership comes from PrimeTime, not filename/family-name parsing.
     set seen [dict create]
