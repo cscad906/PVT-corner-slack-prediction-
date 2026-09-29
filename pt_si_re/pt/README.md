@@ -13,6 +13,7 @@ library scaling을 실행하고, 동일한 fixed path의 ground truth와 비교�
 |---|---|---|
 | `pt/run_scaling_after_restore.tcl` | restore session에서 PT scaling 및 fixed-path 측정 | `pt_shell` |
 | `pt/show_library_voltages.tcl` | 로드된 library의 Operating Conditions 전압/온도 목록 조회 | `pt_shell` |
+| `pt/show_library_scaling_group.tcl` | 입력한 library가 속한 scaling group의 전체 library와 전압/온도/rail 조회 | `pt_shell` |
 | `fixed_paths.tcl` | 모든 비교에 공통으로 사용할 경로 목록 | `pt_shell` |
 | `analysis/compare_scaling_mae.py` | scaling과 ground truth의 path별 오차 및 MAE 계산 | Linux shell |
 | `analysis/plot_ground_truth_slack.py` | ground-truth slack 통계 및 분포 생성 | Linux shell |
@@ -182,6 +183,34 @@ library 개수를 출력합니다. 조건이 여러 개면 전부 표시하고, 
 이 값은 library 기준 전압이며 셀별 `set_voltage` override나 multi-rail PG pin의
 모든 전압을 조회한 결과는 아닙니다. 이 조회는 전압·온도·scaling group을
 변경하거나 timing을 갱신하지 않으며 파일도 만들지 않습니다.
+
+특정 library에서 외삽 경고가 발생했다면 `show_library_scaling_group.tcl` 맨 위의
+빈 입력란에 PrimeTime library 이름을 입력합니다. DB 파일 경로나 `library/cell`
+이름이 아니라 `get_libs`에 표시되는 library 이름을 정확히 적습니다.
+같은 이름이 여러 DB에 있으면 후보 `extended_name`을 출력하며 중단합니다.
+그때는 표시된 후보 중 하나를 `DB경로:library이름` 형태 그대로 입력합니다.
+
+```tcl
+set LIBRARY_NAME "실제_library_이름"
+```
+
+경고가 발생한 **같은 `pt_shell` 세션**에서 실행합니다. 이미 restore했다면 다시
+restore할 필요가 없습니다.
+
+```tcl
+source /path/to/repository/pt_si_re/pt/show_library_scaling_group.tcl
+```
+
+선택한 library가 실제로 속한 scaling group만 조회하며, 그 group의 모든 member
+library 이름과 process·온도·전압·`extended_name`을 PrimeTime 원본 표로 출력합니다. multi-rail
+library는 rail별 전압도 표에 그대로 표시됩니다. 이 값은 library group의 값이며
+셀/PG pin에 적용된 `set_voltage` override를 보여주는 것은 아닙니다.
+전압 내삽 여부는 같은 조건에서 **대상 rail**의 전압이 target 양쪽에 있는지 확인합니다.
+
+library가 로드되어 있어도 group에 속하지 않으면 `SCALING GROUP: NONE`을
+표시합니다. scaling 실행 중 생성한 group은 저장하지 않은 fresh restore session에는
+없을 수 있습니다. 이름이 없거나 일치하지 않으면 설정 안내와 함께 중단합니다.
+이 파일 하나만 사용하며 scaling이나 timing 변경은 수행하지 않습니다.
 
 확인 기준은 다음과 같습니다.
 
