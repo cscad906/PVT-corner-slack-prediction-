@@ -89,7 +89,8 @@ docs/START.md top to bottom.
     --sweep 0.48:0.70:0.02      predict over a voltage range (add --level cmax
                                 for one level). Both write one file per
                                 temperature, runs/<mode>/_all/predict_<temp>_
-                                <request>.csv, never overwriting an earlier one
+                                <request>.rpt -- a text report, not a csv --
+                                never overwriting an earlier one
                                 (--name to choose; --temp for one temperature)
     --config <file>          a different project config (default config.yaml)
 
@@ -2000,7 +2001,7 @@ def _predict_request(p: dict, models: list, at, sweep, level) -> list:
 
 
 def _predict_files(p: dict, name: str, temps: list) -> dict:
-    """{temp: runs/<mode>/_all/predict_<temp>_<name>.csv}, none of them existing.
+    """{temp: runs/<mode>/_all/predict_<temp>_<name>.rpt}, none of them existing.
 
     One file per temperature, and never over an earlier one: a repeat gets _2,
     _3. The suffix is chosen for the whole run at once, so the files a single
@@ -2015,7 +2016,7 @@ def _predict_files(p: dict, name: str, temps: list) -> dict:
 
     def path(t, k):
         stem = "predict_%s_%s" % (re.sub(r"[^A-Za-z0-9._-]+", "_", str(t)), tag)
-        return os.path.join(out_dir, stem + (".csv" if k == 1 else "_%d.csv" % k))
+        return os.path.join(out_dir, stem + (".rpt" if k == 1 else "_%d.rpt" % k))
 
     k = 1
     while any(os.path.exists(path(t, k)) for t in temps):
@@ -2200,6 +2201,115 @@ def _fmax_mhz(col, gap, base_T, eff_T):
     return 1000.0 / t_min, int(np.where(ok)[0][i])
 
 
+def _summary_rows(vals, truth, kinds, keep, gap, base_T, eff_T, n_paths, f1):
+    """The per-corner block, as (label, [one string per kept corner]).
+
+    One place, so the file and anything else that shows it cannot drift apart.
+    Rows that need a measurement are left blank at corners nobody measured.
+    """
+    import numpy as np
+
+    fin = {k: kinds[k] != "n/a" and np.isfinite(vals[:, k]).any() for k in keep}
+
+    def col(fn):
+        return [f1(fn(k)) if fin[k] else "" for k in keep]
+
+    def err(k, f):
+        e = np.abs(vals[:, k] - truth[:, k])
+        return float(f(e[np.isfinite(e)])) if np.isfinite(e).any() else np.nan
+
+    rows = [("mean predicted slack (ps)",
+             col(lambda k: float(np.nanmean(vals[:, k]))))]
+    if any(fin[k] and np.isfinite(truth[:, k]).any() for k in keep):
+        rows.append(("mean measured slack (ps)",
+                     col(lambda k: float(np.nanmean(truth[:, k]))
+                         if np.isfinite(truth[:, k]).any() else np.nan)))
+        # per path before averaging: comparing the two means above hides the
+        # error, since a path 20 ps high and one 20 ps low cancel
+        rows.append(("mean absolute error (ps)", col(lambda k: err(k, np.mean))))
+        rows.append(("worst absolute error (ps)", col(lambda k: err(k, np.max))))
+    rows.append(("smallest slack / WNS (ps)",
+                 col(lambda k: float(np.nanmin(vals[:, k])))))
+    rows.append(("sum of negative slacks (ps)",
+                 col(lambda k: float(vals[:, k][vals[:, k] < 0].sum()))))
+    rows.append(("paths with negative slack (out of %d)" % n_paths,
+                 [str(int((vals[:, k] < 0).sum())) if fin[k] else "" for k in keep]))
+    fm = [_fmax_mhz(vals[:, k], gap, base_T, eff_T)[0] if fin[k] else np.nan
+          for k in keep]
+    if any(np.isfinite(x) for x in fm):
+        rows.append(("max clock frequency (MHz)",
+                     ["%.1f" % x if np.isfinite(x) else "" for x in fm]))
+    return rows
+
+
+def _write_predict_report(fp, labels, keep, grp, temp, period, weights, f1) -> None:
+    """Write the predictions as a column-aligned text report, not a CSV.
+
+    Asked for: "like a real PrimeTime report", opened in vim on the machine
+    that produced it. A CSV is for a program; this is for a person, so the
+    columns line up without `column -s, -t` and the header says what the
+    numbers are before the first one appears.
+    """
+    import numpy as np
+
+    # Every block shares one set of column positions, so the summary lines up
+    # under the paths in vim. The summary labels are the longest text in the
+    # file, so they set the width too -- sizing on the path keys alone pushed
+    # the longest label's values out of line with everything above them.
+    blocks = [(g, _summary_rows(g[3], g[8], g[4], keep, g[5], g[6], g[7],
+                                len(g[1]), f1)) for g in grp]
+    n_idx = max([4] + [len(str(int(x))) for _, _, pidx, _, _, _, _, _, _ in grp
+                       for x in pidx])
+    n_path = min(70, max([12] + [len(k) for _, keys, _, _, _, _, _, _, _ in grp
+                                 for k in keys]
+                         + [len(l) - n_idx - 1 for _, rows in blocks
+                            for l, _ in rows]))
+    w = [max(15, len(l) + 2) for l in labels]
+    lab_w = n_idx + 1 + n_path
+
+    def row(a, b, vals_):
+        return ("  %*s %-*s" % (n_idx, a, n_path, b)
+                + "".join("%*s" % (w[i], v) for i, v in enumerate(vals_)))
+
+    def rule():
+        return ("  " + "-" * n_idx + " " + "-" * n_path
+                + "".join(" " + "-" * (w[i] - 1) for i in range(len(labels))))
+
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write("*" * 72 + "\n")
+        f.write("Report      : predicted slack\n")
+        f.write("Temperature : %s\n" % temp)
+        f.write("Designs     : %s\n"
+                % ", ".join(g[0]["design"] for g in grp))
+        base_T = grp[0][6]
+        if period is not None and base_T:
+            f.write("Clock       : %.4f -> %.4f ns  (%.1f -> %.1f MHz)\n"
+                    % (base_T, period, 1000.0 / base_T, 1000.0 / period))
+        elif base_T:
+            f.write("Clock       : %.4f ns  (%.1f MHz)   as reported\n"
+                    % (base_T, 1000.0 / base_T))
+        if weights:
+            f.write("Weights     : %s\n" % weights)
+        f.write("Corners     : %s\n" % ", ".join(labels))
+        f.write("*" * 72 + "\n")
+        for (m, keys, pidx, vals, kinds, gap, base_T, eff_T, truth), srows in blocks:
+            f.write("\nDesign: %s\n\n" % m["design"])
+            f.write(row("idx", "path", labels) + "\n")
+            f.write(row("", "", ["slack (ps)"] * len(labels)) + "\n")
+            f.write(rule() + "\n")
+            for i in np.argsort(pidx, kind="stable"):
+                f.write(row(int(pidx[i]), keys[i][:n_path],
+                            [f1(vals[i, k]) for k in keep]) + "\n")
+            f.write("\n  Summary\n")
+            f.write("  " + "-" * lab_w
+                    + "".join(" " + "-" * (w[i] - 1) for i in range(len(labels)))
+                    + "\n")
+            for label, cells in srows:
+                f.write("  %-*s" % (lab_w, label)
+                        + "".join("%*s" % (w[i], c) for i, c in enumerate(cells))
+                        + "\n")
+
+
 def stage_predict_at(models: list, p: dict, req: list, name: str,
                      weights: "str | None" = None,
                      period: "float | None" = None) -> "tuple[str, list]":
@@ -2289,64 +2399,8 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                   f"temperature -- no file", flush=True)
             continue
         fp = fps[t]
-        with open(fp, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            # say what the numbers ARE, and in what unit: a bare corner name
-            # over a column of numbers left the reader asking whether it was
-            # slack at all. The summary header below keeps the bare names --
-            # its rows carry their own meaning and unit, and one is a count.
-            w.writerow(["design", "path_idx", "path_key"]
-                       + ["%s slack (ps)" % cols[k] for k in keep])
-            for m, keys, pidx, vals, _, _, _, _, _ in grp:
-                for i in np.argsort(pidx, kind="stable"):
-                    w.writerow([m["design"], int(pidx[i]), keys[i]]
-                               + [f1(vals[i, k]) for k in keep])
-            w.writerow([])
-            # the label sits in the path_key column, which is wide anyway:
-            # in path_idx it stretched that narrow column to the label's width
-            # in every `column -t` view of the file
-            w.writerow(["design", "", "summary"] + [cols[k] for k in keep])
-            for m, keys, _, vals, kinds, gap, base_T, eff_T, truth in grp:
-                fin = {k: kinds[k] != "n/a" and np.isfinite(vals[:, k]).any()
-                       for k in keep}
-                worst = [float(np.nanmin(vals[:, k])) if fin[k] else np.nan for k in keep]
-                neg = [float(vals[:, k][vals[:, k] < 0].sum()) if fin[k] else np.nan
-                       for k in keep]
-                # the count alone: "52/33412" in a cell is read as a date by Excel
-                nbad = [str(int((vals[:, k] < 0).sum())) if fin[k] else "" for k in keep]
-                d = m["design"]
-                # averages first: what was predicted, and what was measured
-                # where a measurement exists -- the two a reader compares.
-                # Blank at a corner nobody measured.
-                mp = [float(np.nanmean(vals[:, k])) if fin[k] else np.nan for k in keep]
-                mt = [float(np.nanmean(truth[:, k]))
-                      if fin[k] and np.isfinite(truth[:, k]).any() else np.nan
-                      for k in keep]
-                w.writerow([d, "", "mean predicted slack (ps)"] + [f1(x) for x in mp])
-                if any(np.isfinite(x) for x in mt):
-                    w.writerow([d, "", "mean measured slack (ps)"] + [f1(x) for x in mt])
-                    # Comparing the two averages above hides the error: a path
-                    # predicted 20 ps high and one 20 ps low cancel. These two
-                    # rows are per path, so nothing cancels -- the mean is the
-                    # usual score and the worst is the one a timing sign-off
-                    # cares about, since a single bad path is a bad corner.
-                    def _err(k, f):
-                        e = np.abs(vals[:, k] - truth[:, k])
-                        return float(f(e[np.isfinite(e)])) if np.isfinite(e).any() \
-                            else np.nan
-                    w.writerow([d, "", "mean absolute error (ps)"]
-                               + [f1(_err(k, np.mean)) for k in keep])
-                    w.writerow([d, "", "worst absolute error (ps)"]
-                               + [f1(_err(k, np.max)) for k in keep])
-                w.writerow([d, "", "smallest slack (ps)"] + [f1(x) for x in worst])
-                w.writerow([d, "", "sum of negative slacks (ps)"] + [f1(x) for x in neg])
-                w.writerow([d, "", "paths with negative slack (out of %d)" % len(keys)]
-                           + nbad)
-                fm = [_fmax_mhz(vals[:, k], gap, base_T, eff_T)[0] if fin[k] else np.nan
-                      for k in keep]
-                if any(np.isfinite(x) for x in fm):
-                    w.writerow([d, "", "max clock frequency (MHz)"]
-                               + ["%.1f" % x if np.isfinite(x) else "" for x in fm])
+        _write_predict_report(fp, [cols[k] for k in keep], keep, grp, t,
+                              period, weights, f1)
         written.append(fp)
         print(f"[PREDICT] wrote {fp}  ({sum(len(g[1]) for g in grp)} paths x "
               f"{len(keep)} corners)", flush=True)
@@ -2471,21 +2525,47 @@ def _corner_table(csv_fp: str) -> list:
             if not row.get("design") or row.get("path_key") == "summary":
                 continue
             key = (row["design"], row["temp"], row["corner"])
-            a = acc.setdefault(key, {"n": 0, "n_truth": 0, "sum": 0.0, "worst": 0.0})
+            a = acc.setdefault(key, {"n": 0, "n_truth": 0, "sum": 0.0, "worst": 0.0,
+                                     "sum_t": 0.0, "sum_abst": 0.0, "sum_m": 0.0,
+                                     "wns_t": None, "wns_m": None})
             a["n"] += 1
             if row.get("truth_ps") in (None, ""):
                 continue
+            t, md = float(row["truth_ps"]), float(row["model_ps"])
             e = abs(float(row["model_err_ps"]))
             a["n_truth"] += 1
             a["sum"] += e
             a["worst"] = max(a["worst"], e)
+            a["sum_t"] += t
+            a["sum_abst"] += abs(t)
+            a["sum_m"] += md
+            # WNS is the worst path, and the pair to compare is that path's
+            # measured and predicted slack -- not the two minima taken apart,
+            # which can come from different paths and would not be an error.
+            if a["wns_t"] is None or t < a["wns_t"]:
+                a["wns_t"], a["wns_m"] = t, md
     out = []
     for (design, temp, corner), a in sorted(acc.items()):
+        n = a["n_truth"]
+        # Percentages are against the MEAN ABSOLUTE measured slack at that
+        # corner, stated in the row so the denominator is never a guess. Per
+        # path it would divide by a slack that can sit at zero, which turns a
+        # 1 ps error into thousands of percent and makes the average useless.
+        we = (a["wns_m"] - a["wns_t"]) if n else None
+        # The WNS error in percent is against that path's own measured slack --
+        # WNS is one path, so its own value is the only denominator that means
+        # anything. Near zero it does not, and then there is no percentage.
+        wp = (round(100.0 * we / abs(a["wns_t"]), 3)
+              if n and abs(a["wns_t"]) > 1e-9 else None)
         out.append({
             "design": design, "temp": temp, "corner": corner,
             "n_paths": a["n"],
-            "mae_ps": round(a["sum"] / a["n_truth"], 3) if a["n_truth"] else None,
-            "worst_ps": round(a["worst"], 3) if a["n_truth"] else None,
+            "mean_truth_ps": round(a["sum_t"] / n, 3) if n else None,
+            "mae_ps": round(a["sum"] / n, 3) if n else None,
+            "wns_truth_ps": round(a["wns_t"], 3) if n else None,
+            "wns_model_ps": round(a["wns_m"], 3) if n else None,
+            "wns_err_ps": round(we, 3) if n else None,
+            "wns_err_pct": wp,
         })
     return out
 
@@ -2494,21 +2574,31 @@ def _print_corner_table(rows: list) -> None:
     if not rows:
         return
     print("\n  Per-corner scores")
-    print(f"    {'circuit':<22}{'corner':<26}"
-          f"{'paths':>7}{'MAE':>10}{'worst':>10}")
+    print(f"    {'circuit':<20}{'corner':<24}{'paths':>6}{'true slack':>12}"
+          f"{'MAE':>9}{'WNS meas':>10}{'WNS pred':>10}{'WNS err':>9}{'':>8}")
+
+    def _p(v, unit=""):
+        return "-" if v is None else f"{v:.2f}{unit}"
+
     for r in rows:
-        mae = "-" if r["mae_ps"] is None else f"{r['mae_ps']:.2f}ps"
-        wst = "-" if r["worst_ps"] is None else f"{r['worst_ps']:.2f}ps"
         # Temperature is part of which corner this is, not a separate axis of
         # the result: one line per corner, whatever produced it.
         corner = f"{r['temp']}C {r['corner']}" if r.get("temp") else r["corner"]
-        print(f"    {r['design']:<22}{corner:<26}"
-              f"{r['n_paths']:>7}{mae:>10}{wst:>10}")
+        print(f"    {r['design']:<20}{corner:<24}{r['n_paths']:>6}"
+              f"{_p(r.get('mean_truth_ps'), 'ps'):>12}"
+              f"{_p(r['mae_ps'], 'ps'):>9}"
+              f"{_p(r.get('wns_truth_ps'), 'ps'):>10}"
+              f"{_p(r.get('wns_model_ps'), 'ps'):>10}"
+              f"{_p(r.get('wns_err_ps'), 'ps'):>9}"
+              f"{_p(r.get('wns_err_pct'), '%'):>8}")
     scored = [r for r in rows if r["mae_ps"] is not None]
     if scored:
-        print(f"    {'total':<48}{sum(r['n_paths'] for r in rows):>7}"
-              f"{sum(r['mae_ps'] for r in scored) / len(scored):>8.2f}ps"
-              f"{max(r['worst_ps'] for r in scored):>8.2f}ps")
+        we = [abs(r["wns_err_ps"]) for r in scored if r.get("wns_err_ps") is not None]
+        print(f"    {'total':<44}{sum(r['n_paths'] for r in rows):>6}"
+              f"{'':>12}{sum(r['mae_ps'] for r in scored) / len(scored):>7.2f}ps"
+              f"{'':>20}{max(we):>7.2f}ps" if we else
+              f"    {'total':<44}{sum(r['n_paths'] for r in rows):>6}"
+              f"{'':>12}{sum(r['mae_ps'] for r in scored) / len(scored):>7.2f}ps")
         # The caveat that belongs with these numbers -- the stopping epoch was
         # chosen on these same corners, so they are best-case rather than
         # held-out -- is not printed, by request. It stays in each model's

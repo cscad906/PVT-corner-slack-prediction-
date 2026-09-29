@@ -402,49 +402,47 @@ bash scripts/run.sh predict --sweep 0.48:0.70:0.02 --level cmax   # 전압 스�
 bash scripts/run.sh predict --at 0.57:cmax,0.62:rcmax --temp m25  # 콕 집어서
 ```
 
-**온도마다 파일 하나**가 `runs/<mode>/_all/predict_<온도>_<요청>.csv` 로 나온다.
-온도마다 있는 RC 코너가 달라서(125C 는 rcmax·cmax, m25 는 rcmin 까지) 각 파일에는
-**그 온도에 있는 코너만** 열로 들어간다 — 빈 열이 없다. `--temp` 를 주면 그 온도 파일
-하나만 나온다. 같은 요청을 다시 돌리면 두 파일 모두 `_2` 가 붙은 새 파일로 나오고 앞의
-것은 그대로 남는다 (`--name` 으로 이름 지정 가능). 요청한 코너가 그 온도에 하나도 없으면
-그 온도 파일은 안 만든다.
+**온도마다 파일 하나**가 `runs/<mode>/_all/predict_<온도>_<요청>.rpt` 로 나온다.
+**CSV 가 아니라 프라임타임 리포트 같은 텍스트 파일**이라 vim 으로 바로 열면 열이
+맞아 있다. 온도마다 있는 RC 코너가 달라서(125C 는 rcmax·cmax, m25 는 rcmin 까지)
+각 파일에는 **그 온도에 있는 코너만** 들어간다. `--temp` 를 주면 그 온도 파일 하나만
+나온다. 같은 요청을 다시 돌리면 `_2` 가 붙은 새 파일이 생기고 앞의 것은 그대로 남는다
+(`--name` 으로 이름 지정 가능).
 
-- 한 줄 = 경로 하나, **리포트의 path 인덱스 순서대로**. 열은
-  `design, path_idx, path_key, <코너> slack (ps), <코너> slack (ps), ...`
-  (예: `0.570V_cmax slack (ps)`)
-  - `path_idx` = 리포트의 `### FIXED_PATH idx=<n>` 의 n
-  - `path_key` = 같은 줄의 `key=` (시작점->끝점)
-  - 값 = 예측 slack (ps)
-- 마지막 경로 다음에 **빈 줄 하나**, 그 아래 회로별 요약. 맨 아래라 엑셀 정렬·필터에
-  섞이지 않는다 (빈 줄에서 범위가 끊김):
+```
+************************************************************************
+Report      : predicted slack
+Temperature : m25
+Designs     : PERIC0_Timing_Report
+Clock       : 2.0000 -> 1.7999 ns  (500.0 -> 555.6 MHz)
+Corners     : 0.500V_cmax, 0.550V_cmax, 0.685V_rcmin
+************************************************************************
 
-  | 줄 | 뜻 |
-  |---|---|
-  | `mean predicted slack (ps)` | 예측 평균 |
-  | `mean measured slack (ps)` | **실측 평균.** 측정된 코너만, 나머지는 빈칸 |
-  | `mean absolute error (ps)` | **MAE.** 경로별 \|예측−실측\| 의 평균 |
-  | `worst absolute error (ps)` | 그 코너에서 가장 큰 오차 |
-  | `smallest slack (ps)` | 가장 작은 slack (WNS) |
-  | `sum of negative slacks (ps)` | 음수 slack 합 |
-  | `paths with negative slack (out of N)` | 음수 경로 수 |
-  | `max clock frequency (MHz)` | 그 코너에서 가능한 최대 주파수 |
+Design: PERIC0_Timing_Report
 
-  `predictions_hidden.csv` 도 같은 모양으로 끝난다 — 빈 줄 다음에 코너별
-  `mean_truth_ps / mean_model_ps / mean_abs_err_ps / worst_abs_err_ps`. 합본
-  (`_all/predictions_hidden.csv`) 은 그 줄들을 경로 사이에 섞지 않고 전 모델에 대해
-  다시 계산해서 맨 아래에 붙인다.
+   idx path                                0.500V_cmax    0.550V_cmax   0.685V_rcmin
+                                            slack (ps)     slack (ps)     slack (ps)
+  ---- -------------------------------- -------------- -------------- --------------
+     0 u_a/reg_0_->u_b/reg_0_                    100.7          211.0          434.7
+     1 u_a/reg_1_->u_b/reg_1_                     96.7          207.0          430.7
+   ...
 
-  평균끼리 비교하면 안 된다 — 20 ps 높게 본 경로와 20 ps 낮게 본 경로가 상쇄된다.
-  **MAE 줄이 실제 성적**이고, 한 경로만 크게 틀려도 그 코너는 못 쓰므로 worst 도 같이
-  본다. 경로별
-  오차가 필요하면 `runs/<mode>/<회로>/<온도>/predictions_hidden.csv` 에
-  `truth_ps / model_ps / model_err_ps` 가 있다
-- 서버에서 보기:
-  ```
-  column -s, -t runs/setup/_all/predict_m25_*.csv | less -S    # 전체
-  tail -4 runs/setup/_all/predict_m25_<이름>.csv | column -s, -t  # 요약만 (회로 1개일 때)
-  ```
-- 측정한 전압 범위 **밖**의 값은 외삽이라 믿기 어렵다
+  Summary
+  ------------------------------------- -------------- -------------- --------------
+  mean predicted slack (ps)                       78.7          189.0          412.7
+  mean measured slack (ps)                        78.8                         412.9
+  mean absolute error (ps)                         0.1                           0.2
+  worst absolute error (ps)                        0.1                           0.2
+  smallest slack / WNS (ps)                       56.7          167.0          390.7
+  sum of negative slacks (ps)                      0.0            0.0            0.0
+  paths with negative slack (out of 12)              0              0              0
+  max clock frequency (MHz)                      573.7          612.4          709.6
+```
+
+- 한 줄 = 경로 하나, **리포트의 path 인덱스 순서대로**. `idx` 는 `### FIXED_PATH idx=<n>`
+  의 n, `path` 는 같은 줄의 `key=`
+- 측정된 코너에만 `mean measured` 와 오차 두 줄이 채워진다. 측정 안 한 코너는 빈칸
+- 요청한 코너가 그 온도에 하나도 없으면 그 온도 파일은 안 만든다
 
 ### 클럭 주파수·주기를 바꿔서 보기 (`--freq` / `--period`)
 

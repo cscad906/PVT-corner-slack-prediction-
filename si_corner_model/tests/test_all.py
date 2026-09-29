@@ -217,12 +217,12 @@ def test_corner_table_is_keyed_by_corner_not_by_model(tmp_path):
     rows = {(r["temp"], r["corner"]): r for r in _corner_table(str(fp))}
     assert len(rows) == 3
     assert rows[("125", "SSPG_0p54V_rcmax")]["mae_ps"] == 3.0      # (2+4)/2
-    assert rows[("125", "SSPG_0p54V_rcmax")]["worst_ps"] == 4.0
+    assert rows[("125", "SSPG_0p54V_rcmax")]["wns_err_ps"] is not None
     assert rows[("125", "SSPG_0p54V_rcmax")]["n_paths"] == 2
     # query corner: paths counted, error absent -- counting it as 0.0 would
     # flatter the mean
     q = rows[("m25", "SSPG_0p57V_cmax")]
-    assert q["n_paths"] == 1 and q["mae_ps"] is None and q["worst_ps"] is None
+    assert q["n_paths"] == 1 and q["mae_ps"] is None and q["wns_err_ps"] is None
 
 
 def test_merge_flags_predictions_older_than_the_weights(project, tmp_path, capsys):
@@ -1107,74 +1107,53 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     by_temp = {("125" if "predict_125_" in f else "m25"): f for f in fps}
     assert set(by_temp) == {"125", "m25"}
 
-    def read(fp):
-        rows = list(_csv.reader(open(fp, encoding="utf-8")))
-        b = rows.index([])
-        return rows[0], rows[1:b], rows[b + 1:]
-
-    head, paths, summ = read(by_temp["125"])
-    assert head[:3] == ["design", "path_idx", "path_key"]
-    assert all(c.endswith(" slack (ps)") for c in head[3:]), \
-        "every value column must say it is slack, and in ps"
-    assert not any("_rcmin" in c for c in head), "125C has no rcmin: no column"
-    assert any("_cmax" in c for c in head) and any("_rcmax" in c for c in head)
-    assert len(paths) == 12 and all(c for r in paths for c in r), "no blank cells"
-    head_m, paths_m, summ_m = read(by_temp["m25"])
-    assert any("_rcmin" in c for c in head_m)
-    for rows_ in (paths, paths_m):
-        idx = [int(r[1]) for r in rows_]
-        assert idx == sorted(idx), "paths must be in FIXED_PATH idx order"
-    assert summ[0][:3] == ["design", "", "summary"]
-    assert [c + " slack (ps)" for c in summ[0][3:]] == head[3:]
-    rows_by = {r[2]: r for r in summ[1:]}
-    assert [r[2] for r in summ[1:]] == ["mean predicted slack (ps)",
-                                        "mean measured slack (ps)",
-                                        "mean absolute error (ps)",
-                                        "worst absolute error (ps)",
-                                        "smallest slack (ps)",
-                                        "sum of negative slacks (ps)",
-                                        "paths with negative slack (out of 12)",
-                                        "max clock frequency (MHz)"]
-    # measured columns carry a measured average, unmeasured ones stay blank,
-    # and where both exist they are the same order of magnitude
-    kinds_row = rows_by["mean measured slack (ps)"][3:]
-    pred_row = rows_by["mean predicted slack (ps)"][3:]
-    assert any(x for x in kinds_row) and any(not x for x in kinds_row), \
+    labels, paths, summ = _read_report(by_temp["125"])
+    assert not any("_rcmin" in c for c in labels), "125C has no rcmin: no column"
+    assert any("_cmax" in c for c in labels) and any("_rcmax" in c for c in labels)
+    assert len(paths) == 12 and all(v for row in paths.values() for v in row), \
+        "no blank cells"
+    labels_m, paths_m, summ_m = _read_report(by_temp["m25"])
+    assert any("_rcmin" in c for c in labels_m)
+    for pp in (paths, paths_m):
+        assert list(pp) == sorted(pp), "paths must be in FIXED_PATH idx order"
+    assert list(summ) == ["mean predicted slack (ps)", "mean measured slack (ps)",
+                          "mean absolute error (ps)", "worst absolute error (ps)",
+                          "smallest slack / WNS (ps)", "sum of negative slacks (ps)",
+                          "paths with negative slack (out of 12)",
+                          "max clock frequency (MHz)"]
+    # measured columns carry a measured average, unmeasured ones stay blank
+    meas, pred = summ["mean measured slack (ps)"], summ["mean predicted slack (ps)"]
+    assert any(meas) and any(not x for x in meas), \
         "a sweep has both measured and unmeasured corners"
-    for t, pr in zip(kinds_row, pred_row):
+    for t, pr in zip(meas, pred):
         if t:
             assert abs(float(t) - float(pr)) < 50.0
-    # the error rows exist exactly where a measurement does, and the worst is
-    # never smaller than the mean
-    mae = rows_by["mean absolute error (ps)"][3:]
-    wae = rows_by["worst absolute error (ps)"][3:]
-    assert [bool(x) for x in mae] == [bool(x) for x in kinds_row]
+    mae, wae = summ["mean absolute error (ps)"], summ["worst absolute error (ps)"]
+    assert [bool(x) for x in mae] == [bool(x) for x in meas]
     for a, b in zip(mae, wae):
         if a:
             assert float(b) >= float(a) - 1e-9
-    # the fixture's reports carry a 2 ns period, and Fmax is where the worst
-    # path reaches zero slack: 1 / (2 ns - worst slack)
-    fm = [float(x) for x in rows_by["max clock frequency (MHz)"][3:] if x]
-    ws = [float(x) for x in rows_by["smallest slack (ps)"][3:] if x]
+    # the fixture's reports carry a 2 ns period: Fmax is 1 / (2 ns - WNS)
+    fm = [float(x) for x in summ["max clock frequency (MHz)"] if x]
+    ws = [float(x) for x in summ["smallest slack / WNS (ps)"] if x]
     assert fm and len(fm) == len(ws)
     assert all(abs(f - 1000.0 / (2.0 - w / 1000.0)) < 0.5 for f, w in zip(fm, ws))
     ds = dict(np.load(select(expand(p), design="boomcore", temp="m25")[0]
                       ["cfg"]["data"]["cache"]))
-    got = {int(r[1]): r[2] for r in paths_m}
-    assert got == {int(i): str(k) for i, k in zip(ds["path_idx"], ds["path_keys"])}
+    assert set(paths_m) == {int(i) for i in ds["path_idx"]}
 
     # (3) a repeat never overwrites, and the files of one run share a number
     fps2, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "t")
-    assert all(f.endswith("_2.csv") for f in fps2) and all(os.path.exists(f) for f in fps)
+    assert all(f.endswith("_2.rpt") for f in fps2) and all(os.path.exists(f) for f in fps)
 
     # (4) a corner a temperature does not have produces no column there, and
     # a temperature with nothing to show produces no file
     req = _predict_request(p, models, "0.58:cmax,0.62:rcmin", None, None)
     fps3, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "r")
-    h125 = read([f for f in fps3 if "predict_125_" in f][0])[0]
-    hm25 = read([f for f in fps3 if "predict_m25_" in f][0])[0]
-    assert h125[3:] == ["0.580V_cmax slack (ps)"]
-    assert hm25[3:] == ["0.580V_cmax slack (ps)", "0.620V_rcmin slack (ps)"]
+    h125 = _read_report([f for f in fps3 if "predict_125_" in f][0])[0]
+    hm25 = _read_report([f for f in fps3 if "predict_m25_" in f][0])[0]
+    assert h125 == ["0.580V_cmax"]
+    assert hm25 == ["0.580V_cmax", "0.620V_rcmin"]
     req = _predict_request(p, models, "0.62:rcmin", None, None)
     fps4, _ = stage_predict_at(select(expand(p), design="boomcore"), p, req, "only_rcmin")
     assert len(fps4) == 1 and "predict_m25_" in fps4[0]
@@ -1184,12 +1163,57 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     req = _predict_request(p, only125, "0.58:cmax,0.62:rcmin", None, None)
     fps5, fails = stage_predict_at(only125, p, req, "only125")
     assert not fails and len(fps5) == 1 and "predict_125_" in fps5[0]
+    assert _read_report(fps5[0])[0] == ["0.580V_cmax"]
     req = _predict_request(p, only125, None, "0.5:0.6:0.1", None)
     assert {l for _, l in req} == {"rcmax", "cmax"}
     with pytest.raises(AssertionError, match="unknown level"):
         _predict_request(p, only125, "0.58:rcmn", None, None)
     with pytest.raises(AssertionError, match="nothing to predict"):
         _predict_request(p, only125, None, "0.5:0.6:0.1", "rcmin")
+
+
+def _read_report(fp):
+    """Read a predict report back: (corner labels, {idx: [values]}, {label: [values]}).
+
+    The files are fixed-width text now, not CSV, so the tests read them the way
+    a person does -- by the rule line, which states every column's span.
+    """
+    lines = open(fp, encoding="utf-8").read().splitlines()
+    heads = [i for i, l in enumerate(lines) if l.startswith("  ----")]
+    assert len(heads) >= 2, fp
+
+    def spans(rule):
+        out, i = [], 0
+        while i < len(rule):
+            if rule[i] == "-":
+                j = i
+                while j < len(rule) and rule[j] == "-":
+                    j += 1
+                out.append((i, j))
+                i = j
+            else:
+                i += 1
+        return out
+
+    def cells(line, sp):
+        return [line[a:b].strip() if a < len(line) else "" for a, b in sp]
+
+    psp = spans(lines[heads[0]])
+    labels = cells(lines[heads[0] - 2], psp)[2:]
+    paths = {}
+    for l in lines[heads[0] + 1:]:
+        if not l.strip():
+            break
+        c = cells(l, psp)
+        paths[int(c[0])] = c[2:]
+    ssp = spans(lines[heads[1]])
+    summ = {}
+    for l in lines[heads[1] + 1:]:
+        if not l.strip():
+            break
+        c = cells(l, ssp)
+        summ[c[0]] = c[1:]
+    return labels, paths, summ
 
 
 def _with_synthetic_si(cache: str, out: str, seed: int = 0) -> str:
@@ -1494,8 +1518,8 @@ def test_predict_runs_on_a_circuit_with_no_holdout(real_tree, tmp_path, monkeypa
     req = _predict_request(p, fresh, "0.57:cmax", None, None)
     fps, fails = stage_predict_at(fresh, p, req, "fresh")
     assert not fails and len(fps) == 1
-    rows = list(__import__("csv").reader(open(fps[0], encoding="utf-8")))
-    assert len(rows[1:rows.index([])]) == 12 and all(r[3] for r in rows[1:rows.index([])])
+    _, paths, _ = _read_report(fps[0])
+    assert len(paths) == 12 and all(v for row in paths.values() for v in row)
 
 
 def test_predict_at_another_clock_period(real_tree, tmp_path, monkeypatch):
@@ -1538,11 +1562,9 @@ def test_predict_at_another_clock_period(real_tree, tmp_path, monkeypatch):
         req = _predict_request(p, models, "0.57:cmax", None, None)
         fps, fails = stage_predict_at(models, p, req, tag, None, period)
         assert not fails and len(fps) == 1
-        rows = list(_csv.reader(open(fps[0], encoding="utf-8")))
-        b = rows.index([])
-        slack = [float(r[3]) for r in rows[1:b]]
-        summ = {r[2]: r[3] for r in rows[b + 1:]}
-        return slack, float(summ["max clock frequency (MHz)"])
+        _, paths, summ = _read_report(fps[0])
+        slack = [float(paths[i][0]) for i in sorted(paths)]
+        return slack, float(summ["max clock frequency (MHz)"][0])
 
     base, f0 = run(None, "base")
     for period in (1.8, 2.2, 1.5):
