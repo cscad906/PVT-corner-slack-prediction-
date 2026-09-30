@@ -29,6 +29,9 @@ set PROGRESS_INTERVAL_MINUTES 10
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
 
+# VDDPE는 u_mem Liberty/셀의 PG 핀 이름입니다. supply net 이름이 아니므로
+# RESTORED SUPPLY NETS/Available supply nets 목록에 VDDPE가 없어도 됩니다.
+# SCALING_POWER_NET에는 위 목록에 실제로 존재하는 코어 supply net을 입력합니다.
 # 고정 경로에서 VDDPE scaling할 셀 이름 또는 연결된 library 이름을 지정합니다.
 # * 와 ? 사용 가능. 여러 패턴은 쉼표로 구분: "*u_mem*,*sram*"
 # 빈칸이면 VDDPE macro scaling을 사용하지 않습니다.

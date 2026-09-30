@@ -255,7 +255,12 @@ target voltage를 적용할 supply net 하나만 Tcl 맨 위 `USER SETTINGS`에 
 restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리합니다. 스크립트는
 fixed-path cell의 `type=primary_power` PG pin과 실제 `supply_connection`을 확인한 뒤,
 scaling rail에 연결된 PG pin만 `set_voltage -cell ... -pg_pin_name ...`으로 변경합니다.
-따라서 fixed로 분류된 rail과 fixed path 밖의 cell에는 전압을 적용하지 않습니다.
+선택된 u_mem의 `VDDPE` PG 핀은 별도 예외입니다. `VDDPE`는 **핀 이름**이므로
+`available supply nets`에 같은 이름의 넷이 없어도 됩니다. 이 핀이 실제로 연결된
+supply net은 다른 이름일 수 있습니다. `TARGET_VDDPE_VOLTAGE`를 설정하면 선택된
+fixed-path u_mem 셀의 `VDDPE` 핀에만 셀 단위 전압을 적용하고, 연결된 supply net
+자체는 변경하지 않습니다. 실행 전후 핀 전압과 supply-net 보고서를 별도로 검증합니다.
+일반 scaling 대상 외의 fixed rail과 fixed path 밖의 cell에는 전압을 적용하지 않습니다.
 fixed는 임의 전압을 새로 설정한다는 뜻이 아니라 restore 상태를 그대로 유지한다는
 뜻입니다. temperature도 scaling 대상 cell 집합에만 적용합니다.
 
@@ -300,7 +305,7 @@ set FIXED_LIBRARY_VOLTAGE "restore"   ;# 현재 연결 DB 유지. 숫자는 nomi
 | `ANALYSIS` | setup은 `setup`, hold는 `hold` |
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과 `.rpt`를 저장할 폴더의 절대경로. 부산물은 자동으로 `details/`에 저장 |
-| `SCALING_POWER_NET` | target voltage를 적용할 supply net 하나의 정확한 이름 |
+| `SCALING_POWER_NET` | `available supply nets`에 실제로 있는 코어 target supply net 하나의 정확한 이름. u_mem의 `VDDPE` PG 핀 이름을 입력하는 곳이 아님 |
 | `FIXED_LIBRARY_SET` | 내삽에서 제외하고 기존 DB를 유지할 셋 이름/공통 패턴. 여러 개는 공백으로 구분. 빈칸이면 명시적 예외 없음 |
 | `FIXED_LIBRARY_VOLTAGE` | 기본 `"restore"`: 기존 DB와 V/T 유지. 숫자: 기존 DB nominal 전압 확인. `"nearest"`를 명시할 때만 가까운 DB로 재연결 |
 
