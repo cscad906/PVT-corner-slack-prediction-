@@ -54,9 +54,8 @@ set SCALING_POWER_NET "" ;# target voltage 적용 rail
 # * 와 ? 사용 가능. 여러 패턴은 쉼표로 구분: "*u_mem*,*sram*"
 # 빈칸이면 VDDPE macro scaling을 사용하지 않습니다.
 set VDDPE_SCALING_NAME_PATTERNS "*u_mem*"
-# 선택된 셀이 있을 때 목표 VDDPE 전압을 입력하십시오. 코어 TARGET_VOLTAGE와
-# 다를 수 있습니다. 공급 net 전체의 전압은 변경하지 않습니다.
-set TARGET_VDDPE_VOLTAGE ""
+# 목표 VDDPE 전압은 따로 받지 않습니다. 이 파일에서는 VDDPE가 코어와 항상 같은
+# 전압이므로 TARGET_VOLTAGE를 그대로 씁니다. 공급 net 전체의 전압은 변경하지 않습니다.
 
 # u_mem native group 이 목표 VDDPE 를 포함할 때:
 #   exact : 그 DB 를 그대로 사용하고 결과에 EXACT(non-LOO)로 표시합니다.
@@ -724,7 +723,9 @@ proc auto_scaling::native_umem_scope {supply cfg} {
     }
     set requested [string trim [option $cfg target_vddpe ""]]
     if {$requested eq ""} {
-        error "UM-001: VDDPE_SCALING_NAME_PATTERNS selected fixed-path cells; set TARGET_VDDPE_VOLTAGE. It may differ from TARGET_VOLTAGE."
+        # 이 파일에서 VDDPE 는 항상 코어 목표를 쓴다 (설정 항목 없음).
+        set requested [need $cfg target_v]
+        puts "VDDPE TARGET: following core TARGET_VOLTAGE = $requested V"
     }
     set target [number $requested]
     set target_t [number [need $cfg target_t]]
@@ -2818,8 +2819,10 @@ proc auto_scaling::verify_after_run {cfg} {
         error "SV-005: Saved BEOL or scaling supply nets differ from the original config."
     }
     set native_umem [option $selection native_umem [dict create cell_names {} library_names {}]]
+    set cfg_vddpe [string trim [option $cfg target_vddpe ""]]
+    if {$cfg_vddpe eq ""} { set cfg_vddpe [need $cfg target_v] }
     if {[llength [dict get $native_umem cell_names]] &&
-        ![same [dict get $native_umem target_vddpe] [number [need $cfg target_vddpe]]]} {
+        ![same [dict get $native_umem target_vddpe] [number $cfg_vddpe]]} {
         error "SV-005: Saved u_mem VDDPE target and current config differ."
     }
     set dt [option $cfg delay_type max]
@@ -2878,7 +2881,7 @@ proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
         ANALYSIS FIXED_PATH_FILE RESULT_FOLDER PROGRESS_INTERVAL_MINUTES
-        SCALING_POWER_NET VDDPE_SCALING_NAME_PATTERNS TARGET_VDDPE_VOLTAGE
+        SCALING_POWER_NET VDDPE_SCALING_NAME_PATTERNS
         UMEM_TARGET_POLICY CREATE_MISSING_SCALING_GROUPS
         FIXED_LIBRARY_SET FIXED_LIBRARY_VOLTAGE
     } {
@@ -2954,7 +2957,7 @@ proc auto_scaling::build_restore_config {} {
         fixed_tcl $::FIXED_PATH_FILE \
         scaling_power_nets $scaling_power_nets \
         vddpe_name_patterns [string trim $::VDDPE_SCALING_NAME_PATTERNS] \
-        target_vddpe [string trim $::TARGET_VDDPE_VOLTAGE] \
+        target_vddpe "" \
         umem_target_policy $umem_policy \
         create_missing_scaling_groups $create_missing \
         fixed_library_set $fixed_family \
