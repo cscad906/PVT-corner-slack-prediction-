@@ -1087,6 +1087,19 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     return cfg
 
 
+def _period_norm(v) -> str:
+    """base.period_norm as one of "auto" / "off", whichever way it was written.
+
+    YAML 1.1 -- which is what PyYAML implements -- makes `off` the boolean false
+    and `on` true, so a config line copied from this key's own documentation
+    arrives as False rather than "off". Accept the boolean for what it plainly
+    means rather than making the reader discover quoting.
+    """
+    if isinstance(v, bool):
+        return "auto" if v else "off"
+    return str(v).strip().lower()
+
+
 def _runs_root(p: dict) -> str:
     """Where this run writes: runs/<tag>/<mode> (no tag -> runs/<mode>).
 
@@ -1350,7 +1363,12 @@ def expand(p: dict) -> "list[dict]":
                 "level_coords": str(bt.get("level_coords", "measured")),
                 "select_on": str(bt.get("select_on", "hidden")),
                 "v_transform": str(bt.get("v_transform", "none")),
-                "period_norm": str(bt.get("period_norm", "auto")),
+                # YAML reads a bare `off` as the BOOLEAN false (and `on`,
+                # `yes`, `no` likewise), so the value documented as `off` does
+                # not arrive as the string "off" unless it was quoted. Refusing
+                # it sent someone back to ask what to type for a key whose own
+                # documentation said `off`. Both spellings mean the same thing.
+                "period_norm": _period_norm(bt.get("period_norm", "auto")),
                 "fit_level_values": bool(bt.get("fit_level_values", False)),
                 "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),
@@ -1370,8 +1388,9 @@ def expand(p: dict) -> "list[dict]":
                 f"{design} temp {tag}: base.v_transform must be one of "
                 f"{('auto',) + AXIS_TRANSFORMS}, got {base['v_transform']!r}")
             assert base["period_norm"] in ("auto", "off"), (
-                f"{design} temp {tag}: base.period_norm must be auto or off, "
-                f"got {base['period_norm']!r}")
+                f"{design} temp {tag}: base.period_norm must be auto or off "
+                f"(unquoted off/on are YAML booleans and are read as off/auto), "
+                f"got {bt.get('period_norm')!r}")
             assert str(bt.get("select_on", "hidden")) in ("hidden", "seen_loo", "edge"), (
                 f"{design} temp {tag}: base.select_on must be hidden, edge or "
                 f"seen_loo, got {bt.get('select_on')!r}")

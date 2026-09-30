@@ -230,6 +230,17 @@ def test_period_normalisation_makes_the_clock_plan_irrelevant(tmp_path, monkeypa
     assert abs(e_dvfs - e_flat) < 0.2, (e_flat, e_dvfs)
     assert e_off > 20 * max(e_dvfs, 1.0), (e_dvfs, e_off)
 
+    # A config line copied from this key's own documentation says `off`, and
+    # YAML 1.1 -- PyYAML -- makes a bare `off` the BOOLEAN false. So the value
+    # arrives as False, not "off", and refusing it sends the reader back to ask
+    # what to type. Both spellings must turn normalisation off.
+    assert yaml.safe_load("period_norm: off")["period_norm"] is False
+    e_bool, _ = run(dvfs, base={"period_norm": False}, hide=low)
+    assert abs(e_bool - e_off) < 1e-6, (e_bool, e_off)
+    # and the boolean true is the other one, not an error
+    e_true, _ = run(dvfs, base={"period_norm": True}, hide=low)
+    assert abs(e_true - e_dvfs) < 1e-6, (e_true, e_dvfs)
+
     # and the numbers printed are the slack each corner really has: the 0.5 V
     # row was measured at 3.0 ns, so its mean measured slack must be ~1 ns
     # HIGHER than the flat-plan version, not normalised away

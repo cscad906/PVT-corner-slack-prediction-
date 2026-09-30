@@ -417,6 +417,8 @@ base:
                                     #   whose parser reads the clock edge lines).
                                     #   `run.sh base` prints the period per
                                     #   voltage and says when it is not flat.
+                                    #   YAML reads a bare off/on as false/true;
+                                    #   both spellings are accepted.
   v_transform: none                 # The VARIABLE the voltage axis is fit in:
                                     #   none = V (the polynomial you expect)
                                     #   inv  = 1/V        log = log V

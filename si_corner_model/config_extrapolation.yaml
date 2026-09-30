@@ -487,6 +487,8 @@ base:
                                     #   whose parser reads the clock edge lines).
                                     #   `run.sh base` prints the period per
                                     #   voltage and says when it is not flat.
+                                    #   YAML reads a bare off/on as false/true;
+                                    #   both spellings are accepted.
   v_transform: auto                 # MEASURED here, not none: extrapolating is
                                     #   exactly the case where the variable
                                     #   matters. Read the [VAXIS] lines -- they
