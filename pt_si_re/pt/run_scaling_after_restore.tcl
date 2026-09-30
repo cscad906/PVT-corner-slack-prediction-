@@ -1595,6 +1595,46 @@ proc auto_scaling::verify_planned_group_coverage {plan} {
     puts "SCALING GROUP COVERAGE: all $planned planned input DB(s) are active"
 }
 
+# Opt-in for the separate u_mem LOO flow: its native group is defined first,
+# so only entirely ungrouped scalar families may be added afterward.
+proc auto_scaling::define_missing_scalar_groups {scaling_sets} {
+    set libs_by_source [dict create]
+    foreach_in_collection lib [get_libs -quiet *] {
+        set source [get_attribute -quiet $lib source_file_name]
+        if {$source ne ""} { dict lappend libs_by_source [file normalize $source] $lib }
+    }
+    foreach scaling_set $scaling_sets {
+        set dbs [dict get $scaling_set dbs]
+        set grouped 0
+        set active_group_keys [dict create]
+        foreach db $dbs {
+            set matches [option $libs_by_source [file normalize $db] {}]
+            if {[llength $matches] != 1} {
+                error "U_MEM LOO: expected exactly one loaded library for $db; found [llength $matches]."
+            }
+            set member_group [get_attribute -quiet [lindex $matches 0] lib_scaling_group]
+            if {$member_group ne "" && [sizeof_collection $member_group]} {
+                incr grouped
+                set member_names [lsort [get_object_name $member_group]]
+                dict set active_group_keys $member_names 1
+            }
+        }
+        if {$grouped == [llength $dbs]} {
+            if {[dict size $active_group_keys] != 1} {
+                error "U_MEM LOO: scalar set [dict get $scaling_set name] inputs belong to different active groups."
+            }
+            continue
+        }
+        if {$grouped != 0} {
+            error "U_MEM LOO: scalar set [dict get $scaling_set name] is only partly grouped ($grouped/[llength $dbs]); refusing to mix groups."
+        }
+        puts "U_MEM LOO: defining missing target-excluded scalar set [dict get $scaling_set name]"
+        if {[catch {define_scaling_lib_group $dbs} problem]} {
+            error "U_MEM LOO: scalar group creation failed ([dict get $scaling_set name]): $problem"
+        }
+    }
+}
+
 # A fixed-set exception applies only to a whole group of that declared set.
 # Mixed groups remain subject to the target-exclusion check.
 proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperature} {
@@ -2374,6 +2414,12 @@ proc auto_scaling::run_after_restore {cfg} {
             error "An existing non-exempt scaling group contains or rounds to target $target_v V/$target_t C. Target-excluded scaling cannot be proven with this group."
         }
         puts "RESTORE MODE: Reusing existing scaling groups."
+        # The separate u_mem LOO flow creates its target-excluded native group
+        # first. Only in that opt-in flow may still-ungrouped scalar families
+        # be defined here. Never replace or silently extend an active group.
+        if {[option $cfg create_missing_scaling_groups 0]} {
+            define_missing_scalar_groups $scaling_sets
+        }
     } else {
         puts "RESTORE MODE: Creating [llength $scaling_sets] scaling groups with the target corner excluded."
         foreach scaling_set $scaling_sets {
