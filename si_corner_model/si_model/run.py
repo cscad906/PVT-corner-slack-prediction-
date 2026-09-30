@@ -1682,7 +1682,18 @@ def stage_base(m: dict) -> None:
     unit = "ps" if field == "slack" else "%"
     hid = [int(i) for i in split.hidden_idx if measured[i]]
     for ci in hid:
-        print(f"    hidden {split.corners[ci]:22s} {err(ci):8.3f} {unit}")
+        # The measured and fitted values, not only their difference. An error
+        # alone cannot say WHICH of these is happening, and they need opposite
+        # fixes: a fit that misses a curve, or a corner whose measurement does
+        # not belong on the same curve as the rest (a different clock period or
+        # derate shifts every path by a constant, and then every basis is wrong
+        # by the same amount). Measured on the company drop: the whole candidate
+        # table came out at ~1490 ps, which no choice of order can explain.
+        t, q = y[:, ci], loo[:, ci]
+        sc = 1000.0 if field == "slack" else 1.0
+        print(f"    hidden {split.corners[ci]:22s} {err(ci):8.3f} {unit}"
+              f"   measured {float(np.nanmean(t)) * sc:10.1f}"
+              f"   base {float(np.nanmean(q)) * sc:10.1f}")
     if hid:
         v = np.array([err(c) for c in hid])
         print(f"    [hidden mean] {v.mean():8.3f} {unit}  (worst {v.max():.3f})")
@@ -1692,10 +1703,58 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
+    _print_slack_vs_voltage(y, split, measured, field)
     _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
         _print_basis_comparison(y, split, coords, cfg, hid)
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
+
+
+def _print_slack_vs_voltage(y, split, measured, field) -> None:
+    """The measured field against voltage, mean over paths, one row per voltage.
+
+    The curve the base is being asked to follow, in the one place it is being
+    asked to follow it. Held-out rows are marked. Reading it:
+
+      * the held-out row continues the trend, and the fit still misses it by a
+        lot -> the fit is the problem (order, variable, weighting).
+      * the held-out row is nowhere near the trend -- a cliff, or a sign flip --
+        -> no smooth continuation from the other rows can reach it, and the
+        honest answer is that this corner is not reachable by extrapolation
+        rather than that the fit needs tuning.
+      * the held-out row sits parallel to the trend, offset by a constant ->
+        the corner was measured under different conditions (clock period,
+        derate), which shifts every path equally. Check the cycle gap with
+        `run.sh check --file <that report>`.
+
+    Printed for every run because it costs nothing and it is the first thing
+    anyone asks for once a number looks wrong -- reconstructing it by hand from
+    the reports is what it replaces.
+    """
+    import numpy as np
+
+    if field != "slack":
+        return
+    vs = np.unique(np.round(split.vt[:, 0], 9))
+    if len(vs) < 2:
+        return
+    lv = np.unique(np.round(split.vt[:, 1], 9))
+    print("    [measured slack vs voltage]  mean over paths, ps"
+          + ("   (* = held out)" if not split.seen.all() else ""))
+    for v in vs:
+        cells = []
+        for l in lv:
+            hit = [ci for ci in range(split.vt.shape[0])
+                   if abs(round(split.vt[ci, 0], 9) - v) < 1e-9
+                   and abs(round(split.vt[ci, 1], 9) - l) < 1e-9]
+            if not hit or not measured[hit[0]]:
+                cells.append("%12s" % "-")
+                continue
+            ci = hit[0]
+            cells.append("%11.1f%s" % (float(np.nanmean(y[:, ci])) * 1000.0,
+                                       " " if split.seen[ci] else "*"))
+        print("     %6.3f V %s" % (v, "".join(cells)))
+    print("              " + "".join("%12s" % ("lv %+.2f" % l) for l in lv))
 
 
 def _print_seen_fit(y, phi, split, field, unit) -> None:

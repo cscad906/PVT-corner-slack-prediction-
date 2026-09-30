@@ -160,6 +160,54 @@ def test_base_switches_reach_the_engine(tmp_path, monkeypatch, capsys):
     assert "skipped (< base.min_loo_dof=4)" not in lo
 
 
+def test_base_prints_the_curve_it_is_asked_to_follow(tmp_path, monkeypatch, capsys):
+    """The base stage must print the measured value and the fitted value at each
+    held-out corner, and the measured field against voltage.
+
+    Without them an error is a dead end: 1490 ps at every candidate order could
+    be a fit that misses a curve, a corner measured under different conditions
+    (which shifts every path by a constant and makes every basis wrong by the
+    same amount), or a corner that no smooth continuation can reach. Those need
+    opposite fixes and the difference is visible only in the values.
+
+    The planted field is monotone in voltage, so the printed rows must be too,
+    and the held-out row must be marked and must carry a measurement.
+    """
+    levels, hidden = TWO
+    _run(tmp_path, monkeypatch, levels, hidden)
+    out = capsys.readouterr().out
+
+    hid = [l for l in out.splitlines() if l.strip().startswith("hidden SSPG")]
+    assert hid, out
+    for line in hid:
+        assert "measured" in line and "base" in line, line
+        # The error is the mean of the per-path gaps; the two printed numbers
+        # are means. Per-path gaps of opposite sign cancel in the means, so the
+        # gap between them can only be SMALLER -- never larger. A fitted value
+        # further from the measured one than the reported error would mean the
+        # three numbers do not come from the same corner.
+        f = line.split()
+        e, meas, fit = float(f[2]), float(f[5]), float(f[7])
+        assert abs(fit - meas) <= e + 0.05, line
+        assert meas > 0, line              # the planted field is positive
+
+    block = [l for l in out.splitlines() if l.strip().endswith("V")
+             or " V " in l and "measured slack" not in l]
+    rows = [l for l in out.splitlines()
+            if l.strip()[:1].isdigit() and " V " in l]
+    assert len(rows) == len(VOLTS), rows
+    vals = [float(x.rstrip("*")) for l in rows for x in l.split("V")[1].split()]
+    assert all(v > 0 for v in vals), rows
+    # the planted curve rises with voltage, so the printed means must
+    firsts = [float(l.split("V")[1].split()[0].rstrip("*")) for l in rows]
+    assert firsts == sorted(firsts), firsts
+    # the held-out row is the one marked, and only it
+    marked = [l for l in rows if "*" in l]
+    assert len(marked) == len({v for v, _ in hidden}), marked
+    for l in marked:
+        assert ("%.3f" % hidden[0][0]) in l or ("%.3f" % hidden[1][0]) in l, l
+
+
 def test_unknown_base_key_is_an_error(tmp_path, monkeypatch):
     with pytest.raises(AssertionError, match="unknown base key"):
         _run(tmp_path, monkeypatch, *THREE, base={"min_loo_doff": 2})
