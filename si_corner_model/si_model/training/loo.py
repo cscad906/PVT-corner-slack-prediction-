@@ -381,13 +381,96 @@ def fit_field(y, phi, split, coords, cfg, force_mode: "str | None" = None):
     return loo, None
 
 
+def _mode_gap(col):
+    """The clock period a corner was measured at: the most common positive
+    capture-minus-launch gap over paths. Multicycle paths carry k*T, so the
+    mode is T for any grid where single-cycle paths are not the minority."""
+    v = np.asarray(col, float)
+    v = v[np.isfinite(v) & (v > 1e-12)]
+    if not len(v):
+        return None                      # hold: both edges are the same edge
+    vals, cnt = np.unique(np.round(v, 6), return_counts=True)
+    return float(vals[int(np.argmax(cnt))])
+
+
+def period_offset(ds, split: Split, cfg: dict):
+    """[N, C] the part of slack that is the CLOCK PLAN rather than the circuit,
+    to subtract before fitting and add back to any fitted value. None when
+    there is nothing to do.
+
+    setup slack = T - (sum of delays) + skew - U. T is a design choice, so a
+    grid measured at one period per voltage -- which is what DVFS does, slower
+    clock at lower voltage -- is a grid where the field being fitted is
+    T(V) - delay(V). Only the second term is a smooth function of the corner.
+    Inside the measured range a polynomial absorbs the first one silently;
+    outside it, extrapolating means extrapolating somebody's frequency plan,
+    and every candidate basis then misses by the SAME constant. Measured on the
+    company drop: ~1490 ps at every order, and the lowest voltage's measured
+    slack came out HIGHER than the next one up -- slack improving as voltage
+    falls, which only a relaxed clock can do.
+
+    The correction is exact, not a model::
+
+        slack(T') = slack(T) + N * (T' - T)          N = that path's cycles
+
+    so every corner is moved to the reference corner's period, the fit sees the
+    circuit alone, and the offset is added back afterwards so that every number
+    reported is still the slack at that corner's own period.
+
+    This reads the clock EDGES, not the slack: the period is an input to the
+    timing run, known before any measurement, so using a held-out corner's
+    period is not using its label. A corner with no report at all (a pure query
+    coordinate) has no period to read, and is reported at the reference period
+    unless --period / --freq says otherwise.
+
+    Off by ``base.period_norm: off``. Requires cycle_gap in the cache, which
+    needs a build with a parser that reads the clock edge lines.
+    """
+    if str(cfg["base"].get("period_norm", "auto")) == "off":
+        return None
+    gap = ds.get("cycle_gap") if hasattr(ds, "get") else None
+    if gap is None:
+        return None
+    gap = np.asarray(gap, float)
+    if gap.ndim != 2 or gap.shape[1] != split.vt.shape[0] or not np.isfinite(gap).any():
+        return None
+    T = [_mode_gap(gap[:, c]) for c in range(gap.shape[1])]
+    T_ref = T[split.ref_ci]
+    if T_ref is None:
+        return None                      # hold, or no edges at the anchor
+    have = [t for t in T if t is not None]
+    if max(have) - min(have) <= 1e-9:
+        return None                      # one period everywhere: nothing to fix
+    off = np.zeros_like(gap)
+    for c, t in enumerate(T):
+        if t is None:
+            continue                     # hold column: period-independent
+        n = np.where(np.isfinite(gap[:, c]), gap[:, c] / t, 0.0)
+        off[:, c] = n * (t - T_ref)
+    if not _base_quiet():
+        print("[PERIOD] the grid is not measured at one clock period "
+              "(%.4f .. %.4f ns). Fitting the slack every corner WOULD have at "
+              "%.4f ns (the anchor's period) and adding each corner's own "
+              "N*(T-Tref) back afterwards -- exact, so reported slacks are "
+              "unchanged. base.period_norm: off disables it."
+              % (min(have), max(have), T_ref), flush=True)
+    return off
+
+
 def compute_base(ds, split: Split, cfg: dict) -> BaseArtifacts:
-    phi, coords, exps, _ = build_design(cfg, split, y=ds["slack"])
-    slack_loo, picks = fit_field(ds["slack"], phi, split, coords, cfg)
+    off = period_offset(ds, split, cfg)
+    y = ds["slack"] if off is None else ds["slack"] - off
+    phi, coords, exps, _ = build_design(cfg, split, y=y)
+    slack_loo, picks = fit_field(y, phi, split, coords, cfg)
     si_loo, _ = fit_field(ds["si_label"], phi, split, coords, cfg)
     if picks and not _base_quiet():
         print("[BASE-ADAPTIVE] per-corner bandwidth picks: "
               + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)),
               flush=True)
+    if off is not None:
+        # back to the slack each corner actually has, so everything downstream
+        # -- the residual the network learns, the predictions, the reports --
+        # is in the same units as the measurements, with no flag to remember
+        slack_loo = slack_loo + off
     resid = ds["slack"] - slack_loo
     return BaseArtifacts(phi, coords, exps, slack_loo, resid, si_loo)

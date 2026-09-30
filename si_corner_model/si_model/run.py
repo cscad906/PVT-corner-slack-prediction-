@@ -1129,7 +1129,7 @@ BASE_KEYS = frozenset((
     "weighting", "cross_terms", "cross_max_degree", "select", "min_loo_dof",
     "bandwidth", "adaptive_grid", "adaptive_k", "adaptive_amp_ratio",
     "adaptive_clip_frac", "fit_level_values", "level_fit_margin", "level_coords", "select_on",
-    "v_transform",
+    "v_transform", "period_norm",
 ))
 
 
@@ -1350,6 +1350,7 @@ def expand(p: dict) -> "list[dict]":
                 "level_coords": str(bt.get("level_coords", "measured")),
                 "select_on": str(bt.get("select_on", "hidden")),
                 "v_transform": str(bt.get("v_transform", "none")),
+                "period_norm": str(bt.get("period_norm", "auto")),
                 "fit_level_values": bool(bt.get("fit_level_values", False)),
                 "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),
@@ -1368,6 +1369,9 @@ def expand(p: dict) -> "list[dict]":
             assert base["v_transform"] in ("auto",) + AXIS_TRANSFORMS, (
                 f"{design} temp {tag}: base.v_transform must be one of "
                 f"{('auto',) + AXIS_TRANSFORMS}, got {base['v_transform']!r}")
+            assert base["period_norm"] in ("auto", "off"), (
+                f"{design} temp {tag}: base.period_norm must be auto or off, "
+                f"got {base['period_norm']!r}")
             assert str(bt.get("select_on", "hidden")) in ("hidden", "seen_loo", "edge"), (
                 f"{design} temp {tag}: base.select_on must be hidden, edge or "
                 f"seen_loo, got {bt.get('select_on')!r}")
@@ -1638,17 +1642,28 @@ def stage_base(m: dict) -> None:
     Run it right after build to catch a mis-parsed grid before spending GPU time.
     """
     import numpy as np
-    from si_model.training.loo import build_design, fit_field, make_split
+    from si_model.training.loo import (build_design, fit_field, make_split,
+                                       period_offset)
 
     cfg = m["cfg"]
     ds = dict(np.load(cfg["data"]["cache"]))
     field = "slack" if "slack" in ds else "slew"
-    y = ds[field]
+    native = ds[field]
     measured = (np.asarray(ds["measured"], bool) if "measured" in ds
                 else np.ones(ds["vt"].shape[0], bool))
     split = make_split(ds["corners"].tolist(), ds["vt"], cfg, measured=measured)
+    # The same normalisation compute_base does, so this stage scores the base
+    # that training will actually fit. Errors are identical either way (the
+    # offset cancels in a difference); what changes is the FIT, which is the
+    # whole point. `native` is kept for the diagnostics that must show the
+    # slack as measured.
+    off = period_offset(ds, split, cfg) if field == "slack" else None
+    y = native if off is None else native - off
     phi, coords, _, _ = build_design(cfg, split, y=y)
     loo, picks = fit_field(y, phi, split, coords, cfg)
+    if off is not None:
+        loo = loo + off
+        y = native
     if not _base_loud():
         # This stage is diagnostic only: it writes nothing, and train fits its
         # own base. Under `all` it still runs (asked for: compute unchanged)
@@ -2588,6 +2603,13 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     K = len(req)
     vals = np.full((tr.N, K), np.nan)
     truth = np.full((tr.N, K), np.nan)      # measured slack where there is one
+    # The clock period of the corner that answers each column, so a later shift
+    # to another period starts from the right place. A queried coordinate has no
+    # report and so no period of its own -- nan, and it is quoted at the anchor's.
+    from si_model.training.loo import _mode_gap
+    gap_full = tr.ds.get("cycle_gap")
+    gap_full = None if gap_full is None else np.asarray(gap_full, float)
+    per_T = [float("nan")] * K
     kinds = []
     ex_ci, ex_col, q_m, q_b, q_col = [], [], [], [], []
     for k, (v, l) in enumerate(req):
@@ -2599,6 +2621,9 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
         if hit:
             kinds.append("seen" if tr.split.seen[hit[0]] else "hidden")
             ex_ci.append(hit[0]); ex_col.append(k)
+            if gap_full is not None and gap_full.shape[1] > hit[0]:
+                t = _mode_gap(gap_full[:, hit[0]])
+                per_T[k] = float("nan") if t is None else t
         else:
             kinds.append("interp" if vmin - 1e-9 <= v <= vmax + 1e-9 else "extrap")
             q_m.append([v, frame[l][0]]); q_b.append([v, frame[l][1]]); q_col.append(k)
@@ -2622,10 +2647,10 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     pidx = tr.ds.get("path_idx")
     pidx = (np.arange(len(keys)) if pidx is None
             else np.asarray(pidx, np.int64))
-    return keys, pidx, vals, kinds, (vmin, vmax), gap, truth
+    return keys, pidx, vals, kinds, (vmin, vmax), gap, truth, per_T
 
 
-def _apply_period(m: dict, gap, vals, period: "float | None"):
+def _apply_period(m: dict, gap, vals, period: "float | None", per_T=None):
     """Shift every prediction to another clock period, in place.
 
     T enters the slack equation once, as the capture edge's time, and no delay
@@ -2661,6 +2686,23 @@ def _apply_period(m: dict, gap, vals, period: "float | None"):
         return gap, None, None
     vals_, counts = np.unique(np.round(pos, 6), return_counts=True)
     base_T = float(vals_[int(np.argmax(counts))])
+    # One period for the whole grid is an assumption, and it is false on a grid
+    # measured at one period per voltage. The shift below would then start every
+    # column from the same place and be wrong by N*(T_column - base_T) -- a
+    # plausible number, silently. The exact form needs each column's own period,
+    # which is a change to how the report carries periods; until then this
+    # refuses instead of guessing. The base FIT is not affected: it normalises
+    # per corner (see loo.period_offset).
+    if period is not None and per_T is not None:
+        seen_T = [t for t in per_T if np.isfinite(t)]
+        if seen_T and max(seen_T) - min(seen_T) > 1e-9:
+            raise AssertionError(
+                "--period / --freq on a grid whose corners were measured at "
+                "DIFFERENT clock periods (%.4f .. %.4f ns). Shifting them all "
+                "from one period would be wrong by N*(T_corner - T) per column. "
+                "Predict without --period/--freq (each corner is reported at "
+                "its own period), or ask for the per-corner version to be built."
+                % (min(seen_T), max(seen_T)))
     if period is not None:
         shift = np.where(np.isfinite(gap), gap, 0.0) * (period / base_T - 1.0)
         vals += shift[:, None] * 1000.0                      # ns -> ps
@@ -2867,8 +2909,8 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             print("  skipped: --at/--sweep supports slack models only", flush=True)
             continue
         try:
-            keys, pidx, vals, kinds, (vmin, vmax), gap, truth = _predict_one_model(
-                m, req, weights)
+            (keys, pidx, vals, kinds, (vmin, vmax), gap, truth,
+             per_T) = _predict_one_model(m, req, weights)
             sel = None if only is None else only.get(m["name"], set())
             if sel is not None and not sel:
                 # e.g. `--corners hidden` where this model holds nothing out
@@ -2881,7 +2923,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                         kinds[k] = "n/a"
                         vals[:, k] = np.nan
                         truth[:, k] = np.nan
-            gap, base_T, eff_T = _apply_period(m, gap, vals, period)
+            gap, base_T, eff_T = _apply_period(m, gap, vals, period, per_T)
             # the measurement moves with the period by the same identity, so
             # comparing it against a shifted prediction stays honest
             if base_T is not None and period is not None:

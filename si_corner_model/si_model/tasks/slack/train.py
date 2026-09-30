@@ -842,7 +842,7 @@ class Trainer:
         """
         from si_model.config import axis_coords
         from si_model.model.base_ols import design_matrix
-        from si_model.training.loo import Split, fit_field
+        from si_model.training.loo import Split, fit_field, period_offset
 
         sp, dev = self.split, self.dev
         base_vt = np.asarray(base_vt, float).reshape(-1, self.A)
@@ -852,12 +852,25 @@ class Trainer:
         vt_aug = np.concatenate([np.asarray(sp.vt, float), base_vt], 0)
         co = axis_coords(self.cfg, vt_aug, vt_aug[sp.ref_ci])
         phi = design_matrix(co, self.base.exps)
+        # The same period normalisation compute_base applies, for the same
+        # reason: a grid measured at one clock period per voltage carries the
+        # frequency plan inside the field, and a fit that has to follow the plan
+        # cannot follow the circuit. Without this the coordinate path would keep
+        # the bug the evaluation path no longer has -- and predictions at a
+        # corner nobody measured are exactly where it would not be noticed.
         y = np.asarray(self.ds["slack"], float)
+        off = period_offset(self.ds, sp, self.cfg)
+        if off is not None:
+            y = y - np.asarray(off, float)
         y = np.concatenate([y, np.full((self.N, Q), np.nan)], 1)
         seen = np.concatenate([np.asarray(sp.seen, bool), np.zeros(Q, bool)])
         sp_aug = Split(list(sp.corners) + ["_query%d" % i for i in range(Q)],
                        vt_aug, seen, ~seen, sp.ref_ci)
         loo, _ = fit_field(y, phi, sp_aug, co, self.cfg)
+        # A queried coordinate has no report, so it has no period of its own:
+        # its value is the slack it would have at the ANCHOR's period, which is
+        # the frame the fit was normalised into. Ask for another with
+        # --period / --freq.
         base = loo[:, self.C:] * PS                                   # [N, Q]
 
         ref_m = np.asarray(self.ds["vt"][sp.ref_ci], float)

@@ -160,6 +160,137 @@ def test_base_switches_reach_the_engine(tmp_path, monkeypatch, capsys):
     assert "skipped (< base.min_loo_dof=4)" not in lo
 
 
+def _write_cache_with_clock(fp, levels, T_of):
+    """The same field as _write_cache, but measured at one clock period per
+    voltage: slack = T(V) - arrival, and cycle_gap carries T(V).
+
+    This is what a DVFS grid looks like -- slower clock at lower voltage -- and
+    what the company drop turned out to be.
+    """
+    pairs = [(v, l) for v in VOLTS for l in levels]
+    rng = np.random.RandomState(0)
+    arrival = np.asarray([[0.5 - 0.9 * (v - 0.685) - 1.2 * (v - 0.685) ** 2
+                           + 0.035 * TRUE[l] * (1 + 2.5 * (v - 0.685))
+                           for v, l in pairs]])
+    T = np.asarray([[T_of[v] for v, _ in pairs]])
+    slack = ((T - arrival) * np.ones((300, 1)) + rng.randn(300, 1) * 0.05
+             + rng.randn(300, len(pairs)) * 0.0015).astype(np.float32)
+    gap = (T * np.ones((300, 1))).astype(np.float32)
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    np.savez_compressed(
+        fp,
+        corners=np.asarray([corner_label(v, l, "SSPG") for v, l in pairs]),
+        vt=np.asarray([[v, {"rcmin": -1.0, "cmax": 0.0, "rcmax": 1.0}[l]]
+                       for v, l in pairs], np.float32),
+        slack=slack, si_label=np.zeros_like(slack), cycle_gap=gap,
+        measured=np.ones(len(pairs), bool),
+        path_keys=np.asarray(["p%d" % i for i in range(300)]))
+
+
+def test_period_normalisation_makes_the_clock_plan_irrelevant(tmp_path, monkeypatch,
+                                                              capsys):
+    """A grid measured at one clock period per voltage must give the same base
+    error as the same circuit measured at one period throughout.
+
+    slack = T - (delays), and T is a design choice. Fitting slack directly fits
+    T(V) - delay(V), so the frequency plan ends up inside the model: harmless
+    between the measured voltages, fatal outside them, where extrapolating means
+    extrapolating the plan. The fix is the identity slack(T') = slack(T) +
+    N*(T'-T), applied per corner before the fit and undone after, so this test
+    is an INVARIANCE: change only the plan and the error must not move.
+
+    Measured here: the same circuit under a flat 2.0 ns plan and under
+    3.0/2.1/2.0/2.0 gives the same held-out error to 0.2 ps with normalisation,
+    and 100x worse without it. The reported values stay native -- the measured
+    slack printed for a corner is the slack that corner has, not a rebased one.
+    """
+    levels, hidden = TWO
+    flat = {v: 2.0 for v in VOLTS}
+    dvfs = {0.5: 3.0, 0.54: 2.1, 0.6: 2.0, 0.685: 2.0}
+
+    def run(T_of, base=None, hide=hidden):
+        p = _project(tmp_path, levels, hide)
+        p["base"].update(base or {})
+        cfg_fp = tmp_path / "config.yaml"
+        cfg_fp.write_text(yaml.safe_dump(p), encoding="utf-8")
+        monkeypatch.setenv("SI_STAGE", "base")
+        monkeypatch.chdir(tmp_path)
+        m = expand(load_project(str(cfg_fp)))[0]
+        _write_cache_with_clock(m["cfg"]["data"]["cache"], levels, T_of)
+        stage_base(m)
+        return _hidden(capsys)
+
+    # hold out the LOWEST voltage row, which is where the plan matters
+    low = [[0.5, l] for l in levels]
+    e_flat, _ = run(flat, hide=low)
+    e_dvfs, out = run(dvfs, hide=low)
+    e_off, _ = run(dvfs, base={"period_norm": "off"}, hide=low)
+
+    assert "[PERIOD]" in out, out
+    assert abs(e_dvfs - e_flat) < 0.2, (e_flat, e_dvfs)
+    assert e_off > 20 * max(e_dvfs, 1.0), (e_dvfs, e_off)
+
+    # and the numbers printed are the slack each corner really has: the 0.5 V
+    # row was measured at 3.0 ns, so its mean measured slack must be ~1 ns
+    # HIGHER than the flat-plan version, not normalised away
+    hid_lines = [l for l in out.splitlines() if l.strip().startswith("hidden SSPG")]
+    assert hid_lines, out
+    meas = [float(l.split()[5]) for l in hid_lines]
+    assert all(mv > 1000.0 for mv in meas), hid_lines
+    assert "clock 3.0000 ns" in out and "clock 2.0000 ns" in out
+    assert "NOT THE SAME AT EVERY VOLTAGE" in out
+
+
+def test_compute_base_returns_native_slack_not_the_rebased_fit(tmp_path, monkeypatch):
+    """The training path normalises to fit and must convert BACK.
+
+    compute_base feeds two things forward: base_hat, which every prediction is
+    built on, and resid, which is what the network is taught to correct. If the
+    offset is not added back, both silently become "slack at the anchor's
+    period" while every measurement, report and summary stays at each corner's
+    own -- a whole-nanosecond error that no test of the base stage would see,
+    because that stage adds it back separately.
+
+    So this asserts on the numbers compute_base hands over, not on what is
+    printed: at a corner measured with a 1 ns longer clock, base_hat has to sit
+    ~1 ns higher, and the residual has to stay small.
+    """
+    from si_model.training.loo import compute_base, make_split
+
+    levels, _ = TWO
+    dvfs = {0.5: 3.0, 0.54: 2.1, 0.6: 2.0, 0.685: 2.0}
+    p = _project(tmp_path, levels, [[0.5, l] for l in levels])
+    cfg_fp = tmp_path / "config.yaml"
+    cfg_fp.write_text(yaml.safe_dump(p), encoding="utf-8")
+    monkeypatch.setenv("SI_STAGE", "base")
+    monkeypatch.chdir(tmp_path)
+    m = expand(load_project(str(cfg_fp)))[0]
+    _write_cache_with_clock(m["cfg"]["data"]["cache"], levels, dvfs)
+
+    ds = dict(np.load(m["cfg"]["data"]["cache"]))
+    split = make_split(ds["corners"].tolist(), ds["vt"], m["cfg"])
+    art = compute_base(ds, split, m["cfg"])
+
+    lo = [ci for ci in range(len(split.corners))
+          if abs(float(split.vt[ci, 0]) - 0.5) < 1e-9]
+    hi = [ci for ci in range(len(split.corners))
+          if abs(float(split.vt[ci, 0]) - 0.685) < 1e-6]   # vt is float32
+    assert lo and hi
+    for ci in lo:
+        meas = float(np.mean(ds["slack"][:, ci]))
+        fit = float(np.mean(art.base_hat[:, ci]))
+        # measured at 3.0 ns against the anchor's 2.0: the native value is a
+        # whole nanosecond above the rebased one, and base_hat must be the
+        # native one
+        assert abs(fit - meas) < 0.05, (fit, meas)
+        assert abs(fit - (meas - 1.0)) > 0.5, (fit, meas)
+    assert float(np.max(np.abs(art.resid))) < 0.05, float(np.max(np.abs(art.resid)))
+    # the anchor's own period needs no shift, so nothing moved there
+    for ci in hi:
+        assert abs(float(np.mean(art.base_hat[:, ci]))
+                   - float(np.mean(ds["slack"][:, ci]))) < 0.05
+
+
 def test_base_prints_the_curve_it_is_asked_to_follow(tmp_path, monkeypatch, capsys):
     """The base stage must print the measured value and the fitted value at each
     held-out corner, and the measured field against voltage.

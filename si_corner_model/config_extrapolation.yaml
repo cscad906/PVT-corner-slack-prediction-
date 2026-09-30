@@ -454,6 +454,39 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
+  period_norm: auto                 # auto = when the grid was measured at one
+                                    #   clock period per voltage (DVFS: slower
+                                    #   clock at lower V), move every corner to
+                                    #   the anchor's period before fitting and
+                                    #   add each corner's own N*(T-Tref) back
+                                    #   after. off = fit the slack as measured.
+                                    #   Why it matters: setup slack is
+                                    #   T - (delays) + skew - U, and T is a
+                                    #   DESIGN CHOICE. Fitting slack directly
+                                    #   fits T(V) - delay(V), so the frequency
+                                    #   plan ends up inside the model. Between
+                                    #   measured voltages a polynomial absorbs
+                                    #   it; OUTSIDE them, extrapolating means
+                                    #   extrapolating somebody's frequency plan,
+                                    #   and every candidate order then misses by
+                                    #   the same constant.
+                                    #   Measured on the company drop: ~1490 ps at
+                                    #   every order, and the lowest voltage's
+                                    #   measured slack came out HIGHER than the
+                                    #   next one up -- slack improving as voltage
+                                    #   falls, which only a relaxed clock can do.
+                                    #   Synthetic reproduction, same circuit,
+                                    #   clock plan the only difference:
+                                    #     off  857 ps    auto  7.9 ps
+                                    #   The correction is the exact identity
+                                    #   slack(T') = slack(T) + N*(T'-T), not a
+                                    #   model, so nothing is estimated and every
+                                    #   number reported stays the slack at that
+                                    #   corner's own period.
+                                    #   Needs cycle_gap in the cache (a build
+                                    #   whose parser reads the clock edge lines).
+                                    #   `run.sh base` prints the period per
+                                    #   voltage and says when it is not flat.
   v_transform: auto                 # MEASURED here, not none: extrapolating is
                                     #   exactly the case where the variable
                                     #   matters. Read the [VAXIS] lines -- they
