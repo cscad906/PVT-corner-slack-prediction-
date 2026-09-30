@@ -1117,7 +1117,10 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
     assert any("_rcmin" in c for c in labels_m)
     for pp in (paths, paths_m):
         assert list(pp) == sorted(pp), "paths must be in FIXED_PATH idx order"
-    assert list(summ) == ["mean predicted slack (ps)", "mean measured slack (ps)",
+    # the period every number under it is quoted at comes first: on a grid
+    # measured at one period per voltage the columns are not all at the same one
+    assert list(summ) == ["clock period (ns)",
+                          "mean predicted slack (ps)", "mean measured slack (ps)",
                           "mean absolute error (ps)", "worst absolute error (ps)",
                           "WNS predicted (ps)", "WNS measured (ps)",
                           "WNS error (ps)", "WNS error (%)",

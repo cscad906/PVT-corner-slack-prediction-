@@ -1718,14 +1718,14 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
-    _print_slack_vs_voltage(y, split, measured, field, ds.get("cycle_gap"))
+    _print_slack_vs_voltage(y, split, measured, field, ds.get("cycle_gap"), cfg)
     _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
         _print_basis_comparison(y, split, coords, cfg, hid)
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
 
 
-def _print_slack_vs_voltage(y, split, measured, field, gap=None) -> None:
+def _print_slack_vs_voltage(y, split, measured, field, gap=None, cfg=None) -> None:
     """The measured field against voltage, mean over paths, one row per voltage.
 
     The curve the base is being asked to follow, in the one place it is being
@@ -1767,8 +1767,17 @@ def _print_slack_vs_voltage(y, split, measured, field, gap=None) -> None:
         return
     lv = np.unique(np.round(split.vt[:, 1], 9))
     gap = None if gap is None else np.asarray(gap, float)
+    # Column headings are the LEVEL NAMES. They used to be the axis coordinates
+    # ("lv +0.00"), which nobody can map back to cmax or rcmax while reading a
+    # screen over the phone -- and that is exactly when this table is read.
+    names = {}
+    for n, c in ((cfg or {}).get("base", {}).get("axes", [{}, {}])[1]
+                 .get("levels") or {}).items():
+        names[round(float(c), 9)] = str(n)
+    head = [names.get(round(float(l), 9), "lv %+.2f" % l) for l in lv]
     print("    [measured slack vs voltage]  mean over paths, ps"
           + ("   (* = held out)" if not split.seen.all() else ""))
+    print("     %6s %s" % ("", "".join("%12s" % h for h in head)))
     clocks = []
     for v in vs:
         cells, gv = [], []
@@ -1792,7 +1801,6 @@ def _print_slack_vs_voltage(y, split, measured, field, gap=None) -> None:
         print("     %6.3f V %s%s" % (v, "".join(cells),
                                      "" if not np.isfinite(clk)
                                      else "    clock %.4f ns" % clk))
-    print("              " + "".join("%12s" % ("lv %+.2f" % l) for l in lv))
     fin = [c for c in clocks if np.isfinite(c)]
     if not fin:
         print("     (clock: this cache has no edge times -- re-run build to "
@@ -2605,7 +2613,8 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     truth = np.full((tr.N, K), np.nan)      # measured slack where there is one
     # The clock period of the corner that answers each column, so a later shift
     # to another period starts from the right place. A queried coordinate has no
-    # report and so no period of its own -- nan, and it is quoted at the anchor's.
+    # report and so no period of its own: it is quoted at the anchor's, which is
+    # the period the base was normalised into.
     from si_model.training.loo import _mode_gap
     gap_full = tr.ds.get("cycle_gap")
     gap_full = None if gap_full is None else np.asarray(gap_full, float)
@@ -2632,13 +2641,26 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
         truth[:, ex_col] = tr.slack_ps.cpu().numpy()[:, np.asarray(ex_ci)]
     if q_m:
         vals[:, q_col] = tr.predict_coords(np.asarray(q_m), np.asarray(q_b))
-    # capture edge - launch edge, per path (ns). One period for a single-cycle
-    # setup check, N for a multicycle one, 0 for hold. Changing the clock
-    # period scales it, and that is the WHOLE effect on slack: no delay in the
-    # path knows what the period is, so slack(T') = slack(T) + gap*(T'/T - 1).
-    gap = tr.ds.get("cycle_gap")
-    gap = (None if gap is None
-           else np.asarray(np.nanmedian(np.asarray(gap, float), axis=1)))
+    # How many clock periods each path spans, and what period each answering
+    # corner was measured at. Both are needed because the grid can be measured
+    # at one period per voltage: then "the period" is not one number, and
+    # shifting every column from a single one is wrong by N*(T_column - T).
+    #
+    # N is a property of the PATH (a multicycle exception), not of the corner,
+    # so it is read once from the anchor column -- the corner every grid has
+    # seen -- rather than averaged across corners, which mixes periods.
+    gap_all = tr.ds.get("cycle_gap")
+    n_cycles = None
+    if gap_all is not None:
+        gap_all = np.asarray(gap_all, float)
+        ref = tr.split.ref_ci
+        T_anchor = _mode_gap(gap_all[:, ref]) if gap_all.shape[1] > ref else None
+        if T_anchor:
+            n_cycles = np.where(np.isfinite(gap_all[:, ref]),
+                                gap_all[:, ref] / T_anchor, 0.0)
+            per_T = [T_anchor if not np.isfinite(t) else t for t in per_T]
+        else:
+            per_T = [float("nan")] * K
 
     keys = [str(x) for x in tr.ds["path_keys"]]
     # The report's own path number -- `### FIXED_PATH idx=<n>` -- which is how
@@ -2647,11 +2669,11 @@ def _predict_one_model(m: dict, req: list, weights: "str | None" = None):
     pidx = tr.ds.get("path_idx")
     pidx = (np.arange(len(keys)) if pidx is None
             else np.asarray(pidx, np.int64))
-    return keys, pidx, vals, kinds, (vmin, vmax), gap, truth, per_T
+    return keys, pidx, vals, kinds, (vmin, vmax), n_cycles, truth, per_T
 
 
-def _apply_period(m: dict, gap, vals, period: "float | None", per_T=None):
-    """Shift every prediction to another clock period, in place.
+def _retime(vals, truth, n_cycles, per_T, period: "float | None", verbose=True):
+    """Put every column at the requested clock period, exactly. In place.
 
     T enters the slack equation once, as the capture edge's time, and no delay
     in the path depends on it -- cells do not know the clock. So for a path
@@ -2659,76 +2681,77 @@ def _apply_period(m: dict, gap, vals, period: "float | None", per_T=None):
 
         slack(T') = slack(T) + N * (T' - T)
 
-    exactly, not approximately. It costs a subtraction, not a prediction. A
-    hold check has both edges on the SAME edge, so N = 0 and nothing moves --
-    which is the right answer (hold is not frequency dependent) and needs no
-    special case.
+    exactly, not approximately: a subtraction, not a prediction.
 
-    Returns (gap, base period, effective period). The base period is read off
-    the data as the most common gap, so multicycle paths scale by their own N;
-    the effective one is the period the returned slacks belong to. Both are
-    needed: N comes from the gap measured at the BASE period, while a frequency
-    limit has to be read against the period the numbers are quoted at.
+    The period is PER COLUMN, because the grid can be measured at one period per
+    voltage (DVFS). Each column starts from its own T and is moved to T', so a
+    request for 500 MHz means 500 MHz everywhere, whatever each corner was
+    measured at. Doing this from one global period instead was wrong by
+    N*(T_column - T) per column -- a plausible number, silently.
+
+    The MEASUREMENT is moved by the same identity, so a prediction and the
+    measurement it is compared against are always quoted at the same period and
+    the error does not move. Retiming cannot improve an error and is not meant
+    to: it changes what question the number answers, not how well it is answered.
+
+    A queried coordinate has no period of its own and arrives quoted at the
+    anchor's, which is the period the base is normalised into.
+
+    Returns the period each column is quoted at, one per column. None when the
+    cache carries no clock edges (then a request for one is an error) or when
+    every gap is zero (hold: both edges are the same edge, so nothing moves).
     """
     import numpy as np
 
-    if gap is None or not np.isfinite(gap).any():
+    if n_cycles is None or per_T is None or not np.isfinite(n_cycles).any():
         assert period is None, (
-            "--period needs the clock edge times, which this cache was built "
-            "before the parser read. Re-run build for this model.")
-        return gap, None, None
-    pos = gap[np.isfinite(gap) & (gap > 1e-12)]
-    if not len(pos):                      # hold: every gap is zero
-        if period is not None:
-            print(f"  --period has no effect here: every path's launch and "
-                  f"capture edge are the same edge (a hold check is not "
-                  f"frequency dependent)", flush=True)
-        return gap, None, None
-    vals_, counts = np.unique(np.round(pos, 6), return_counts=True)
-    base_T = float(vals_[int(np.argmax(counts))])
-    # One period for the whole grid is an assumption, and it is false on a grid
-    # measured at one period per voltage. The shift below would then start every
-    # column from the same place and be wrong by N*(T_column - base_T) -- a
-    # plausible number, silently. The exact form needs each column's own period,
-    # which is a change to how the report carries periods; until then this
-    # refuses instead of guessing. The base FIT is not affected: it normalises
-    # per corner (see loo.period_offset).
-    if period is not None and per_T is not None:
-        seen_T = [t for t in per_T if np.isfinite(t)]
-        if seen_T and max(seen_T) - min(seen_T) > 1e-9:
-            raise AssertionError(
-                "--period / --freq on a grid whose corners were measured at "
-                "DIFFERENT clock periods (%.4f .. %.4f ns). Shifting them all "
-                "from one period would be wrong by N*(T_corner - T) per column. "
-                "Predict without --period/--freq (each corner is reported at "
-                "its own period), or ask for the per-corner version to be built."
-                % (min(seen_T), max(seen_T)))
-    if period is not None:
-        shift = np.where(np.isfinite(gap), gap, 0.0) * (period / base_T - 1.0)
-        vals += shift[:, None] * 1000.0                      # ns -> ps
-        print(f"  clock period {base_T:.4f} -> {period:.4f} ns "
-              f"({1000.0 / base_T:.1f} -> {1000.0 / period:.1f} MHz)", flush=True)
-    return gap, base_T, (period if period is not None else base_T)
+            "--period / --freq needs the clock edge times, which this cache was "
+            "built before the parser read. Re-run build for this model.")
+        return None
+    if not np.any(np.asarray(n_cycles, float) > 1e-9):
+        if period is not None and verbose:
+            print("  --period has no effect here: every path's launch and "
+                  "capture edge are the same edge (a hold check is not "
+                  "frequency dependent)", flush=True)
+        return None
+    n = np.where(np.isfinite(n_cycles), n_cycles, 0.0)
+    eff = [float(t) for t in per_T]
+    if period is None:
+        return eff
+    for k, t in enumerate(eff):
+        if not np.isfinite(t):
+            continue
+        d = n * (period - t) * 1000.0                        # ns -> ps
+        vals[:, k] += d
+        truth[:, k] += d
+        eff[k] = float(period)
+    if verbose:
+        was = sorted({round(float(t), 4) for t in per_T if np.isfinite(t)})
+        print("  clock period %s -> %.4f ns  (%s -> %.1f MHz)"
+              % ("/".join("%.4f" % t for t in was), period,
+                 "/".join("%.1f" % (1000.0 / t) for t in was),
+                 1000.0 / period), flush=True)
+    return eff
 
 
-def _fmax_mhz(col, gap, base_T, eff_T):
+def _fmax_mhz(col, n_cycles, eff_T):
     """Highest clock frequency at which no path at this corner violates.
 
     A path with N cycles reaches zero slack at T = eff_T - slack/N, where the
     slack is the one quoted at eff_T, and the corner is limited by the largest
-    of those. The two periods are not interchangeable: N is gap/base_T, fixed
-    when the reports were written, while the zero crossing is measured from the
-    period the numbers are quoted at. Using base_T for both made the answer
-    depend on which period was asked for -- 626 / 557 / 716 MHz for the same
-    corner at 2.0 / 1.8 / 2.2 ns -- when a frequency limit cannot.
+    of those. N and eff_T are not interchangeable: N is how many periods the
+    path spans, fixed when the reports were written, while the zero crossing is
+    measured from the period the number is quoted at. Using one for both made
+    the answer depend on which period was asked for -- 626 / 557 / 716 MHz for
+    the same corner at 2.0 / 1.8 / 2.2 ns -- when a frequency limit cannot.
 
     Paths with N = 0 (hold) cannot be limited by frequency and are left out.
     """
     import numpy as np
 
-    if base_T is None or gap is None:
+    if n_cycles is None or eff_T is None or not np.isfinite(eff_T):
         return float("nan"), None
-    n = gap / base_T
+    n = np.asarray(n_cycles, float)
     ok = np.isfinite(col) & np.isfinite(n) & (n > 1e-9)
     if not ok.any():
         return float("nan"), None
@@ -2740,7 +2763,7 @@ def _fmax_mhz(col, gap, base_T, eff_T):
     return 1000.0 / t_min, int(np.where(ok)[0][i])
 
 
-def _summary_rows(vals, truth, kinds, keep, gap, base_T, eff_T, n_paths, f1):
+def _summary_rows(vals, truth, kinds, keep, n_cycles, eff_T, n_paths, f1):
     """The per-corner block, as (label, [one string per kept corner]).
 
     One place, so the file and anything else that shows it cannot drift apart.
@@ -2757,8 +2780,16 @@ def _summary_rows(vals, truth, kinds, keep, gap, base_T, eff_T, n_paths, f1):
         e = np.abs(vals[:, k] - truth[:, k])
         return float(f(e[np.isfinite(e)])) if np.isfinite(e).any() else np.nan
 
-    rows = [("mean predicted slack (ps)",
-             col(lambda k: float(np.nanmean(vals[:, k]))))]
+    rows = []
+    # The period each column is quoted at, first, because every number under it
+    # means something different at a different period -- and on a grid measured
+    # at one period per voltage the columns are NOT all at the same one.
+    if eff_T is not None and any(np.isfinite(eff_T[k]) for k in keep):
+        rows.append(("clock period (ns)",
+                     ["%.4f" % eff_T[k] if fin[k] and np.isfinite(eff_T[k])
+                      else "" for k in keep]))
+    rows.append(("mean predicted slack (ps)",
+                 col(lambda k: float(np.nanmean(vals[:, k])))))
     if any(fin[k] and np.isfinite(truth[:, k]).any() for k in keep):
         rows.append(("mean measured slack (ps)",
                      col(lambda k: float(np.nanmean(truth[:, k]))
@@ -2798,7 +2829,8 @@ def _summary_rows(vals, truth, kinds, keep, gap, base_T, eff_T, n_paths, f1):
                  col(lambda k: float(vals[:, k][vals[:, k] < 0].sum()))))
     rows.append(("paths with negative slack (out of %d)" % n_paths,
                  [str(int((vals[:, k] < 0).sum())) if fin[k] else "" for k in keep]))
-    fm = [_fmax_mhz(vals[:, k], gap, base_T, eff_T)[0] if fin[k] else np.nan
+    fm = [_fmax_mhz(vals[:, k], n_cycles,
+                    None if eff_T is None else eff_T[k])[0] if fin[k] else np.nan
           for k in keep]
     if any(np.isfinite(x) for x in fm):
         rows.append(("max clock frequency (MHz)",
@@ -2820,11 +2852,11 @@ def _write_predict_report(fp, labels, keep, grp, temp, period, weights, f1) -> N
     # under the paths in vim. The summary labels are the longest text in the
     # file, so they set the width too -- sizing on the path keys alone pushed
     # the longest label's values out of line with everything above them.
-    blocks = [(g, _summary_rows(g[3], g[8], g[4], keep, g[5], g[6], g[7],
+    blocks = [(g, _summary_rows(g[3], g[7], g[4], keep, g[5], g[6],
                                 len(g[1]), f1)) for g in grp]
-    n_idx = max([4] + [len(str(int(x))) for _, _, pidx, _, _, _, _, _, _ in grp
+    n_idx = max([4] + [len(str(int(x))) for _, _, pidx, _, _, _, _, _ in grp
                        for x in pidx])
-    n_path = min(70, max([12] + [len(k) for _, keys, _, _, _, _, _, _, _ in grp
+    n_path = min(70, max([12] + [len(k) for _, keys, _, _, _, _, _, _ in grp
                                  for k in keys]
                          + [len(l) - n_idx - 1 for _, rows in blocks
                             for l, _ in rows]))
@@ -2845,18 +2877,25 @@ def _write_predict_report(fp, labels, keep, grp, temp, period, weights, f1) -> N
         f.write("Temperature : %s\n" % temp)
         f.write("Designs     : %s\n"
                 % ", ".join(g[0]["design"] for g in grp))
-        base_T = grp[0][6]
-        if period is not None and base_T:
-            f.write("Clock       : %.4f -> %.4f ns  (%.1f -> %.1f MHz)\n"
-                    % (base_T, period, 1000.0 / base_T, 1000.0 / period))
-        elif base_T:
-            f.write("Clock       : %.4f ns  (%.1f MHz)   as reported\n"
-                    % (base_T, 1000.0 / base_T))
+        # One period, or one per corner -- say which. A grid measured at one
+        # period per voltage has no single "the clock", and printing one would
+        # be a claim about every column.
+        eff = [t for g in grp if g[6] is not None
+               for k, t in enumerate(g[6]) if k in keep and np.isfinite(t)]
+        if eff and max(eff) - min(eff) <= 1e-9:
+            T = eff[0]
+            f.write("Clock       : %.4f ns  (%.1f MHz)%s\n"
+                    % (T, 1000.0 / T,
+                       "   as requested" if period is not None else "   as reported"))
+        elif eff:
+            f.write("Clock       : per corner, %.4f .. %.4f ns  (%.1f .. %.1f "
+                    "MHz)   as reported -- see the clock row below\n"
+                    % (min(eff), max(eff), 1000.0 / max(eff), 1000.0 / min(eff)))
         if weights:
             f.write("Weights     : %s\n" % weights)
         f.write("Corners     : %s\n" % ", ".join(labels))
         f.write("*" * 72 + "\n")
-        for (m, keys, pidx, vals, kinds, gap, base_T, eff_T, truth), srows in blocks:
+        for (m, keys, pidx, vals, kinds, n_cycles, eff_T, truth), srows in blocks:
             f.write("\nDesign: %s\n\n" % m["design"])
             f.write(row("idx", "path", labels) + "\n")
             f.write(row("", "", ["slack (ps)"] * len(labels)) + "\n")
@@ -2909,7 +2948,7 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             print("  skipped: --at/--sweep supports slack models only", flush=True)
             continue
         try:
-            (keys, pidx, vals, kinds, (vmin, vmax), gap, truth,
+            (keys, pidx, vals, kinds, (vmin, vmax), n_cycles, truth,
              per_T) = _predict_one_model(m, req, weights)
             sel = None if only is None else only.get(m["name"], set())
             if sel is not None and not sel:
@@ -2923,19 +2962,17 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
                         kinds[k] = "n/a"
                         vals[:, k] = np.nan
                         truth[:, k] = np.nan
-            gap, base_T, eff_T = _apply_period(m, gap, vals, period, per_T)
             # the measurement moves with the period by the same identity, so
-            # comparing it against a shifted prediction stays honest
-            if base_T is not None and period is not None:
-                truth += (np.where(np.isfinite(gap), gap, 0.0)
-                          * (period / base_T - 1.0))[:, None] * 1000.0
+            # a prediction and the measurement it is compared against are always
+            # quoted at the same period (see _retime -- it moves both)
+            eff_T = _retime(vals, truth, n_cycles, per_T, period)
         except Exception as e:
             failed.append((f"predict:{m['name']}", repr(e)))
             traceback.print_exc()
             print(f"!!!!! FAILED predict: {m['name']} -- continuing", flush=True)
             continue
         N = len(keys)
-        show_f = base_T is not None
+        show_f = eff_T is not None
         print("  %-13s  %15s  %17s  %22s%s" % (
             "corner", "smallest slack", "sum of negatives", "paths with slack < 0",
             "   max clock" if show_f else ""))
@@ -2943,12 +2980,13 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             col = vals[:, k]
             if kinds[k] == "n/a" or not np.isfinite(col).any():
                 continue                       # this model has no such corner
-            fm = _fmax_mhz(col, gap, base_T, eff_T)[0] if show_f else float("nan")
+            fm = (_fmax_mhz(col, n_cycles, eff_T[k])[0] if show_f
+                  else float("nan"))
             print("  %-13s  %12.1f ps  %14.1f ps  %13d / %-6d%s" % (
                 c, float(np.nanmin(col)), float(col[col < 0].sum()),
                 int((col < 0).sum()), N,
                 ("  %8.1f MHz" % fm) if np.isfinite(fm) else ""), flush=True)
-        results.append((m, keys, pidx, vals, kinds, gap, base_T, eff_T, truth))
+        results.append((m, keys, pidx, vals, kinds, n_cycles, eff_T, truth))
     if not results:
         return [], failed
 
@@ -3177,7 +3215,29 @@ def _print_corner_table(rows: list) -> None:
 
 
 # ----------------------------------------------------------------------- main
+def _die_quietly_on_closed_pipe() -> None:
+    """`run.sh base | grep ...` and `| head` must not end in a traceback.
+
+    Python turns SIGPIPE into an exception, so a reader that stops early --
+    head, or grep -m, or a terminal scroll closed by hand -- gets
+    BrokenPipeError out of whatever print was in flight, printed as a crash in
+    the middle of a run that actually succeeded. Every other tool in a pipeline
+    just stops. Restoring the default handler makes this one behave the same.
+
+    Guarded because SIGPIPE does not exist everywhere; on such a platform the
+    exception is what there is, and the run is unaffected either way.
+    """
+    import signal
+
+    if hasattr(signal, "SIGPIPE"):
+        try:
+            signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        except (ValueError, OSError):
+            pass                       # not the main thread, or not permitted
+
+
 def main(argv=None):
+    _die_quietly_on_closed_pipe()
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=STAGES, nargs="?", default="help")
