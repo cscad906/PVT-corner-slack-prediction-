@@ -18,6 +18,11 @@
 
     두 파일은 이름에서 뗀 <코너> 로 짝짓는다.
 
+    리포트가 setup/ 이 아닌 폴더(예: setup_old/)에 있으면 --subdir 로 준다.
+    결과는 그래도 <out>/<mode>/ (setup/) 에 쓴다 -- 모델이 읽는 모양 그대로.
+
+        python3 7b_drop.py --root <회로폴더> --subdir setup_old --pattern u_mem
+
 만드는 것 (--out 을 줬을 때만)
     <out>/<mode>/report.<코너>.rpt        입력과 같은 이름
     <out>/<mode>/xtalk/xt.<코너>.rpt      입력과 같은 이름
@@ -64,7 +69,8 @@
 
 옵션
     --root <폴더>     6_collect.py 에 --out 으로 줬던 폴더 (그 아래 <mode>/ 가 있다)
-    --mode setup|hold (기본 setup)
+    --mode setup|hold (기본 setup). 결과 폴더 이름도 이것이다
+    --subdir <이름>   --root 아래에서 읽을 폴더 (기본 = --mode). 예: setup_old
     --pattern <글자>  뺄 이름. 여러 번 줄 수 있다
     --by path|ends    판정 범위 (기본 path)
     --out <폴더>      주면 뺀 사본을 만든다. 안 주면 세기만 한다
@@ -101,11 +107,13 @@ NAME_STOP = b"/ \t\r\n()"
 CODE_INFO = {
     "E-ARGS":     ("--pattern is empty",
                    "give the name to drop, e.g. --pattern u_mem"),
-    "E-NOROOT":   ("<root>/<mode> does not exist",
-                   "give the folder you passed to 6_collect.py --out "
-                   "(the one ABOVE setup/ or hold/), and the right --mode."),
-    "E-NOTHING":  ("no report.<corner>.rpt in <root>/<mode>",
-                   "run 6_collect.py first, or check --root / --mode."),
+    "E-NOROOT":   ("the folder to read does not exist",
+                   "--root is the folder ABOVE setup/. If the reports sit in "
+                   "another folder (e.g. setup_old/), add --subdir <that name>. "
+                   "Folders that hold reports are listed above, if any."),
+    "E-NOTHING":  ("no report.<corner>.rpt in the folder read",
+                   "check --root / --subdir. Folders that hold reports are "
+                   "listed above, if any."),
     "E-NOMARK":   ("an annotation file has no '### FIXED_PATH' block",
                    "this tool drops whole path blocks, so the file must come "
                    "from fixed_paths.tcl. Check the file named above."),
@@ -353,6 +361,40 @@ def list_corners(mdir):
     return dict((c, tuple(v)) for c, v in found.items())
 
 
+def has_reports(d):
+    try:
+        return any(corner_of(n, ANNOT_PRE, ANNOT_SUFS) for n in os.listdir(d))
+    except OSError:
+        return False
+
+
+def where_reports_are(root):
+    """못 찾았을 때 붙일 안내 줄. root 바로 아래에서 리포트가 든 폴더를 찾아
+    --subdir 로 줄 이름을 알려 준다. root 자체에 있으면 그 위를 주라고 한다."""
+    lines = []
+    if not os.path.isdir(root):
+        return lines
+    found = [n for n in sorted(os.listdir(root))
+             if os.path.isdir(os.path.join(root, n)) and has_reports(os.path.join(root, n))]
+    if found:
+        lines.append("")
+        lines.append("  report.<corner>.rpt files are in these folders under --root:")
+        for n in found[:10]:
+            lines.append("    %-24s ->  --subdir %s" % (n, quote(n)))
+    if has_reports(root):
+        parent = os.path.dirname(os.path.abspath(root.rstrip("/\\")))
+        lines.append("")
+        lines.append("  --root itself holds the reports. Give the folder above it:")
+        lines.append("    --root %s --subdir %s"
+                     % (quote(parent), quote(os.path.basename(os.path.abspath(root)))))
+    return lines
+
+
+def quote(s):
+    """안내 줄에 찍을 인자. 빈칸이 있으면 따옴표로 감싼다 (setup old)."""
+    return "'%s'" % s if (" " in s or "\t" in s) else s
+
+
 def corner_of(name, pre, sufs):
     """'report.<코너>.rpt' -> '<코너>'. 이름 규칙에 안 맞으면 None.
 
@@ -386,7 +428,11 @@ def main():
                     "files 6_collect.py gathered. Counts only, unless --out is given.")
     ap.add_argument("--root", required=True,
                     help="the folder given to 6_collect.py --out (holds <mode>/)")
-    ap.add_argument("--mode", default="setup", choices=["setup", "hold"])
+    ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
+                    help="setup or hold. The output folder is named after it")
+    ap.add_argument("--subdir", metavar="NAME",
+                    help="folder under --root to read (default: same as --mode), "
+                         "e.g. setup_old. Output still goes to <out>/<mode>/")
     ap.add_argument("--pattern", action="append", default=[], metavar="TEXT",
                     help="name to drop (plain text, case-sensitive). Repeatable")
     ap.add_argument("--by", default="path", choices=["path", "ends"],
@@ -406,13 +452,16 @@ def main():
     if not pats:
         code("E-ARGS", "  [ FAILED ] no --pattern given.")
 
-    mdir = os.path.join(args.root, args.mode)
+    sub = args.subdir or args.mode
+    mdir = os.path.join(args.root, sub)
     if not os.path.isdir(mdir):
-        code("E-NOROOT", "  [ FAILED ] not a folder: %s" % os.path.abspath(mdir))
+        code("E-NOROOT", *(["  [ FAILED ] not a folder: %s" % os.path.abspath(mdir)]
+                           + where_reports_are(args.root)))
     corners = list_corners(mdir)
     if not any(a for a, _ in corners.values()):
-        code("E-NOTHING", "  [ FAILED ] no %s<corner>.rpt in %s"
-             % (ANNOT_PRE, os.path.abspath(mdir)))
+        code("E-NOTHING", *(["  [ FAILED ] no %s<corner>.rpt in %s"
+                             % (ANNOT_PRE, os.path.abspath(mdir))]
+                            + where_reports_are(args.root)))
 
     out_mdir = None
     if args.out:
@@ -557,9 +606,10 @@ def main():
     if not out_mdir:
         print("")
         print("  nothing was written. To write the copy without these paths:")
-        print("    python3 7b_drop.py --root %s --mode %s %s%s --out <folder>"
-              % (args.root, args.mode,
-                 " ".join("--pattern %s" % show(p) for p in pats),
+        print("    python3 7b_drop.py --root %s --mode %s%s %s%s --out <folder>"
+              % (quote(args.root), args.mode,
+                 " --subdir %s" % quote(args.subdir) if args.subdir else "",
+                 " ".join("--pattern %s" % quote(show(p)) for p in pats),
                  "" if args.by == "path" else " --by ends"))
         finish(issues, "OK-DROPCOUNT")
         return
