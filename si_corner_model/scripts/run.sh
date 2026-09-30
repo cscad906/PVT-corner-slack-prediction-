@@ -9,6 +9,10 @@
 #   bash scripts/run.sh train --design cpu  # one circuit / one temperature
 #   bash scripts/run.sh predict --corners all
 #
+#   bash scripts/run.sh train --config config_extrapolation.yaml
+#                                           # the extrapolation experiment:
+#                                           # -> runs/extrapolation/<mode>/
+#
 # To use a different python:  env PY=/path/to/python bash scripts/run.sh all
 #   (the `PY=... bash ...` prefix form is bash/zsh only. It does not work in
 #    csh/tcsh -- use env as above, or `setenv PY /path/to/python` first.)

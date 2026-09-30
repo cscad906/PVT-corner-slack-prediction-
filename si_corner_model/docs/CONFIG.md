@@ -26,6 +26,7 @@ base(OLS) 튜닝은 [OLS.md](OLS.md), 리포트 파싱은 [PARSING.md](PARSING.m
 | `temps[].token` | `tag` | **파일명 안의** 온도 토큰. tag 와 달라도 됨 |
 | `temps[].levels` | — | 그 온도에 존재하는 BEOL 레벨. **온도마다 달라도 된다** |
 | `mode` | `setup` | **setup/hold 를 정하는 한 줄.** 읽을 폴더(`files.subdir`, `files.crosstalk_subdir`)와 쓸 폴더(`out.*`)가 전부 여기서 유도된다. 한 번만 바꿔 돌리려면 파일을 고치지 말고 `run.sh <단계> --mode hold` (또는 `env SI_MODE=hold`) |
+| `out.tag` | `""` | 비우면 꺼짐. 이름을 주면 출력이 `runs/<tag>/<mode>/...` 로 간다 (**mode 위 단계**라 setup/hold 는 그 아래에서 계속 갈린다). 같은 리포트를 다른 seen/hidden 으로 실험할 때, 기존 결과를 덮지 않게 하는 스위치. `config_extrapolation.yaml` 이 이걸 `extrapolation` 으로 쓴다. 일회성은 `--tag <이름>`. **캐시는 태그 안 붙는다** (dataset.npz 는 분할과 무관해서 실험끼리 공유) |
 | `out.cache` | `auto` | `auto` = `cache/<mode>/<design>/<temp>/dataset.npz` |
 | `out.runs` | `auto` | `auto` = `runs/<mode>/<design>/<temp>/` + `runs/<mode>/_all/` |
 | `files.subdir` | `auto` | `auto` = `<mode>`. 폴더명이 다르면 직접 적는다 (`reports`) |

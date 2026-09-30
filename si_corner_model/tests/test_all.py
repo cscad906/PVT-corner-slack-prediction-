@@ -1283,6 +1283,124 @@ def _report_keys(fp):
     return out
 
 
+def _deep_diff(a, b, at=""):
+    """Dotted paths where two parsed configs differ. Lists compare by index."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b)):
+            for d in _deep_diff(a.get(k, KeyError), b.get(k, KeyError),
+                                "%s.%s" % (at, k) if at else str(k)):
+                yield d
+    elif (isinstance(a, list) and isinstance(b, list)
+          and len(a) == len(b) and any(isinstance(x, dict) for x in a)):
+        for i, (x, y) in enumerate(zip(a, b)):
+            for d in _deep_diff(x, y, "%s.%d" % (at, i)):
+                yield d
+    elif a != b:
+        yield at
+
+
+def test_out_tag_puts_the_experiment_above_the_mode(real_tree, tmp_path, monkeypatch):
+    """out.tag: a second config writes to runs/<tag>/<mode>/ instead of
+    runs/<mode>/.
+
+    Above the mode, not beside it: setup and hold still split underneath, so an
+    experiment cannot be half-overwritten by a later `--mode hold` run. The
+    cache is deliberately NOT tagged -- dataset.npz does not depend on the
+    seen/hidden split, so two experiments share one parse instead of costing a
+    second full build.
+    """
+    from si_model.run import _predict_files, expand, load_project, select
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def project(**over):
+        p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+        p["designs"] = ["boomcore"]
+        p.update(over)
+        return p
+
+    plain = select(expand(project()), design="boomcore", temp="125")[0]
+    assert plain["cfg"]["train"]["out_dir"] == os.path.join("runs", "setup",
+                                                            "boomcore", "125")
+
+    tagged = select(expand(project(out={"tag": "extrapolation"})),
+                    design="boomcore", temp="125")[0]
+    assert tagged["cfg"]["train"]["out_dir"] == os.path.join(
+        "runs", "extrapolation", "setup", "boomcore", "125")
+    # same cache: nothing to rebuild for the second experiment
+    assert tagged["cfg"]["data"]["cache"] == plain["cfg"]["data"]["cache"]
+
+    hold = select(expand(project(out={"tag": "extrapolation"}, mode="hold")),
+                  design="boomcore", temp="125")[0]
+    assert hold["cfg"]["train"]["out_dir"] == os.path.join(
+        "runs", "extrapolation", "hold", "boomcore", "125")
+
+    # the _all/ files (predict reports, merge) follow the tag too
+    p = project(out={"tag": "extrapolation"})
+    fp = _predict_files(p, "t", ["125"])["125"]
+    assert fp.startswith(os.path.join("runs", "extrapolation", "setup", "_all")), fp
+
+    # two ways of saying where output goes cannot both be set: out.runs
+    # replaces the whole runs/<tag>/<mode> path and would freeze the mode
+    with pytest.raises(AssertionError, match="out.tag and out.runs"):
+        expand(project(out={"tag": "extrapolation", "runs": "runs/elsewhere"}))
+    with pytest.raises(AssertionError, match="ONE directory name"):
+        expand(project(out={"tag": "runs/extrapolation"}))
+
+
+def test_extrapolation_config_is_config_yaml_plus_the_holdout():
+    """config_extrapolation.yaml is a COPY of config.yaml, so this pins down
+    exactly how much of a copy it is allowed to be.
+
+    A copy drifts: a fix to config.yaml that belongs in both quietly lands in
+    one, and then the experiment differs from the baseline for a reason nobody
+    chose. Every difference is listed here by key. A new one fails this test,
+    which is the signal to copy it across (or to list it here on purpose).
+
+    It also states the experiment itself: every circuit holds out its OWN
+    lowest voltage row and nothing else. The grids differ -- PERIC0 and MFC
+    start at 0.5 V, MIF at 0.475 -- so one global list carries both numbers and
+    a voltage that is not in a grid simply matches nothing there.
+    """
+    from si_model.run import expand, project_for
+
+    with open(os.path.join(REPO_ROOT, "config.yaml")) as f:
+        main = yaml.safe_load(f)
+    with open(os.path.join(REPO_ROOT, "config_extrapolation.yaml")) as f:
+        exp = yaml.safe_load(f)
+
+    assert sorted(_deep_diff(main, exp)) == [
+        "corners.hidden_voltages",
+        "designs.MFC_Timing_Report.temps.0.hidden_corners",
+        "designs.MFC_Timing_Report.temps.1.hidden_corners",
+        "designs.MIF_Timing_Report.temps.0.hidden_corners",
+        "designs.MIF_Timing_Report.temps.1.hidden_corners",
+        "out.tag",
+        "temps.0.hidden_corners",
+        "temps.1.hidden_corners",
+    ]
+    assert exp["out"]["tag"] == "extrapolation"
+    assert exp["corners"]["hidden_voltages"] == [0.5, 0.475]
+    assert exp["corners"]["hidden_corners"] == []          # unchanged, already empty
+    for t in exp["temps"]:
+        assert t["hidden_corners"] == []
+    for d in ("MFC_Timing_Report", "MIF_Timing_Report"):
+        for t in exp["designs"][d]["temps"]:
+            assert t["hidden_corners"] == []
+
+    # resolved: each circuit loses exactly its lowest voltage, at both temps
+    for m in expand(dict(exp)):
+        vs = [float(v) for v in project_for(exp, m["design"])["corners"]["voltages"]]
+        sp = m["cfg"]["split"]
+        hid = [v for v in vs
+               if any(abs(v - h) < 1e-9 for h in sp.get("hidden_voltages") or [])]
+        assert hid == [min(vs)], (m["name"], hid)
+        assert not sp["hidden_corners"] and not sp["hidden_levels"]
+        assert m["cfg"]["train"]["out_dir"].startswith(
+            os.path.join("runs", "extrapolation", "setup")), m["name"]
+
+
 def _read_report(fp):
     """Read a predict report back: (corner labels, {idx: [values]}, {label: [values]}).
 

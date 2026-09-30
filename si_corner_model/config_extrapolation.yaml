@@ -1,11 +1,37 @@
 # =============================================================================
-#  si_corner_model -- this is the only config file.
+#  si_corner_model -- EXTRAPOLATION EXPERIMENT config.
 #
-#  One model is generated automatically per (design, temperature) pair.
-#  3 circuits x 2 temperatures = 6 models, still from this one file.
+#  Not the main config. config.yaml is. This one asks a different question:
 #
-#    bash scripts/run.sh list      # see what would be built (touches nothing)
-#    bash scripts/run.sh all       # run everything
+#      train on 0.54 V and above, predict the lowest voltage
+#
+#  i.e. the WHOLE lowest-voltage row (every BEOL level) is held out, at every
+#  temperature, for every circuit, and nothing else is. That row is 0.5 V for
+#  PERIC0 and MFC and 0.475 V for MIF, which measures lower. The model never
+#  sees it, so predicting it is EXTRAPOLATION below the trained voltage range,
+#  not interpolation inside it like config.yaml's scattered holdout.
+#
+#    bash scripts/run.sh list    --config config_extrapolation.yaml   # check first
+#    bash scripts/run.sh train   --config config_extrapolation.yaml
+#    bash scripts/run.sh predict --config config_extrapolation.yaml
+#    bash scripts/run.sh merge   --config config_extrapolation.yaml
+#
+#  Results go to runs/extrapolation/<mode>/ -- see out.tag below -- so the main
+#  results in runs/<mode>/ are never touched. The CACHE is shared with the main
+#  config on purpose (dataset.npz does not depend on the seen/hidden split), so
+#  there is nothing to rebuild: run train directly. `all` would re-parse once,
+#  because this file is newer than the cache, and write the same bytes back.
+#
+#  THIS FILE IS A COPY of config.yaml. Only four things differ:
+#      out.tag                     extrapolation   (where output goes)
+#      corners.hidden_voltages     [0.5, 0.475]    (the whole row is hidden)
+#      temps[].hidden_corners      emptied         (3 places: here + MFC + MIF)
+#      the header you are reading
+#  Anything else that differs between the two files is drift, i.e. a bug.
+#  tests/test_all.py::test_extrapolation_config_is_config_yaml_plus_the_holdout
+#  compares them key by key and fails if a fifth difference appears, so a fix
+#  to config.yaml that belongs here cannot be silently missed -- but the fix
+#  still has to be COPIED here by hand.
 #
 #  Every key is documented in docs/CONFIG.md; base (OLS) tuning in docs/OLS.md;
 #  report parsing in docs/PARSING.md.
@@ -42,11 +68,11 @@ designs:
       - tag: "125"
         token: 125
         levels: [rcmax, cmax]
-        hidden_corners: [[0.5, cmax], [0.54, rcmax]]
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
       - tag: m25
         token: m25
         levels: [rcmax, cmax, rcmin]
-        hidden_corners: [[0.6, cmax], [0.685, rcmax], [0.76, rcmin]]
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
 
   MIF_Timing_Report:
     corners:
@@ -55,11 +81,11 @@ designs:
       - tag: "125"
         token: 125
         levels: [rcmax, cmax]
-        hidden_corners: [[0.54, cmax], [0.685, rcmax], [0.76, cmax]]
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
       - tag: m25
         token: m25
         levels: [rcmax, cmax, rcmin]
-        hidden_corners: [[0.475, rcmin], [0.6, cmax], [0.855, rcmin], [0.95, cmax]]
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
 
 _designs_note: |                    # (FYI) designs takes one of three forms:
                                     #
@@ -93,11 +119,11 @@ temps:                              # Temperature = split dimension (own model).
     # single global list cannot express this (125C has no rcmin).
     # Any holdout key from corners.* below applies to this temp only when
     # written here.
-    hidden_corners: [[0.54, rcmax], [0.6, cmax]]
+    hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
   - tag: m25
     token: m25
     levels: [rcmax, cmax, rcmin]
-    hidden_corners: [[0.5, cmax], [0.685, rcmin]]
+    hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
 
 # * setup or hold. This one line sets every read and write location.
 #   mode: setup  ->  read  <root>/<design>/setup/ , <root>/<design>/setup/xtalk/
@@ -151,25 +177,20 @@ run:
                                     #   the lines are in the way.
 
 out:                                # Rarely touched. auto = follows mode.
-  tag: ""                           # "" = off. A name here puts every output
-                                    #   under runs/<tag>/<mode>/ instead of
-                                    #   runs/<mode>/, so a SECOND config -- a
-                                    #   different seen/hidden split of the same
-                                    #   reports -- can run without overwriting
-                                    #   these results. It sits ABOVE the mode, so
-                                    #   setup and hold still split underneath.
-                                    #   See config_extrapolation.yaml, which sets
-                                    #   it to `extrapolation`. One-off:
-                                    #     run.sh all --tag extrapolation
-                                    #   The cache is NOT tagged: dataset.npz does
-                                    #   not depend on the split, so experiments
-                                    #   share one parse.
+  tag: extrapolation                # THE experiment switch: output goes to
+                                    #   runs/extrapolation/<mode>/... instead of
+                                    #   runs/<mode>/..., so this experiment and
+                                    #   the main run cannot overwrite each other.
+                                    #   It sits ABOVE the mode, so setup and hold
+                                    #   still split underneath (--mode hold ->
+                                    #   runs/extrapolation/hold/). The cache is
+                                    #   deliberately NOT tagged: it is the same
+                                    #   parse of the same reports.
   cache: auto                       # cache/<mode>/<design>/<temp>/dataset.npz
-  runs: auto                        # runs/<mode>/<design>/<temp>/ + runs/<mode>/_all/
-                                    #   Leave auto when using out.tag -- writing a
-                                    #   path here replaces the whole
-                                    #   runs/<tag>/<mode> and freezes the mode,
-                                    #   which is an error rather than a surprise
+                                    #   (shared with config.yaml -- no rebuild)
+  runs: auto                        # left auto: out.tag decides. Setting this by
+                                    #   hand would replace the whole
+                                    #   runs/<tag>/<mode> path and freeze the mode
 
 
 # --- 2. Corner definition and which corners to hide ------------- [REQUIRED] --
@@ -212,7 +233,23 @@ corners:
                                     #   voltage", chosen by rotating through the
                                     #   levels (scattered diagonally). The anchor
                                     #   corner is never chosen.
-  hidden_voltages: []               # Hide EVERY level of these voltages (whole row)
+  hidden_voltages: [0.5, 0.475]     # Hide EVERY level of these voltages (whole row)
+                                    #   THE experiment: the lowest voltage is held
+                                    #   out entirely, at every temperature and
+                                    #   every circuit, so the model is trained on
+                                    #   0.54 V and above and asked to reach BELOW
+                                    #   its own range.
+                                    #   Two numbers because the grids differ and a
+                                    #   voltage that is not in a grid matches
+                                    #   nothing: PERIC0 and MFC start at 0.5, MIF
+                                    #   starts at 0.475. So each circuit loses
+                                    #   exactly its own lowest row, and each one
+                                    #   trains from 0.54 V up.
+                                    #   Applies to every design, since designs
+                                    #   inherit these globals; the per-temperature
+                                    #   hidden_corners lists are emptied below so
+                                    #   that this is the ONLY holdout (the keys
+                                    #   take the union, not the last one written).
   seen_voltages: []                 # The other direction: only these are seen,
                                     #   every other voltage is hidden (for training
                                     #   a dense voltage grid from a sparse one)

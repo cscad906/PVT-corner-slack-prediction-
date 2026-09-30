@@ -570,6 +570,68 @@ designs:
 
 ---
 
+## 8.7 실험용 두 번째 config — 외삽 (`config_extrapolation.yaml`)
+
+같은 리포트로 **다른 질문**을 하고 싶을 때, config 를 고치는 게 아니라 **config 를
+하나 더** 만들어 놓고 `--config` 로 갈아 끼운다. 지금 들어 있는 건 외삽 실험이다.
+
+```
+bash scripts/run.sh list    --config config_extrapolation.yaml   # ← 먼저 이걸로 검산
+bash scripts/run.sh train   --config config_extrapolation.yaml
+bash scripts/run.sh predict --config config_extrapolation.yaml
+bash scripts/run.sh merge   --config config_extrapolation.yaml
+```
+
+**무엇이 다른가.** 기본 config 는 홀드아웃을 격자 **안쪽**에 흩어 놓는다 (같은 전압의
+다른 레벨이 seen 으로 남아 있다). 외삽 config 는 **가장 낮은 전압 행을 통째로** 숨긴다:
+
+| | 기본 `config.yaml` | `config_extrapolation.yaml` |
+|---|---|---|
+| 숨기는 것 | 온도별로 흩어진 2~4개 셀 | **최저 전압의 모든 레벨** (그것만) |
+| PERIC0 / MFC | 0.5 V 는 학습에 들어감 | 0.5 V 행 전체 히든 |
+| MIF | 0.475 V 는 학습에 들어감 | 0.475 V 행 전체 히든 (MIF 격자엔 0.5 가 없다) |
+| 묻는 것 | 범위 **안쪽** 내삽 | 학습 범위 **아래로** 외삽 → 0.54 V 이상만 보고 그 아래를 맞히기 |
+
+`corners.hidden_voltages: [0.5, 0.475]` 한 줄로 되어 있다. 격자에 없는 전압은 그냥
+아무것도 안 걸리므로, **회로마다 자기 최저 전압 하나씩** 빠진다. 대신 `temps[]` 안에
+온도별로 박혀 있던 `hidden_corners` 는 **여섯 군데 전부 비워** 두었다 (홀드아웃 키는
+합집합이라, 안 비우면 그것들도 같이 숨는다).
+
+**결과는 섞이지 않는다.** `out.tag: extrapolation` 때문에 전부 여기로 간다:
+
+```
+runs/extrapolation/setup/<회로>/<온도>/     ← 이 실험
+runs/extrapolation/setup/_all/
+runs/setup/<회로>/<온도>/                   ← 기존 결과, 손 안 댐
+```
+
+`mode` 보다 **위** 단계라서 `--mode hold` 도 그대로 동작한다
+(`runs/extrapolation/hold/...`). 일회성으로는 `--tag <이름>` 도 된다.
+
+**빌드는 다시 안 해도 된다.** `cache/` 는 태그가 안 붙는다 — dataset.npz 는 seen/hidden
+분할과 무관하고 (분할은 매 로드마다 config 에서 다시 계산) 같은 리포트를 같은 방식으로
+읽은 결과라, 기존 캐시를 그대로 쓴다. 그래서 위 예시가 `all` 이 아니라 `train` 부터
+시작한다. `all` 로 돌리면 이 파일이 캐시보다 새 파일이라 **한 번** 다시 파싱하고
+(몇 시간짜리) 같은 내용을 덮어쓴다. 그럴 필요 없다.
+
+**결과를 읽을 때 알아야 할 것 세 가지.**
+
+- seen 전압이 하나 줄어서 `base.v_order: auto` 도 같이 내려간다 (PERIC0 는 3 → 2).
+  남은 전압 점을 다항식이 정확히 지나가 버리므로, 0.5 V 값은 전적으로 **곡률 가정의
+  외삽**이다. `base: {v_order: 1}` (직선) 과 비교해 볼 가치가 크다
+- `base.select_on: hidden` 이 기본이라 basis·weighting 을 **평가 대상인 그 코너로**
+  고른다. 즉 이 숫자는 낙관적이다. 외삽 성능으로 보고할 거면 이 점을 같이 적어야 한다
+- 오차는 기본 config 보다 **훨씬 크게 나오는 게 정상이다.** 외삽이니까. 합성 데이터로
+  돌려 본 참고치: 내삽 MAE 0.35 ps → 외삽 MAE 6.6 ps
+
+**이 파일은 config.yaml 의 복사본이다.** 값이 다른 곳은 위에 적은 네 군데뿐이고,
+`tests/test_all.py::test_extrapolation_config_is_config_yaml_plus_the_holdout` 가
+두 파일을 키 단위로 비교해서 **다섯 번째 차이가 생기면 테스트가 깨진다.** 즉
+config.yaml 만 고치고 이 파일을 안 고치면 CI 가 알려준다 — 다만 **옮겨 적는 건 손으로**
+해야 한다.
+
+---
+
 ## 8.5 `Killed` 만 뜨고 이유가 안 남을 때
 
 `Killed` 는 SIGKILL 이다. **프로세스가 잡을 수 없어서 죽는 순간에는 아무것도 못 남긴다** —

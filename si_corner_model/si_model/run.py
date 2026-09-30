@@ -78,6 +78,10 @@ docs/START.md top to bottom.
                              where reports are READ and where output is
                              WRITTEN together, so setup results cannot be
                              overwritten by a hold run
+    --tag <name>             write to runs/<name>/<mode>/ instead of
+                             runs/<mode>/ -- a second experiment on the same
+                             reports without overwriting the first. Normally
+                             set once as out.tag in that experiment's config
     --corners hidden|seen|all   which corners predict/merge report (default
                                 hidden: the ones config holds out. No --at
                                 needed -- each model reports its own)
@@ -842,6 +846,36 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     return cfg
 
 
+def _runs_root(p: dict) -> str:
+    """Where this run writes: runs/<tag>/<mode> (no tag -> runs/<mode>).
+
+    The tag exists so a second config -- a different seen/hidden split of the
+    SAME data -- writes somewhere else entirely instead of overwriting the
+    first one's results. It sits ABOVE the mode segment on purpose: setup and
+    hold still split underneath it, so `--mode hold` keeps working inside the
+    experiment. Setting out.runs by hand would have to spell the mode out and
+    would freeze it, which is how a hold run overwrites a setup tree.
+    """
+    mode = str(p.get("mode") or "setup")
+    tag = _out_tag(p)
+    return _auto((p.get("out") or {}).get("runs"),
+                 "runs/%s/%s" % (tag, mode) if tag else "runs/%s" % mode)
+
+
+def _out_tag(p: dict) -> str:
+    tag = str((p.get("out") or {}).get("tag") or "").strip()
+    if not tag:
+        return ""
+    assert tag == os.path.basename(tag) and tag not in (".", ".."), (
+        "out.tag is ONE directory name that goes above the mode, e.g. "
+        "`extrapolation` -- not a path: %r" % tag)
+    assert _auto((p.get("out") or {}).get("runs"), "auto") == "auto", (
+        "out.tag and out.runs both set: out.runs replaces the whole "
+        "runs/<tag>/<mode> path, so only one of them can decide where output "
+        "goes. Keep out.runs: auto and let the tag do it.")
+    return tag
+
+
 def _auto(value, default: str) -> str:
     """``None`` / ``"auto"`` -> the mode-derived default; anything else is taken
     literally, so an odd layout can still pin its own path."""
@@ -894,8 +928,12 @@ def expand(p: dict) -> "list[dict]":
     # out let a hold run silently overwrite the setup cache and runs. One `mode`
     # line now sets all four.
     mode = str(p.get("mode") or "setup")
+    # The cache is NOT tagged: dataset.npz does not depend on the seen/hidden
+    # split (the split is re-derived from the config at every load), so two
+    # experiments on the same reports share one parse instead of costing hours
+    # of re-parsing and a second copy on disk.
     out_cache = _auto(p.get("out", {}).get("cache"), f"cache/{mode}")
-    out_runs = _auto(p.get("out", {}).get("runs"), f"runs/{mode}")
+    out_runs = _runs_root(p)
 
     models = []
     for design in list_designs(p):
@@ -2066,8 +2104,7 @@ def _predict_files(p: dict, name: str, temps: list) -> dict:
     """
     import re
 
-    out_dir = os.path.join(
-        _auto(p.get("out", {}).get("runs"), f"runs/{p.get('mode') or 'setup'}"), "_all")
+    out_dir = os.path.join(_runs_root(p), "_all")
     os.makedirs(out_dir, exist_ok=True)
     tag = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
 
@@ -2505,9 +2542,7 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
     The corner label carries voltage and BEOL level but NOT the temperature or
     the circuit -- those are the split dimensions -- so they become columns.
     """
-    out_dir = os.path.join(
-        _auto(p.get("out", {}).get("runs"),
-              f"runs/{p.get('mode') or 'setup'}"), "_all")
+    out_dir = os.path.join(_runs_root(p), "_all")
     os.makedirs(out_dir, exist_ok=True)
     out_fp = os.path.join(out_dir, f"predictions_{corners}.csv")
     header = None
@@ -2734,6 +2769,10 @@ def main(argv=None):
                     help="predict: use another circuit's trained model "
                          "(runs/<mode>/<circuit>/model.pt). This circuit's own "
                          "base is still fitted on its own reports")
+    ap.add_argument("--tag", default=None,
+                    help="write to runs/<tag>/<mode>/ instead of runs/<mode>/, "
+                         "for an experiment that must not overwrite the main "
+                         "results (normally set as out.tag in its own config)")
     ap.add_argument("--name", default=None,
                     help="predict: output file name "
                          "(default: made from the request)")
@@ -2771,6 +2810,8 @@ def main(argv=None):
     memlog.start()
     p = load_project(args.config)
     p["_config_path"] = os.path.abspath(args.config)
+    if args.tag:
+        p.setdefault("out", {})["tag"] = args.tag
     if args.mode:
         # Overriding here rather than editing the file keeps a hold run from
         # being left switched on by accident -- `mode` drives the cache and runs
