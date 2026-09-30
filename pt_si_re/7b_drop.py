@@ -8,14 +8,20 @@
     # 2) 뺀 사본을 만든다. 원본은 안 건드린다.
     python3 7b_drop.py --root deliver --mode setup --pattern u_mem --out deliver_nomem
 
-읽는 것 (6_collect.py 가 만든 모양 그대로)
+읽는 것 (--root 는 폴더다. setup/ 의 **위** 폴더를 준다)
+    <root>/<mode>/report.<코너>.rpt          annotation
+    <root>/<mode>/xtalk/xt.<코너>.rpt        crosstalk
+
+    6_collect.py 가 붙이는 긴 이름도 그대로 읽는다:
     <root>/<mode>/report.<코너>_fixed_annotated.rpt
     <root>/<mode>/xtalk/xt.<코너>.path_context_si_compact.by_path.rpt
 
+    두 파일은 이름에서 뗀 <코너> 로 짝짓는다.
+
 만드는 것 (--out 을 줬을 때만)
-    <out>/<mode>/report.<코너>_fixed_annotated.rpt                    같은 이름
-    <out>/<mode>/xtalk/xt.<코너>.path_context_si_compact.by_path.rpt  같은 이름
-    <out>/dropped_<mode>.idx                                          뺀 idx 목록
+    <out>/<mode>/report.<코너>.rpt        입력과 같은 이름
+    <out>/<mode>/xtalk/xt.<코너>.rpt      입력과 같은 이름
+    <out>/dropped_<mode>.idx              뺀 idx 목록
 
     모양이 입력과 같으므로 모델 쪽에서는 읽는 위치만 <out> 으로 바꾸면 된다.
 
@@ -80,9 +86,14 @@ IDXTAG = b"idx="
 MEASURED = b"Startpoint:"
 ENDS = (b"Startpoint:", b"Endpoint:")
 
-# 6_collect.py 가 붙이는 이름
-ANNOT_PRE, ANNOT_SUF = "report.", "_fixed_annotated.rpt"
-XTALK_PRE, XTALK_SUF = "xt.", ".path_context_si_compact.by_path.rpt"
+# 파일 이름 규칙. 꼬리는 긴 것부터 (corner_of 참고).
+#   6_collect.py 가 붙이는 이름 : report.<코너>_fixed_annotated.rpt
+#                                 xt.<코너>.path_context_si_compact.by_path.rpt
+#   현장 배치 이름              : report.<코너>.rpt / xt.<코너>.rpt
+ANNOT_PRE = "report."
+ANNOT_SUFS = ("_fixed_annotated.rpt", ".rpt")
+XTALK_PRE = "xt."
+XTALK_SUFS = (".path_context_si_compact.by_path.rpt", ".by_path.rpt", ".rpt")
 
 # 이름 표에서 이름이 끝나는 글자
 NAME_STOP = b"/ \t\r\n()"
@@ -93,7 +104,7 @@ CODE_INFO = {
     "E-NOROOT":   ("<root>/<mode> does not exist",
                    "give the folder you passed to 6_collect.py --out "
                    "(the one ABOVE setup/ or hold/), and the right --mode."),
-    "E-NOTHING":  ("no report.*_fixed_annotated.rpt in <root>/<mode>",
+    "E-NOTHING":  ("no report.<corner>.rpt in <root>/<mode>",
                    "run 6_collect.py first, or check --root / --mode."),
     "E-NOMARK":   ("an annotation file has no '### FIXED_PATH' block",
                    "this tool drops whole path blocks, so the file must come "
@@ -330,21 +341,30 @@ def cut(src, dst, drop, pats=None, ends_only=False):
 def list_corners(mdir):
     """{코너: (annotation 경로 또는 None, crosstalk 경로 또는 None)}"""
     found = {}
-    for n in sorted(os.listdir(mdir)):
-        p = os.path.join(mdir, n)
-        if (os.path.isfile(p) and n.startswith(ANNOT_PRE) and n.endswith(ANNOT_SUF)
-                and len(n) > len(ANNOT_PRE) + len(ANNOT_SUF)):
-            c = n[len(ANNOT_PRE):-len(ANNOT_SUF)]
-            found.setdefault(c, [None, None])[0] = p
-    xdir = os.path.join(mdir, "xtalk")
-    if os.path.isdir(xdir):
-        for n in sorted(os.listdir(xdir)):
-            p = os.path.join(xdir, n)
-            if (os.path.isfile(p) and n.startswith(XTALK_PRE) and n.endswith(XTALK_SUF)
-                    and len(n) > len(XTALK_PRE) + len(XTALK_SUF)):
-                c = n[len(XTALK_PRE):-len(XTALK_SUF)]
-                found.setdefault(c, [None, None])[1] = p
+    for slot, d, pre, sufs in ((0, mdir, ANNOT_PRE, ANNOT_SUFS),
+                               (1, os.path.join(mdir, "xtalk"), XTALK_PRE, XTALK_SUFS)):
+        if not os.path.isdir(d):
+            continue
+        for n in sorted(os.listdir(d)):
+            p = os.path.join(d, n)
+            c = corner_of(n, pre, sufs)
+            if c and os.path.isfile(p):
+                found.setdefault(c, [None, None])[slot] = p
     return dict((c, tuple(v)) for c, v in found.items())
+
+
+def corner_of(name, pre, sufs):
+    """'report.<코너>.rpt' -> '<코너>'. 이름 규칙에 안 맞으면 None.
+
+    꼬리는 긴 것부터 떼 본다. report.X_fixed_annotated.rpt 에서 .rpt 만 떼면
+    코너가 X_fixed_annotated 가 되어 crosstalk 쪽 X 와 짝이 안 맞는다.
+    """
+    if not name.startswith(pre):
+        return None
+    for s in sufs:
+        if name.endswith(s) and len(name) > len(pre) + len(s):
+            return name[len(pre):-len(s)]
+    return None
 
 
 def fmt_dur(sec):
@@ -391,8 +411,8 @@ def main():
         code("E-NOROOT", "  [ FAILED ] not a folder: %s" % os.path.abspath(mdir))
     corners = list_corners(mdir)
     if not any(a for a, _ in corners.values()):
-        code("E-NOTHING", "  [ FAILED ] nothing matching %s*%s in %s"
-             % (ANNOT_PRE, ANNOT_SUF, os.path.abspath(mdir)))
+        code("E-NOTHING", "  [ FAILED ] no %s<corner>.rpt in %s"
+             % (ANNOT_PRE, os.path.abspath(mdir)))
 
     out_mdir = None
     if args.out:
