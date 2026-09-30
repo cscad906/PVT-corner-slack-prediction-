@@ -426,21 +426,50 @@ def period_offset(ds, split: Split, cfg: dict):
     Off by ``base.period_norm: off``. Requires cycle_gap in the cache, which
     needs a build with a parser that reads the clock edge lines.
     """
-    if str(cfg["base"].get("period_norm", "auto")) == "off":
+    # Every way out of here SAYS SO. This returned None down five different
+    # paths without a word, and on the company machine one of them fired: the
+    # numbers came out identical with period_norm auto and off, which is exactly
+    # what "silently did nothing" looks like from outside, and nothing on screen
+    # could tell which path it was.
+    def _no(why):
+        if not _base_quiet():
+            print("[PERIOD] not normalising: %s" % why, flush=True)
         return None
+
+    if str(cfg["base"].get("period_norm", "auto")) == "off":
+        return _no("base.period_norm is off")
     gap = ds.get("cycle_gap") if hasattr(ds, "get") else None
     if gap is None:
-        return None
+        return _no("this cache has no cycle_gap -- it was built before the "
+                   "parser read the clock edge lines. Re-run build.")
     gap = np.asarray(gap, float)
-    if gap.ndim != 2 or gap.shape[1] != split.vt.shape[0] or not np.isfinite(gap).any():
-        return None
+    C = split.vt.shape[0]
+    if gap.ndim != 2:
+        return _no("cycle_gap has shape %r, expected [paths, corners]"
+                   % (gap.shape,))
+    if gap.shape[1] < C:
+        return _no("cycle_gap has %d corner columns but this grid has %d "
+                   "corners -- the cache does not match the config. Re-run build."
+                   % (gap.shape[1], C))
+    if gap.shape[1] > C:
+        # build pads the corner axis; the extra columns are not corners here
+        if not _base_quiet():
+            print("[PERIOD] cycle_gap carries %d columns for %d corners -- "
+                  "using the first %d" % (gap.shape[1], C, C), flush=True)
+        gap = gap[:, :C]
+    if not np.isfinite(gap).any():
+        return _no("every cycle_gap is NaN -- the parser found no clock edge "
+                   "lines in these reports. Check `run.sh check --file <report>`.")
     T = [_mode_gap(gap[:, c]) for c in range(gap.shape[1])]
     T_ref = T[split.ref_ci]
     if T_ref is None:
-        return None                      # hold, or no edges at the anchor
+        return _no("the anchor corner %s has no positive launch-to-capture gap "
+                   "(a hold check, or its edge lines were not parsed)"
+                   % split.corners[split.ref_ci])
     have = [t for t in T if t is not None]
     if max(have) - min(have) <= 1e-9:
-        return None                      # one period everywhere: nothing to fix
+        return _no("every corner was measured at the same period (%.4f ns) -- "
+                   "nothing to normalise" % T_ref)
     off = np.zeros_like(gap)
     for c, t in enumerate(T):
         if t is None:
