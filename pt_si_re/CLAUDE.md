@@ -26,6 +26,12 @@ crosstalk 은 Dist/Res/Cpin 을 안 씁니다. annotated 파일이 없어도 원
 `<폴더>_top<N>/` 에 만듭니다(원본은 안 건드립니다). **번호로 자르지 않습니다** —
 PT 가 못 잡은 경로는 그 idx 가 빠지므로 `idx <= N` 으로 걸면 N개보다 적게 남습니다.
 
+**이미 모은 뒤**에 특정 이름(예: `u_mem`)이 든 경로를 빼려면 `7b_drop.py` 를
+씁니다. `7_cut.py` 는 모으기 전 이름(`*_fixed_annotated.txt`)만 찾아서, 모은
+결과(`report.*.rpt`)에는 못 씁니다. `--out` 없이 돌리면 세기만 합니다. 뺄 경로는
+**annotation 만 보고** 정합니다(crosstalk 에는 aggressor 넷 이름이 섞여 있어서).
+정한 idx 목록은 **모든 코너의 두 파일에 똑같이** 적용합니다.
+
 ## 헷갈리기 쉬운 것들
 
 **`unique_contexts.tsv` 는 담당자분 쪽 산출물입니다.** `pt/xtalk_all.tcl` 이 PT
