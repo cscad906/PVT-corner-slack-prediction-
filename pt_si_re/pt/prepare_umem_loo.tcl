@@ -187,7 +187,10 @@ proc umem_loo::prepare {} {
     puts $fp {foreach record [dict get $::umem_loo_group_plan groups] {
     set dbs {}
     foreach member [dict get $record kept] { lappend dbs [lindex $member 1] }
-    define_scaling_lib_group $dbs
+    set failed [catch {define_scaling_lib_group $dbs} status]
+    if {$failed || $status ne "1"} {
+        error "UML-021: Target-excluded u_mem group definition failed: status=$status"
+    }
     puts "U_MEM LOO GROUP DEFINED: input_dbs=[llength $dbs] excluded=[dict get $record excluded] bracket=[dict get $record bracket]"
 }}
     close $fp

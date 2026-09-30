@@ -1629,8 +1629,9 @@ proc auto_scaling::define_missing_scalar_groups {scaling_sets} {
             error "U_MEM LOO: scalar set [dict get $scaling_set name] is only partly grouped ($grouped/[llength $dbs]); refusing to mix groups."
         }
         puts "U_MEM LOO: defining missing target-excluded scalar set [dict get $scaling_set name]"
-        if {[catch {define_scaling_lib_group $dbs} problem]} {
-            error "U_MEM LOO: scalar group creation failed ([dict get $scaling_set name]): $problem"
+        set failed [catch {define_scaling_lib_group $dbs} status]
+        if {$failed || $status ne "1"} {
+            error "U_MEM LOO: scalar group creation failed ([dict get $scaling_set name]): status=$status"
         }
     }
 }
@@ -2426,8 +2427,9 @@ proc auto_scaling::run_after_restore {cfg} {
             set set_name [dict get $scaling_set name]
             set dbs [dict get $scaling_set dbs]
             puts "DEFINE SCALING LIBRARY SET: $set_name"
-            if {[catch {define_scaling_lib_group $dbs} problem]} {
-                error "Scaling group creation failed ($set_name): $problem. Check that the DBs model the same cells/pins."
+            set failed [catch {define_scaling_lib_group $dbs} status]
+            if {$failed || $status ne "1"} {
+                error "Scaling group creation failed ($set_name): status=$status. Check that the DBs model the same cells/pins."
             }
         }
     }

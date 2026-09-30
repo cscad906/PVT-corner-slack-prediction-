@@ -65,7 +65,11 @@ proc add_to_collection {a b} { return $a }
 proc current_design {} { return TOP }
 set ::mock_active 1
 set ::mock_defs {}
-proc define_scaling_lib_group {dbs} { lappend ::mock_defs $dbs }
+set ::mock_define_status 1
+proc define_scaling_lib_group {dbs} {
+    lappend ::mock_defs $dbs
+    return $::mock_define_status
+}
 proc get_attribute {args} {
     set object [lindex $args end-1]
     set attr [lindex $args end]
@@ -110,11 +114,18 @@ source $generated
 assert [expr {[llength $::mock_defs] == 1 &&
     [lsort [lindex $::mock_defs 0]] eq {/fixture/hi.db /fixture/lo.db}}] \
     "Generated group includes target or misses source DB"
+set ::mock_define_status 0
+expect_error {source $generated} {UML-021:*}
+set ::mock_define_status 1
 
 set scalar [list [dict create name CORE dbs {/fixture/lo.db /fixture/hi.db}]]
 set ::mock_defs {}
 auto_scaling::define_missing_scalar_groups $scalar
 assert [expr {[llength $::mock_defs] == 1}] "Ungrouped scalar set was not defined"
+set ::mock_define_status 0
+expect_error {auto_scaling::define_missing_scalar_groups $scalar} \
+    {*scalar group creation failed*}
+set ::mock_define_status 1
 set ::mock_defs {}
 set ::mock_groups [dict create MEM_LO {MEM_LO MEM_HI} MEM_HI {MEM_LO MEM_HI}]
 auto_scaling::define_missing_scalar_groups $scalar

@@ -34,6 +34,9 @@ u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아�
 남아 있으면 `UM-015`로 중단**합니다. PrimeTime은 활성 그룹에서 라이브러리
 하나만 안전하게 빼는 명령을 제공하지 않습니다. 따라서 현재 full-group
 restore session에서 LOO timing을 바로 재실행할 수 없습니다.
+같은 라이브러리로 `define_scaling_lib_group`을 다시 호출해도 기존 그룹은
+교체되지 않습니다. 로컬 PrimeTime V-2023.12-SP4 검증에서는 `SLG-316`이
+출력되고 명령의 반환값이 `0`이었으며 그룹 내용은 그대로였습니다.
 
 먼저 일반 파일의 USER SETTINGS에 `FIXED_PATH_FILE`, `RESULT_FOLDER`,
 `VDDPE_SCALING_NAME_PATTERNS`, `TARGET_VDDPE_VOLTAGE` 및 다른 목표 조건을
