@@ -489,7 +489,9 @@ proc auto_scaling::corner {lib path overrides} {
 # 축인지 알 수 없습니다. 전체 loaded grid에서 각 후보가 이어지는 V/T 점 수를
 # 비교하여 결정하고, 여전히 동률이면 임의 선택 대신 그 library를 한 점 static
 # family로 보존합니다.
-proc auto_scaling::resolve_family_candidates {rows mode} {
+proc auto_scaling::resolve_family_candidates {rows mode {native_group_names {}}} {
+    set native_names [dict create]
+    foreach name $native_group_names { dict set native_names $name 1 }
     set support [dict create]
     set multi_rail_rows 0
     foreach row $rows {
@@ -511,6 +513,7 @@ proc auto_scaling::resolve_family_candidates {rows mode} {
     set resolved {}
     set grid_resolved 0
     set static_ambiguous 0
+    set native_ambiguous 0
     foreach row $rows {
         if {[dict exists $row family_candidates]} {
             set candidates [dict get $row family_candidates]
@@ -555,14 +558,20 @@ proc auto_scaling::resolve_family_candidates {rows mode} {
             incr grid_resolved
         } else {
             dict set row family "__MULTIRAIL_STATIC__/[string tolower [dict get $row lib_name]]"
-            dict set row family_resolution ambiguous_static
-            incr static_ambiguous
-            puts "MULTI-RAIL AMBIGUOUS -> STATIC: LIB=[dict get $row lib_name] voltage_tokens=[dict get $row voltage_tokens]"
+            if {[dict exists $native_names [dict get $row lib_name]]} {
+                dict set row family_resolution ambiguous_native_group
+                incr native_ambiguous
+                puts "MULTI-RAIL NAME AMBIGUOUS -> NATIVE GROUP: LIB=[dict get $row lib_name] (scalar filename family unused)"
+            } else {
+                dict set row family_resolution ambiguous_static
+                incr static_ambiguous
+                puts "MULTI-RAIL AMBIGUOUS -> STATIC: LIB=[dict get $row lib_name] voltage_tokens=[dict get $row voltage_tokens]"
+            }
         }
         lappend resolved $row
     }
     if {$multi_rail_rows} {
-        puts "MULTI-RAIL NAME ANALYSIS: rows=$multi_rail_rows grid_resolved=$grid_resolved ambiguous_static=$static_ambiguous"
+        puts "MULTI-RAIL NAME ANALYSIS: rows=$multi_rail_rows grid_resolved=$grid_resolved native_group=$native_ambiguous ambiguous_static=$static_ambiguous"
     }
     return $resolved
 }
@@ -647,10 +656,12 @@ proc auto_scaling::native_umem_scope {supply cfg} {
         error "UM-021: Cannot map every fixed-path cell to its linked library."
     }
     set names {}
+    set linked_libraries [dict create]
     foreach name [get_object_name $path_cells] lib_cell [get_object_name $lib_cells] {
         set slash [string first / $lib_cell]
         if {$slash <= 0} { error "UM-021: Cannot read linked library from $lib_cell" }
         set library [string range $lib_cell 0 [expr {$slash-1}]]
+        dict set linked_libraries $library 1
         foreach pattern $patterns {
             if {[string match -nocase $pattern $name] ||
                 [string match -nocase $pattern $library]} {
@@ -661,6 +672,10 @@ proc auto_scaling::native_umem_scope {supply cfg} {
         }
     }
     if {![llength $names]} {
+        if {[string trim [option $cfg target_vddpe ""]] ne ""} {
+            set sample [lrange [lsort [dict keys $linked_libraries]] 0 19]
+            error "UM-022: TARGET_VDDPE_VOLTAGE was set, but VDDPE_SCALING_NAME_PATTERNS matched no fixed-path cell or linked library. Patterns=$patterns; linked library sample=$sample. Use an actual linked library name, not the synthetic library-set/family name."
+        }
         return [dict create cell_names {} library_names {} groups {} name_patterns $patterns]
     }
     set requested [string trim [option $cfg target_vddpe ""]]
@@ -695,6 +710,7 @@ proc auto_scaling::native_umem_scope {supply cfg} {
         }
         set voltages {}
         set members [dict create]
+        set matching_rail_vectors {}
         foreach line [split $report "\n"] {
             if {![regexp {^\s*(\S+)\s+(-?[0-9]+(?:\.[0-9]+)?)\s+\{([^\}]*)\}} $line -> member temp rails]} {
                 continue
@@ -704,7 +720,11 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             if {![regexp -nocase {(?:^|[[:space:]])VDDPE:([-+]?[0-9]+(?:\.[0-9]+)?)} $rails -> voltage]} {
                 error "UM-006: Native group for $lib_name has no VDDPE rail at $target_t C. Check its Liberty rail name."
             }
-            lappend voltages [number $voltage]
+            set parsed_voltage [number $voltage]
+            lappend voltages $parsed_voltage
+            if {[same $parsed_voltage $target]} {
+                lappend matching_rail_vectors $rails
+            }
         }
         if {![dict exists $members $lib_name]} {
             error "UM-007: Cannot locate linked library $lib_name in its native group report."
@@ -712,10 +732,8 @@ proc auto_scaling::native_umem_scope {supply cfg} {
         if {![llength $voltages]} {
             error "UM-008: No native VDDPE library grid at target temperature $target_t C for $lib_name."
         }
-        foreach voltage $voltages {
-            if {[same $voltage $target]} {
-                error "UM-015: Native group for $lib_name contains target VDDPE=$target V at $target_t C; this is not leave-one-out."
-            }
+        if {[llength $matching_rail_vectors]} {
+            error "UM-015: Native group for $lib_name contains VDDPE=$target V at $target_t C. A VDDPE match alone does not prove the full multirail target corner is present, so leave-one-out is unverified and this run stops. Matching rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
         }
         if {[catch {set pair [bracket $voltages $target VDDPE]} problem]} {
             error "UM-009: Native group for $lib_name cannot perform target-excluded VDDPE interpolation: $problem; loaded VDDPE values=[lsort -real -unique $voltages]"
@@ -1287,7 +1305,13 @@ proc auto_scaling::catalog {cfg} {
         }
         lappend rows $row
     }
-    set rows [resolve_family_candidates $rows [string toupper [option $cfg mode V]]]
+    set native_member_names {}
+    set native_umem [option $cfg native_umem [dict create groups {}]]
+    dict for {linked_lib group_record} [dict get $native_umem groups] {
+        set native_member_names [concat $native_member_names [dict get $group_record members]]
+    }
+    set rows [resolve_family_candidates $rows [string toupper [option $cfg mode V]] \
+        [lsort -unique $native_member_names]]
     if {![llength $rows]} {
         set detail ""
         foreach item [lrange $ignored 0 2] {

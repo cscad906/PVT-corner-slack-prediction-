@@ -68,6 +68,13 @@ check [expr {[dict get $native cell_names] eq {top/u_mem0}}] "Wrong fixed-path m
 check [expr {[dict get [auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns {*nomatch*, MEM_*}]] cell_names] eq {top/u_mem0}}] "Linked-library wildcard did not select the macro"
 check [expr {[dict get [auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns ""]] cell_names] eq ""}] "Blank pattern did not disable macro selection"
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns {*u_mem*,,MEM_*}]} {UM-020:*}
+expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns {*wrong_library*}]} {UM-022:*}
+set ambiguous [dict create process SSPG v 0.685 t 25 family F1 \
+    family_candidates {F1 F2} voltage_tokens {0p685v 0p685v} lib_name MEM_LO]
+set native_row [lindex [auto_scaling::resolve_family_candidates [list $ambiguous] V {MEM_LO}] 0]
+check [expr {[dict get $native_row family_resolution] eq "ambiguous_native_group"}] "Native multirail library was reported as static"
+set static_row [lindex [auto_scaling::resolve_family_candidates [list $ambiguous] V] 0]
+check [expr {[dict get $static_row family_resolution] eq "ambiguous_static"}] "Unselected ambiguous library lost static status"
 check [expr {[dict get [dict get [dict get $native groups] MEM_LO] bracket] eq {0.475 0.685}}] "Native VDDPE bracket lost"
 check [expr {[auto_scaling::umem_control_cells $native] eq {top/u_mem_control}}] "Control instance not identified"
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe ""]} {UM-001:*}
