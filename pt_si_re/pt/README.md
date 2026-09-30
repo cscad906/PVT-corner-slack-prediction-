@@ -13,6 +13,7 @@ u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아�
 | 파일 | 용도 | 실행 환경 |
 |---|---|---|
 | `pt/run_scaling_after_restore.tcl` | restore session에서 PT scaling 및 fixed-path 측정 | `pt_shell` |
+| `pt/check_loo_groups_after_restore.tcl` | 현재 full-group session에서 fixed-path 관련 그룹의 목표 코너 포함 여부를 읽기 전용으로 일괄 조회 | `pt_shell` |
 | `pt/prepare_umem_loo.tcl` | 기존 u_mem 그룹을 읽고 목표 VDDPE DB를 제외한 새 그룹 Tcl 생성(읽기 전용) | `pt_shell` |
 | `pt/run_umem_loo_after_restore.tcl` | 목표를 제외한 u_mem 그룹을 새로 정의하고 fixed-path 측정 | `pt_shell` |
 | `pt/show_library_voltages.tcl` | 로드된 library의 Operating Conditions 전압/온도 목록 조회 | `pt_shell` |
@@ -34,6 +35,22 @@ u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아�
 남아 있으면 `UM-015`로 중단**합니다. PrimeTime은 활성 그룹에서 라이브러리
 하나만 안전하게 빼는 명령을 제공하지 않습니다. 따라서 현재 full-group
 restore session에서 LOO timing을 바로 재실행할 수 없습니다.
+`UM-015`보다 앞서 로그의 `LOO GROUP AUDIT`가 fixed-path target rail에
+연결된 코어 그룹과 선택된 u_mem 그룹을 모두 읽기 전용으로 검사합니다.
+`TARGET`은 그 rail/온도에 목표 라이브러리가 있음을, `ABSENT`는 해당
+그룹 보고서에 목표점이 없음을, `RAIL_UNVERIFIED`는 보고서에서 해당 rail을
+확인하지 못했음을 뜻합니다. 이 목록은 초기 후보 범위의 진단이며 최종
+스케일링 셋 선택은 뒤의 planner가 결정합니다. u_mem이 먼저 중단됐다고
+다른 그룹이 LOO를 통과했다는 뜻은 아닙니다.
+현재 세션에서 timing 실행 없이 이 감사만 하려면 다음을 source합니다.
+
+```tcl
+source /path/to/pt/check_loo_groups_after_restore.tcl
+```
+
+결과는 `<RESULT_FOLDER>/details/<목표 결과 이름>.loo_groups.log`에 저장됩니다.
+`TARGET` 또는 `RAIL_UNVERIFIED`가 있는 그룹을 확인하면 됩니다. 이 명령은
+전압·온도, scaling group, 타이밍을 변경하지 않습니다.
 같은 라이브러리로 `define_scaling_lib_group`을 다시 호출해도 기존 그룹은
 교체되지 않습니다. 로컬 PrimeTime V-2023.12-SP4 검증에서는 `SLG-316`이
 출력되고 명령의 반환값이 `0`이었으며 그룹 내용은 그대로였습니다.

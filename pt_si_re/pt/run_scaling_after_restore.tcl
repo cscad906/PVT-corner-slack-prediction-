@@ -747,7 +747,7 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             error "UM-008: No native VDDPE library grid at target temperature $target_t C for $lib_name."
         }
         if {[llength $matching_rail_vectors]} {
-            error "UM-015: Native group for $lib_name contains or rounds to VDDPE=$target V at $target_t C. Target-excluded VDDPE scaling is unverified, so this run stops. Matching rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
+            error "UM-015: Native group for $lib_name contains or rounds to VDDPE=$target V at $target_t C. Target-excluded VDDPE scaling is unverified, so this run stops. Check all LOO GROUP AUDIT lines above: u_mem is the first blocking check, not proof that other groups passed. Matching rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
         }
         if {[catch {set pair [bracket $voltages $target VDDPE]} problem]} {
             error "UM-009: Native group for $lib_name cannot perform target-excluded VDDPE interpolation: $problem; loaded VDDPE values=[lsort -real -unique $voltages]"
@@ -1569,6 +1569,123 @@ proc auto_scaling::report_has_corner {text rail voltage temperature} {
     return 0
 }
 
+# Return TARGET, ABSENT, or RAIL_UNVERIFIED for one actual PG rail. This is
+# read-only: it reports all relevant groups before u_mem's UM-015 can stop the
+# run, without confusing a different rail in the same multirail library.
+proc auto_scaling::group_rail_target_status {report rail voltage temperature} {
+    set saw_target_temperature 0
+    set saw_rail 0
+    foreach line [split $report "\n"] {
+        if {[regexp {^\s+\S+\s+(\S+)\s+\{([^\n]*)\}} $line -> found_t rails]} {
+            if {[catch {number $found_t}] ||
+                ![report_number_may_match $found_t $temperature]} { continue }
+            set saw_target_temperature 1
+            foreach pair [regexp -all -inline {[^[:space:]:]+:[-+]?[0-9]+(?:\.[0-9]+)?} $rails] {
+                set colon [string last : $pair]
+                set name [string range $pair 0 [expr {$colon-1}]]
+                if {![string equal -nocase $name $rail]} { continue }
+                set saw_rail 1
+                set found_v [string range $pair [expr {$colon+1}] end]
+                if {[report_number_may_match $found_v $voltage]} { return TARGET }
+            }
+        } elseif {[regexp {^\s+\S+\s+(\S+)\s+(\S+)} $line -> found_t found_v] &&
+            ![catch {number $found_t}] && ![catch {number $found_v}] &&
+            [report_number_may_match $found_t $temperature]} {
+            set saw_target_temperature 1
+            set saw_rail 1
+            if {[report_number_may_match $found_v $voltage]} { return TARGET }
+        }
+    }
+    if {$saw_target_temperature && !$saw_rail} { return RAIL_UNVERIFIED }
+    return ABSENT
+}
+
+# Show every active group reached by a fixed-path target-rail cell or a
+# selected u_mem cell before the u_mem-only check can fail. This is a scope
+# audit, not an LOO certificate: the later planner still decides which scalar
+# families actually scale, and unrelated groups are not changed.
+proc auto_scaling::audit_fixed_path_group_targets {supply cfg} {
+    set target_t [number [need $cfg target_t]]
+    set targets {}
+    foreach voltage_group [dict get $supply voltage_groups] {
+        lappend targets [dict create role CORE rail [dict get $voltage_group pin_name] \
+            voltage [number [need $cfg target_v]] cells [dict get $voltage_group cell_names]]
+    }
+    set raw_patterns [string trim [option $cfg vddpe_name_patterns ""]]
+    if {$raw_patterns ne ""} {
+        set patterns {}
+        foreach item [split $raw_patterns ,] {
+            set pattern [string trim $item]
+            if {$pattern eq ""} { error "UM-020: VDDPE_SCALING_NAME_PATTERNS has an empty pattern." }
+            lappend patterns $pattern
+        }
+        set path_cells [dict get $supply path_cells]
+        set lib_cells [get_attribute $path_cells lib_cell]
+        if {[sizeof_collection $lib_cells] != [sizeof_collection $path_cells]} {
+            error "UM-021: Cannot map every fixed-path cell to its linked library."
+        }
+        set macro_names {}
+        foreach name [get_object_name $path_cells] lib_cell [get_object_name $lib_cells] {
+            set library [lindex [split $lib_cell /] 0]
+            foreach pattern $patterns {
+                if {[string match -nocase $pattern $name] ||
+                    [string match -nocase $pattern $library]} {
+                    lappend macro_names $name
+                    break
+                }
+            }
+        }
+        if {[llength $macro_names] && [string trim [option $cfg target_vddpe ""]] ne ""} {
+            lappend targets [dict create role U_MEM rail VDDPE \
+                voltage [number [dict get $cfg target_vddpe]] cells [lsort -unique $macro_names]]
+        }
+    }
+    set seen [dict create]
+    set reports [dict create]
+    set findings {}
+    set checked 0
+    foreach target $targets {
+        set cells [get_cells -quiet -exact [dict get $target cells]]
+        set libs [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cells]]
+        foreach_in_collection lib $libs {
+            set linked [get_attribute $lib full_name]
+            set group [get_attribute -quiet $lib lib_scaling_group]
+            if {$group eq "" || ![sizeof_collection $group]} {
+                puts "LOO GROUP AUDIT: role=[dict get $target role] lib=$linked status=NO_ACTIVE_GROUP"
+                continue
+            }
+            set members [add_to_collection $group $lib]
+            set member_paths {}
+            foreach_in_collection member $members {
+                set db [get_attribute -quiet $member source_file_name]
+                if {$db eq ""} { error "LOO group audit: no source DB for [get_attribute $member full_name]." }
+                lappend member_paths [file normalize $db]
+            }
+            set group_key [lsort -unique $member_paths]
+            set key [list $group_key [dict get $target role] [dict get $target rail] \
+                [dict get $target voltage]]
+            if {[dict exists $seen $key]} { continue }
+            dict set seen $key 1
+            if {![dict exists $reports $group_key]} {
+                redirect -variable report {
+                    report_lib_groups -scaling -objects $lib -nosplit -show {voltage temperature process}
+                }
+                dict set reports $group_key $report
+            }
+            set status [group_rail_target_status [dict get $reports $group_key] \
+                [dict get $target rail] [dict get $target voltage] $target_t]
+            incr checked
+            puts "LOO GROUP AUDIT: role=[dict get $target role] rail=[dict get $target rail] target=[dict get $target voltage]V/${target_t}C linked=$linked members=[llength $group_key] status=$status"
+            if {$status ne "ABSENT"} {
+                lappend findings [dict create role [dict get $target role] rail [dict get $target rail] \
+                    linked $linked status $status member_paths $group_key]
+            }
+        }
+    }
+    puts "LOO GROUP AUDIT SUMMARY: checked=$checked target_or_unverified=[llength $findings]"
+    return $findings
+}
+
 # 기존 scaling group을 재사용하는 경우에도 fixed path용으로 계획한 각 입력
 # DB가 실제 active group에 들어 있는지 확인합니다.
 proc auto_scaling::verify_planned_group_coverage {plan} {
@@ -2349,6 +2466,7 @@ proc auto_scaling::run_after_restore {cfg} {
     set phase_started [phase_start CLASSIFY_FIXED_PATH_SUPPLY]
     set fixed [read_fixed [need $cfg fixed_tcl] [option $cfg delay_type max]]
     set supply [classify_fixed_path_supply $fixed $restored_cfg]
+    audit_fixed_path_group_targets $supply $restored_cfg
     set native_umem [native_umem_scope $supply $restored_cfg]
     dict set fixed cell_names [get_object_name [dict get $supply path_cells]]
     dict set restored_cfg resolved_fixed $fixed
