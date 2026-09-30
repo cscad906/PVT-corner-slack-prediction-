@@ -10,6 +10,23 @@ proc expect_error {script pattern} {
     set failed [catch {uplevel 1 $script} reason]
     assert [expr {$failed && [string match $pattern $reason]}] "Expected '$pattern', got '$reason'"
 }
+# PrimeTime prints one-rail groups as a scalar Voltage column in some sessions.
+# A loaded target in that form must not slip through the LOO guard.
+set scalar_group_report {Group    Library    Temperature    Voltage    Process
+Group 1
+    Core_low      25.00        0.540      1.00
+    Core_target   25.00        0.685      1.00
+1}
+assert [auto_scaling::report_has_corner $scalar_group_report VDD 0.685 25] "Scalar target corner was missed"
+assert [expr {![auto_scaling::report_has_corner $scalar_group_report VDD 0.685 125]}] "Wrong temperature matched scalar group"
+set rounded_group_report [string map {0.685 0.69} $scalar_group_report]
+assert [auto_scaling::report_has_corner $rounded_group_report VDD 0.685 25] "Rounded scalar target corner was missed"
+assert [expr {![auto_scaling::report_has_corner $rounded_group_report VDD 0.675 25]}] "Unrelated voltage matched rounded scalar group"
+set multirail_group_report {Group    Library    Temperature    Voltage    Process
+Group 2
+    Mem_target    25.00        { VDD:0.540 VDDPE:0.685 } 1.00
+1}
+assert [auto_scaling::report_has_corner $multirail_group_report VDDPE 0.685 25] "Multirail target corner was missed"
 proc sizeof_collection {objects} { return [llength $objects] }
 proc get_object_name {objects} { return $objects }
 proc foreach_in_collection {name objects body} {

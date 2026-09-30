@@ -79,6 +79,10 @@ check [expr {[dict get [dict get [dict get $native groups] MEM_LO] bracket] eq {
 check [expr {[auto_scaling::umem_control_cells $native] eq {top/u_mem_control}}] "Control instance not identified"
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe ""]} {UM-001:*}
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.685]} {UM-015:*}
+set unrounded_report $::native_report
+set ::native_report [string map {0.685 0.69} $::native_report]
+expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.685]} {UM-015:*}
+set ::native_report $unrounded_report
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.76]} {UM-009:*}
 set original_report $::native_report
 append ::native_report "\n    MEM_TARGET    25.00       { V:0.540 VDDPE:0.540 } 1.00"

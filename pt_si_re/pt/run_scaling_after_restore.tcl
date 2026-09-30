@@ -77,6 +77,20 @@ proc auto_scaling::number {value} {
     return [expr {double($value)}]
 }
 proc auto_scaling::same {a b} { return [expr {abs($a-$b) < 1e-8}] }
+# report_lib_groups rounds voltages (for example, 0.685 can print as 0.69).
+# A displayed value covering the target after rounding must fail the LOO guard.
+proc auto_scaling::report_number_may_match {display target} {
+    set value [number $display]
+    if {[same $value $target]} { return 1 }
+    if {[regexp {\.([0-9]+)$} $display -> decimals]} {
+        set half_unit [expr {0.5 * pow(10.0, -[string length $decimals])}]
+    } elseif {[regexp {^[-+]?[0-9]+$} $display]} {
+        set half_unit 0.5
+    } else {
+        return 0
+    }
+    return [expr {abs($value-$target) <= $half_unit + 1e-8}]
+}
 proc auto_scaling::readable {path} {
     if {![file isfile $path] || ![file readable $path]} { error "Cannot read file: $path" }
     return [file normalize $path]
@@ -722,7 +736,7 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             }
             set parsed_voltage [number $voltage]
             lappend voltages $parsed_voltage
-            if {[same $parsed_voltage $target]} {
+            if {[report_number_may_match $voltage $target]} {
                 lappend matching_rail_vectors $rails
             }
         }
@@ -733,7 +747,7 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             error "UM-008: No native VDDPE library grid at target temperature $target_t C for $lib_name."
         }
         if {[llength $matching_rail_vectors]} {
-            error "UM-015: Native group for $lib_name contains VDDPE=$target V at $target_t C. A VDDPE match alone does not prove the full multirail target corner is present, so leave-one-out is unverified and this run stops. Matching rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
+            error "UM-015: Native group for $lib_name contains or rounds to VDDPE=$target V at $target_t C. Target-excluded VDDPE scaling is unverified, so this run stops. Matching rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
         }
         if {[catch {set pair [bracket $voltages $target VDDPE]} problem]} {
             error "UM-009: Native group for $lib_name cannot perform target-excluded VDDPE interpolation: $problem; loaded VDDPE values=[lsort -real -unique $voltages]"
@@ -1532,18 +1546,24 @@ proc auto_scaling::verify_scaling_result {out fixed delay_type pba_mode scaled_c
 
 proc auto_scaling::report_has_corner {text rail voltage temperature} {
     foreach line [split $text "\n"] {
-        if {![regexp {^\s+\S+\s+(-?[0-9]+(?:\.[0-9]+)?)\s+\{([^\n]*)\}} $line -> found_t rails]} {
-            continue
-        }
-        # 실제 UPF supply 이름이 VDD가 아닐 수 있으므로 이 온도의 모든
-        # power-rail voltage를 검사합니다. ground(보통 0V)는 일치하지 않습니다.
-        foreach pair [regexp -all -inline {[^[:space:]:]+:[-+]?[0-9]+(?:\.[0-9]+)?} $rails] {
-            set colon [string last ":" $pair]
-            set found_v [string range $pair [expr {$colon+1}] end]
-            if {[same [number $found_v] $voltage] &&
-                [same [number $found_t] $temperature]} {
-                return 1
+        if {[regexp {^\s+\S+\s+(\S+)\s+\{([^\n]*)\}} $line -> found_t rails]} {
+            if {[catch {number $found_t} parsed_t] || ![same $parsed_t $temperature]} {
+                continue
             }
+            # 실제 UPF supply 이름이 VDD가 아닐 수 있으므로 이 온도의
+            # power-rail voltage를 검사합니다. ground(보통 0V)는 불일치합니다.
+            foreach pair [regexp -all -inline {[^[:space:]:]+:[-+]?[0-9]+(?:\.[0-9]+)?} $rails] {
+                set colon [string last ":" $pair]
+                set found_v [string range $pair [expr {$colon+1}] end]
+                if {[report_number_may_match $found_v $voltage]} { return 1 }
+            }
+        } elseif {[regexp {^\s+\S+\s+(\S+)\s+(\S+)} $line -> found_t found_v] &&
+            ![catch {number $found_t} parsed_t] &&
+            ![catch {number $found_v} parsed_v] &&
+            [same $parsed_t $temperature] &&
+            [report_number_may_match $found_v $voltage]} {
+            # One-rail libraries can be printed as a scalar Voltage column.
+            return 1
         }
     }
     return 0
@@ -2351,7 +2371,7 @@ proc auto_scaling::run_after_restore {cfg} {
     set has_existing_group [regexp -line {^Group[[:space:]]+[0-9]+} $groups_before]
     if {$has_existing_group} {
         if {[report_has_unapproved_corner $groups_before $plan $rail $target_v $target_t]} {
-            error "An existing non-exempt scaling group contains target $target_v V/$target_t C. Target-excluded scaling cannot run with this group."
+            error "An existing non-exempt scaling group contains or rounds to target $target_v V/$target_t C. Target-excluded scaling cannot be proven with this group."
         }
         puts "RESTORE MODE: Reusing existing scaling groups."
     } else {
@@ -2371,7 +2391,7 @@ proc auto_scaling::run_after_restore {cfg} {
     }
     write_text [detail_path $out .libgroups] $groups_after
     if {[report_has_unapproved_corner $groups_after $plan $rail $target_v $target_t]} {
-        error "A non-exempt scaling group still contains the target corner. Scaling verification failed: [detail_path $out .libgroups]"
+        error "A non-exempt scaling group still contains or rounds to the target corner. Scaling verification failed: [detail_path $out .libgroups]"
     }
     verify_planned_group_coverage $plan
     phase_done PREPARE_SCALING_GROUPS $phase_started
