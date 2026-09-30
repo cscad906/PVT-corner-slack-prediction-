@@ -29,6 +29,11 @@ set PROGRESS_INTERVAL_MINUTES 10
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
 
+# Fixed-path u_mem instances use the restored native VDDPE scaling group.
+# Set their target VDDPE voltage independently from TARGET_VOLTAGE. Leave blank
+# only when no fixed-path cell name contains u_mem. No supply net is changed.
+set TARGET_VDDPE_VOLTAGE ""
+
 # Optional: keep selected sets at their restored DB/conditions, without interpolation.
 # Enter an exact set name, a common pattern such as "macro_*", or names/patterns
 # separated by spaces. Empty disables this option. "restore" never relinks
@@ -618,6 +623,181 @@ proc auto_scaling::bracket {values target axis} {
     return [list $lower $upper]
 }
 
+# Use PrimeTime's actual multirail group for fixed-path u_mem cells. Library
+# filenames/one-dimensional nominal voltages cannot identify the VDDPE axis.
+proc auto_scaling::native_umem_scope {supply cfg} {
+    set names {}
+    foreach name [get_object_name [dict get $supply path_cells]] {
+        if {[string match -nocase *u_mem* $name]} { lappend names $name }
+    }
+    if {![llength $names]} { return [dict create cell_names {} library_names {} groups {}] }
+    set requested [string trim [option $cfg target_vddpe ""]]
+    if {$requested eq ""} {
+        error "UM-001: Fixed paths contain u_mem cells; set TARGET_VDDPE_VOLTAGE. It may differ from TARGET_VOLTAGE."
+    }
+    set target [number $requested]
+    set target_t [number [need $cfg target_t]]
+    set group_records {}
+    set library_names [dict create]
+    foreach name $names {
+        set cell [get_cells -quiet -exact $name]
+        if {[sizeof_collection $cell] != 1} { error "UM-002: Cannot resolve one u_mem cell: $name" }
+        set pg [get_pg_pins -of_objects $cell]
+        set found 0
+        foreach_in_collection pin $pg {
+            if {[string equal -nocase [get_attribute $pin pin_name] VDDPE] &&
+                [get_attribute $pin type] eq "primary_power"} { set found 1; break }
+        }
+        if {!$found} { error "UM-003: u_mem cell has no primary_power VDDPE PG pin: $name" }
+        set libs [get_libs -quiet -of_objects [get_lib_cells -quiet -of_objects $cell]]
+        if {[sizeof_collection $libs] != 1} { error "UM-004: Cannot resolve one linked library for $name" }
+        set lib_name [get_attribute $libs full_name]
+        dict set library_names $lib_name 1
+        if {[dict exists $group_records $lib_name]} { continue }
+        set group [get_attribute -quiet $libs lib_scaling_group]
+        if {$group eq "" || ![sizeof_collection $group]} {
+            error "UM-005: $name uses $lib_name without an active native scaling group. No name-based group will be guessed."
+        }
+        redirect -variable report {
+            report_lib_groups -scaling -objects $libs -nosplit -show {voltage temperature process}
+        }
+        set voltages {}
+        set members [dict create]
+        foreach line [split $report "\n"] {
+            if {![regexp {^\s*(\S+)\s+(-?[0-9]+(?:\.[0-9]+)?)\s+\{([^\}]*)\}} $line -> member temp rails]} {
+                continue
+            }
+            dict set members $member 1
+            if {![same [number $temp] $target_t]} { continue }
+            if {![regexp -nocase {(?:^|[[:space:]])VDDPE:([-+]?[0-9]+(?:\.[0-9]+)?)} $rails -> voltage]} {
+                error "UM-006: Native group for $lib_name has no VDDPE rail at $target_t C. Check its Liberty rail name."
+            }
+            lappend voltages [number $voltage]
+        }
+        if {![dict exists $members $lib_name]} {
+            error "UM-007: Cannot locate linked library $lib_name in its native group report."
+        }
+        if {![llength $voltages]} {
+            error "UM-008: No native VDDPE library grid at target temperature $target_t C for $lib_name."
+        }
+        foreach voltage $voltages {
+            if {[same $voltage $target]} {
+                error "UM-015: Native group for $lib_name contains target VDDPE=$target V at $target_t C; this is not leave-one-out."
+            }
+        }
+        if {[catch {set pair [bracket $voltages $target VDDPE]} problem]} {
+            error "UM-009: Native group for $lib_name cannot perform target-excluded VDDPE interpolation: $problem; loaded VDDPE values=[lsort -real -unique $voltages]"
+        }
+        dict set group_records $lib_name [dict create report $report bracket $pair \
+            members [dict keys $members]]
+        puts "U_MEM NATIVE SCALING: lib=$lib_name target_vddpe=$target V bracket=$pair V fixed_path_cells=[llength $names]"
+    }
+    return [dict create cell_names [lsort -unique $names] \
+        library_names [dict keys $library_names] groups $group_records target_vddpe $target]
+}
+
+proc auto_scaling::umem_control_cells {native} {
+    set targets [dict get $native cell_names]
+    set controls {}
+    foreach name $targets {
+        set lib_cell [get_lib_cells -quiet -of_objects [get_cells -quiet -exact $name]]
+        foreach_in_collection candidate [get_cells -quiet -of_objects $lib_cell] {
+            set other [get_attribute $candidate full_name]
+            if {[lsearch -exact $targets $other] < 0} {
+                lappend controls $other
+                break
+            }
+        }
+    }
+    return [lsort -unique $controls]
+}
+
+proc auto_scaling::umem_pin_voltages {report names} {
+    set selected [dict create]
+    foreach name $names { dict set selected $name 1 }
+    set result [dict create]
+    foreach line [split $report "\n"] {
+        set fields [regexp -all -inline {\S+} $line]
+        if {[llength $fields] < 4} { continue }
+        set name [lindex $fields 0]
+        if {![dict exists $selected $name]} { continue }
+        set pin [lindex $fields 1]
+        set type [lindex $fields 2]
+        if {$type ni {primary_power primary_ground internal_power internal_ground}} { continue }
+        set value [lindex $fields 3]
+        if {[catch {number $value} voltage]} { continue }
+        dict set result [list $name $pin] $voltage
+    }
+    return $result
+}
+
+proc auto_scaling::umem_supply_voltages {report} {
+    set result [dict create]
+    set net ""
+    foreach line [split $report "\n"] {
+        if {[regexp {^[[:space:]]*Supply Net[[:space:]]*:[[:space:]]*(\S+)} $line -> name]} {
+            set net $name
+            dict set result [list $net exists] 1
+        } elseif {$net ne "" &&
+            [regexp {^[[:space:]]*(Max-delay Voltage|Min-delay Voltage)[[:space:]]*:[[:space:]]*(\S+)} $line -> key value]} {
+            dict set result [list $net $key] $value
+        }
+    }
+    return $result
+}
+
+proc auto_scaling::umem_power_snapshot {native controls} {
+    set names [lsort -unique [concat [dict get $native cell_names] $controls]]
+    redirect -variable pins {
+        report_power_pin_info [get_cells -quiet -exact $names]
+    }
+    redirect -variable nets { report_supply_net }
+    return [dict create pins_report $pins nets_report $nets \
+        pins [umem_pin_voltages $pins $names] nets [umem_supply_voltages $nets]]
+}
+
+proc auto_scaling::verify_umem_power {out native controls before after} {
+    set target [dict get $native target_vddpe]
+    set errors {}
+    set prior [dict get $before pins]
+    set final [dict get $after pins]
+    foreach cell [dict get $native cell_names] {
+        set key [list $cell VDDPE]
+        if {![dict exists $final $key] || ![same [dict get $final $key] $target]} {
+            lappend errors "UM-011: Target $cell/VDDPE did not report $target V after set_voltage"
+        }
+    }
+    foreach cell $controls {
+        set seen 0
+        dict for {key value} $prior {
+            if {[lindex $key 0] ne $cell} { continue }
+            set seen 1
+            if {![dict exists $final $key] || ![same [dict get $final $key] $value]} {
+                lappend errors "UM-012: Control cell PG voltage changed: $key"
+            }
+        }
+        if {!$seen} { lappend errors "UM-012: Control cell PG voltage was not parsed: $cell" }
+    }
+    if {![dict size [dict get $before nets]] ||
+        [dict get $before nets] ne [dict get $after nets]} {
+        lappend errors "UM-013: Supply-net voltage report changed or could not be parsed"
+    }
+    set status [expr {[llength $errors] ? "FAILED" : "PASSED"}]
+    set evidence "U_MEM_POWER_VERIFICATION: $status\nTARGET_VDDPE: $target V\nTARGET_CELLS: [dict get $native cell_names]\nCONTROL_CELLS: $controls\n"
+    if {![llength $controls]} { append evidence "CONTROL_STATUS: no same-lib-cell instance outside fixed paths; net check still active\n" }
+    foreach error $errors { append evidence "$error\n" }
+    append evidence "\nBEFORE PIN REPORT\n[dict get $before pins_report]\nAFTER PIN REPORT\n[dict get $after pins_report]\n"
+    append evidence "\nBEFORE SUPPLY REPORT\n[dict get $before nets_report]\nAFTER SUPPLY REPORT\n[dict get $after nets_report]\n"
+    dict for {lib record} [dict get $native groups] {
+        append evidence "\nNATIVE GROUP FOR $lib; bracket=[dict get $record bracket]\n[dict get $record report]\n"
+    }
+    set path [detail_path $out .umem_power.txt]
+    write_text $path $evidence
+    if {[llength $errors]} { error "U_MEM power verification failed: $errors. Evidence: $path" }
+    puts "U_MEM POWER VERIFICATION: PASSED | evidence=$path"
+    return $path
+}
+
 # 이 library set이 요청 축에서 실제로 변하는지 확인합니다. 한 점뿐인
 # macro/IO library는 restore 상태 그대로 사용하고 scaling group에서 제외합니다.
 proc auto_scaling::family_scaling_mode {rows process family tv tt requested_mode} {
@@ -839,6 +1019,15 @@ proc auto_scaling::plan {cfg} {
 
     set rail_result [family_used_by_cells $rows $families [dict get $supply target_cells]]
     set rail_matches [dict get $rail_result family_matches]
+    set native_umem [option $cfg native_umem [dict create cell_names {} library_names {} groups {}]]
+    set native_names [dict get $native_umem library_names]
+    set native_families {}
+    foreach row $rows {
+        if {[lsearch -exact $native_names [dict get $row lib_name]] >= 0} {
+            lappend native_families [dict get $row family]
+        }
+    }
+    set native_families [lsort -unique $native_families]
     # Retain read-only provenance even when the next bracket check fails.
     # The query Tcl can explain scope without repeating any PG-pin scan.
     set scope_context [dict create]
@@ -853,7 +1042,8 @@ proc auto_scaling::plan {cfg} {
         rows $rows fixed_result $fixed_result rail_result $rail_result]
     set fixed_rail_sets {}
     foreach family $fixed_matches {
-        if {[lsearch -exact $rail_matches $family] < 0} { lappend fixed_rail_sets $family }
+        if {[lsearch -exact $rail_matches $family] < 0 &&
+            [lsearch -exact $native_families $family] < 0} { lappend fixed_rail_sets $family }
     }
     puts "FIXED-RAIL LIBRARY SETS (no interpolation check): $fixed_rail_sets"
 
@@ -874,6 +1064,15 @@ proc auto_scaling::plan {cfg} {
         set chosen_families $rail_matches
         puts "AUTO-SELECTED [llength $chosen_families] LIBRARY SET(S) ON FIXED-PATH SCALING POWER NET: $chosen_families"
     }
+    # Native multirail VDDPE groups are already active. Their single nominal
+    # voltage/name is not a valid scalar family interpolation axis.
+    set scalar_families {}
+    foreach family $chosen_families {
+        if {[lsearch -exact $native_families $family] >= 0} {
+            puts "U_MEM NATIVE GROUP REPLACES SCALAR FAMILY: $family"
+        } else { lappend scalar_families $family }
+    }
+    set chosen_families $scalar_families
     puts "FIXED-PATH SCALING SCOPE: design sets=[llength $used_matches], path sets=[llength $fixed_matches], target-rail sets=[llength $chosen_families]"
 
     # Operating condition/family를 해석하지 못한 library라도 design에서 실제
@@ -882,7 +1081,8 @@ proc auto_scaling::plan {cfg} {
     set unclassified_used {}
     foreach ignored [dict get $cat ignored] {
         set ignored_name [dict get $ignored lib_name]
-        if {[lsearch -exact $fixed_names $ignored_name] >= 0} {
+        if {[lsearch -exact $fixed_names $ignored_name] >= 0 &&
+            [lsearch -exact $native_names $ignored_name] < 0} {
             lappend unclassified_used $ignored_name
         }
     }
@@ -898,6 +1098,11 @@ proc auto_scaling::plan {cfg} {
     set fixed_library_rows {}
     set nearest_library_rows {}
     set fixed_families [resolve_fixed_families [option $cfg fixed_library_set ""] $fixed_matches]
+    foreach family $native_families {
+        if {[lsearch -exact $fixed_families $family] >= 0} {
+            error "UM-010: FIXED_LIBRARY_SET selects u_mem family $family, but u_mem native scaling was requested. Remove this fixed-set exception."
+        }
+    }
     if {[llength $fixed_families]} {
         # A declared fixed set can be on another rail; still validate every DB.
         foreach family $fixed_families {
@@ -947,7 +1152,7 @@ proc auto_scaling::plan {cfg} {
         foreach row [dict get $group selected] { lappend selected $row }
         foreach row [dict get $group excluded] { lappend excluded $row }
     }
-    if {![llength $groups]} {
+    if {![llength $groups] && ![llength [dict get $native_umem cell_names]]} {
         error "The instantiated design uses no library set with a usable interpolation grid. Static sets: $static_sets"
     }
 
@@ -982,6 +1187,7 @@ proc auto_scaling::plan {cfg} {
     dict set result catalog $rows
     dict set result shadows [dict get $cat shadows]
     dict set result unclassified_used $unclassified_used
+    dict set result native_umem $native_umem
     if {$fixed ne ""} { dict set result fixed $fixed }
 
     puts "TARGET: $process  $tv V  $tt C  $beol; mode=$mode; families=[llength $chosen_families]"
@@ -1230,8 +1436,8 @@ proc auto_scaling::find_scaling_fixed_path {fixed delay_type pba_mode scaled_cel
 
 # The diagnostic file is created before searching. Every verification failure
 # records an ASCII status/code even when no delay calculation was possible.
-proc auto_scaling::verify_scaling_result {out fixed delay_type pba_mode scaled_cells} {
-    set evidence_file [detail_path $out .dcalc]
+proc auto_scaling::verify_scaling_result {out fixed delay_type pba_mode scaled_cells {suffix .dcalc}} {
+    set evidence_file [detail_path $out $suffix]
     set header "SCALING_VERIFICATION_STATUS: STARTED\nANALYSIS_DELAY_TYPE: $delay_type\n"
     write_text $evidence_file $header
     set dcalc_text ""
@@ -1631,7 +1837,7 @@ proc auto_scaling::existing_detail_path {out suffix} {
 # silently between two versions of the same companion file.
 proc auto_scaling::move_legacy_details {out} {
     set moves {}
-    foreach suffix {.missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc .log} {
+    foreach suffix {.missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc .umem.dcalc .umem_power.txt .log} {
         set old ${out}${suffix}
         if {[catch {file type $old} type options]} {
             if {[lrange [dict get $options -errorcode] 0 1] eq {POSIX ENOENT}} { continue }
@@ -1652,7 +1858,7 @@ proc auto_scaling::move_legacy_details {out} {
 # Clear only this run's exact output names; never clear the result directory.
 # Remove old sidecars too, so a failed rerun cannot retain old success evidence.
 proc auto_scaling::reset_output_files {out {include_log 0}} {
-    set suffixes {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc}
+    set suffixes {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc .umem.dcalc .umem_power.txt}
     if {$include_log} { lappend suffixes .log }
     set previous {}
     foreach suffix $suffixes {
@@ -1708,6 +1914,13 @@ proc auto_scaling::scaling_inputs_text {plan} {
         }
         lappend lines [format "  INTERPOLATION inputs=%d -> target=%s V/%s C" \
             [llength [dict get $group selected]] [dict get $plan v] [dict get $plan t]]
+    }
+    set native_umem [option $plan native_umem [dict create cell_names {} groups {}]]
+    dict for {lib record} [dict get $native_umem groups] {
+        lappend lines "U_MEM_NATIVE_GROUP lib=$lib target_vddpe=[dict get $native_umem target_vddpe] V bracket=[dict get $record bracket] V"
+        lappend lines "  FIXED_PATH_CELLS=[dict get $native_umem cell_names]"
+        lappend lines "  NATIVE_GROUP_MEMBERS=[dict get $record members]"
+        lappend lines "  TARGET_EXCLUDED=yes; verify PG/supply and macro arc in .umem_power.txt/.umem.dcalc"
     }
     foreach family [dict get $plan static_sets] {
         lappend lines "STATIC_UNSCALED family=$family"
@@ -1956,6 +2169,19 @@ proc auto_scaling::plan_fixed_path_power {fixed cfg} {
         lappend voltage_groups $group
         puts "FIXED-PATH VOLTAGE GROUP: pg_pin=[dict get $group pin_name] cells=[llength $names] rails=[dict get $group rails]"
     }
+    set native_umem [option $cfg native_umem [dict create cell_names {}]]
+    set native_cells [dict get $native_umem cell_names]
+    foreach name $native_cells {
+        if {![dict exists $scalable_names $name]} {
+            error "UM-014: Fixed-path u_mem cell has no active native scaling library: $name"
+        }
+        dict set target_names $name 1
+    }
+    if {[llength $native_cells]} {
+        lappend voltage_groups [dict create pin_name VDDPE cell_names $native_cells \
+            rails VDDPE target_v [dict get $native_umem target_vddpe]]
+        puts "FIXED-PATH U_MEM VOLTAGE GROUP: pg_pin=VDDPE cells=[llength $native_cells] target=[dict get $native_umem target_vddpe] V"
+    }
     if {![dict size $target_names]} {
         error "FP-008: No scalable FIXED_PATHS cell has a primary PG pin on SCALING_POWER_NET. scalable_cells=[dict size $scalable_names]"
     }
@@ -1972,6 +2198,7 @@ proc auto_scaling::run_after_restore {cfg} {
     foreach command {
         get_designs get_libs get_lib_cells current_design define_scaling_lib_group
         report_lib_groups get_supply_nets get_pg_pins get_cells filter_collection
+        report_power_pin_info report_supply_net
         set_temperature set_voltage update_timing get_timing_paths
     } {
         if {![llength [info commands ::$command]]} {
@@ -2003,9 +2230,11 @@ proc auto_scaling::run_after_restore {cfg} {
     set phase_started [phase_start CLASSIFY_FIXED_PATH_SUPPLY]
     set fixed [read_fixed [need $cfg fixed_tcl] [option $cfg delay_type max]]
     set supply [classify_fixed_path_supply $fixed $restored_cfg]
+    set native_umem [native_umem_scope $supply $restored_cfg]
     dict set fixed cell_names [get_object_name [dict get $supply path_cells]]
     dict set restored_cfg resolved_fixed $fixed
     dict set restored_cfg fixed_path_supply $supply
+    dict set restored_cfg native_umem $native_umem
     phase_done CLASSIFY_FIXED_PATH_SUPPLY $phase_started
 
     set phase_started [phase_start PLAN_DESIGN_LIBRARIES]
@@ -2020,6 +2249,7 @@ proc auto_scaling::run_after_restore {cfg} {
     foreach row [dict get $plan scaling_library_rows] {
         lappend scaling_library_names [dict get $row lib_name]
     }
+    set scaling_library_names [concat $scaling_library_names [dict get $native_umem library_names]]
     dict set restored_cfg scaling_library_names [lsort -unique $scaling_library_names]
     dict set plan fixed_restore_records [dict get $fixed_restore records]
     set dt [option $cfg delay_type max]
@@ -2108,20 +2338,41 @@ proc auto_scaling::run_after_restore {cfg} {
     set power_plan [plan_fixed_path_power $fixed $restored_cfg]
     set scaled_cells [dict get $power_plan scaled_cells]
     set voltage_groups [dict get $power_plan voltage_groups]
+    foreach voltage_group $voltage_groups {
+        if {[dict get $voltage_group pin_name] ne "VDDPE" ||
+            [dict exists $voltage_group target_v]} { continue }
+        foreach name [dict get $voltage_group cell_names] {
+            if {[lsearch -exact [dict get $native_umem cell_names] $name] >= 0 &&
+                ![same $target_v [dict get $native_umem target_vddpe]]} {
+                error "UM-016: $name/VDDPE is on SCALING_POWER_NET, but core target ($target_v V) and VDDPE target ([dict get $native_umem target_vddpe] V) differ."
+            }
+        }
+    }
     phase_done CLASSIFY_FIXED_PATH_POWER $phase_started
 
     set phase_started [phase_start APPLY_TARGET_VOLTAGE_TEMP]
+    set umem_controls {}
+    set umem_before {}
+    if {[llength [dict get $native_umem cell_names]]} {
+        set umem_controls [umem_control_cells $native_umem]
+        set umem_before [umem_power_snapshot $native_umem $umem_controls]
+    }
     check_status set_temperature [list set_temperature $target_t -object_list $scaled_cells]
     foreach voltage_group $voltage_groups {
         set pin_name [dict get $voltage_group pin_name]
         set cell_names [dict get $voltage_group cell_names]
-        puts "APPLY CELL-LEVEL VOLTAGE: target=$target_v pg_pin=$pin_name cells=[llength $cell_names] rails=[dict get $voltage_group rails]"
+        set group_v [option $voltage_group target_v $target_v]
+        puts "APPLY CELL-LEVEL VOLTAGE: target=$group_v pg_pin=$pin_name cells=[llength $cell_names] rails=[dict get $voltage_group rails]"
         # PrimeTime의 set_voltage -cell은 한 번에 정확히 한 cell만 받습니다.
         foreach cell_name $cell_names {
             set voltage_cell [get_cells -quiet -exact $cell_name]
-            check_status "set_voltage($cell_name/$pin_name)" [list set_voltage $target_v \
+            check_status "set_voltage($cell_name/$pin_name)" [list set_voltage $group_v \
                 -cell $voltage_cell -pg_pin_name $pin_name]
         }
+    }
+    if {[llength [dict get $native_umem cell_names]]} {
+        set umem_after [umem_power_snapshot $native_umem $umem_controls]
+        verify_umem_power $out $native_umem $umem_controls $umem_before $umem_after
     }
     phase_done APPLY_TARGET_VOLTAGE_TEMP $phase_started
 
@@ -2139,6 +2390,13 @@ proc auto_scaling::run_after_restore {cfg} {
     set record $plan
     dict unset record fixed paths
     if {[dict exists $record fixed cell_names]} { dict unset record fixed cell_names }
+    # Keep the literal selection on one line for verify_after_run's parser.
+    # The full native group report is retained in .umem_power.txt instead.
+    if {[dict exists $record native_umem groups]} {
+        dict for {lib group_record} [dict get $record native_umem groups] {
+            dict unset record native_umem groups $lib report
+        }
+    }
     dict set record restored_design [get_object_name [current_design]]
     dict set record scaling_scope fixed_path_cells_only
     dict set record fixed_power_nets [dict get $power_plan fixed_power_nets]
@@ -2162,12 +2420,27 @@ proc auto_scaling::run_after_restore {cfg} {
 
     set phase_started [phase_start VERIFY_SCALING_RESULT]
     verify_nearest_bindings [option $plan nearest_binding_records {}]
-    verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] $scaled_cells
+    set core_names {}
+    foreach name [get_object_name $scaled_cells] {
+        if {[lsearch -exact [dict get $native_umem cell_names] $name] < 0} { lappend core_names $name }
+    }
+    if {[llength $core_names]} {
+        verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] \
+            [get_cells -quiet -exact $core_names]
+    }
+    if {[llength [dict get $native_umem cell_names]]} {
+        verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] \
+            [get_cells -quiet -exact [dict get $native_umem cell_names]] .umem.dcalc
+    }
     phase_done VERIFY_SCALING_RESULT $phase_started
 
     puts "DONE: restore-session scaling report = $out"
     puts "FIXED PATH SUMMARY: requested=[dict get $fixed_result requested] measured=[dict get $fixed_result measured] missing=[dict get $fixed_result missing]"
-    puts "VERIFY: scaling library evidence = [detail_path $out .dcalc]"
+    if {[llength $core_names]} { puts "VERIFY: scaling library evidence = [detail_path $out .dcalc]" }
+    if {[llength [dict get $native_umem cell_names]]} {
+        puts "VERIFY: u_mem scaling evidence = [detail_path $out .umem.dcalc]"
+        puts "VERIFY: u_mem PG/supply evidence = [detail_path $out .umem_power.txt]"
+    }
     return $out
 }
 
@@ -2222,6 +2495,11 @@ proc auto_scaling::verify_after_run {cfg} {
         [lsort [dict get $selection scaling_power_nets]] ne [lsort [need $cfg scaling_power_nets]]} {
         error "SV-005: Saved BEOL or scaling supply nets differ from the original config."
     }
+    set native_umem [option $selection native_umem [dict create cell_names {} library_names {}]]
+    if {[llength [dict get $native_umem cell_names]] &&
+        ![same [dict get $native_umem target_vddpe] [number [need $cfg target_vddpe]]]} {
+        error "SV-005: Saved u_mem VDDPE target and current config differ."
+    }
     set dt [option $cfg delay_type max]
     set fixed [read_fixed [dict get $selection fixed file] $dt]
     move_legacy_details $out
@@ -2237,16 +2515,29 @@ proc auto_scaling::verify_after_run {cfg} {
             set retained [validate_fixed_restore_libraries $fixed $verify_cfg]
             verify_nearest_bindings [option $selection nearest_binding_records {}]
             dict set verify_cfg fixed_library_names [dict get $retained names]
+            dict set verify_cfg native_umem $native_umem
             if {[dict exists $selection scaling_library_rows]} {
                 set scaling_names {}
                 foreach row [dict get $selection scaling_library_rows] {
                     lappend scaling_names [dict get $row lib_name]
                 }
+                set scaling_names [concat $scaling_names [dict get $native_umem library_names]]
                 dict set verify_cfg scaling_library_names [lsort -unique $scaling_names]
             }
             set power [plan_fixed_path_power $fixed $verify_cfg]
-            verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] [dict get $power scaled_cells]
-            puts "VERIFY ONLY END: status=SUCCESS | evidence=[detail_path $out .dcalc]"
+            set core_names {}
+            foreach name [get_object_name [dict get $power scaled_cells]] {
+                if {[lsearch -exact [dict get $native_umem cell_names] $name] < 0} { lappend core_names $name }
+            }
+            if {[llength $core_names]} {
+                verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] \
+                    [get_cells -quiet -exact $core_names]
+            }
+            if {[llength [dict get $native_umem cell_names]]} {
+                verify_scaling_result $out $fixed $dt [option $cfg pba_mode ""] \
+                    [get_cells -quiet -exact [dict get $native_umem cell_names]] .umem.dcalc
+            }
+            puts "VERIFY ONLY END: status=SUCCESS | core=[detail_path $out .dcalc] u_mem=[detail_path $out .umem.dcalc]"
         }
     } result options]
     if {$code} {
@@ -2265,7 +2556,7 @@ proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
         ANALYSIS FIXED_PATH_FILE RESULT_FOLDER PROGRESS_INTERVAL_MINUTES
-        SCALING_POWER_NET
+        SCALING_POWER_NET TARGET_VDDPE_VOLTAGE
         FIXED_LIBRARY_SET FIXED_LIBRARY_VOLTAGE
     } {
         if {![info exists ::$name]} {
@@ -2328,6 +2619,7 @@ proc auto_scaling::build_restore_config {} {
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
         scaling_power_nets $scaling_power_nets \
+        target_vddpe [string trim $::TARGET_VDDPE_VOLTAGE] \
         fixed_library_set $fixed_family \
         fixed_library_voltage $fixed_voltage \
         progress_minutes $progress_minutes \
