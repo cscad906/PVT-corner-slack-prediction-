@@ -248,15 +248,18 @@ foreach {family voltage temp} {MEM_RCMAX 0.475 25 MEM_RCMAX 0.685 25 MEM_CMAX 0.
     lappend nearest_rows [dict create family $family process SSPG v $voltage t $temp \
         lib_name $family file /fixture/$family.db]
 }
-foreach {target expected} {0.5 0.475 0.8 0.685 0.58 0.475 0.685 0.685} {
+# TL-002: an exact target point is never selected; 0.685 falls back to 0.475.
+foreach {target expected} {0.5 0.475 0.8 0.685 0.58 0.475 0.685 0.475 0.475 0.685} {
     set row [auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX $target 25]
     assert [expr {abs([dict get $row v] - $expected) < 1e-8}] "Nearest family/temperature/tie/exact-point rule failed"
 }
+# A set whose only DB at the target temperature is the target DB must stop.
+expect_error {auto_scaling::nearest_library_row $nearest_rows SSPG MEM_CMAX 0.5 25} {NL-001:*non-target*}
 expect_error {auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX 0.5 -25} {NL-001:*}
 expect_error {auto_scaling::nearest_library_row $nearest_rows FF MEM_RCMAX 0.5 25} {NL-001:*}
 lappend nearest_rows [lindex $nearest_rows 0]
 expect_error {auto_scaling::nearest_library_row $nearest_rows SSPG MEM_RCMAX 0.5 25} {NL-001:*ambiguous*}
-puts "PASS: nearest 0.5/0.8, lower-voltage tie, exact target, BEOL/process/temperature kept separate, duplicate/missing DB rejection"
+puts "PASS: nearest 0.5/0.8, lower-voltage tie, exact target excluded (TL-002), BEOL/process/temperature kept separate, duplicate/missing DB rejection"
 
 # User settings default to restore; explicit nearest, numeric and blank behavior
 # stay compatible. No PrimeTime session mutation occurs in config building.

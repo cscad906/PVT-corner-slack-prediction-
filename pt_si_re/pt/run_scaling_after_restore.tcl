@@ -10,6 +10,10 @@
 # 이 파일은 read_db/read_verilog/link_design/read_sdc/read_parasitics를 실행하지 않습니다.
 # 현재 활성 parasitic의 BEOL/온도가 목표와 일치할 때만 scaling을 실행합니다.
 # source하면 아래 설정을 검사한 뒤 scaling을 바로 시작합니다.
+#
+# LOO: 목표 코너 DB 가 셀 링크(TL-001), nearest 선택(TL-002), 설계가 쓰는
+# scaling group 멤버(TL-003) 중 어디로든 타이밍에 들어가면 update_timing 전에
+# 멈춥니다. 증거: RESULT_FOLDER/details/<report>.loo_check.txt
 
 # ======================= USER SETTINGS ========================
 set TARGET_PROCESS      "SSPG"
@@ -1002,12 +1006,14 @@ proc auto_scaling::resolve_fixed_families {spec families {strict 1}} {
 
 # This is a nearest-DB approximation, not interpolation or extrapolation.
 # Never combine BEOL/auxiliary-rail variants or temperatures to fill gaps.
+# TL-002: 목표 코너 DB 자체는 후보가 아닙니다(LOO). 거리 0 인 DB 를 고르면
+# 목표 코너 값을 그대로 쓰는 것이 됩니다.
 proc auto_scaling::nearest_library_row {rows process family tv tt} {
     set best {}
     set distance Inf
     foreach row $rows {
         if {[dict get $row process] ne $process || [dict get $row family] ne $family ||
-            ![same [dict get $row t] $tt]} { continue }
+            ![same [dict get $row t] $tt] || [same [dict get $row v] $tv]} { continue }
         set d [expr {abs([dict get $row v] - $tv)}]
         if {$d < $distance - 1e-8} {
             set best [list $row]
@@ -1017,7 +1023,7 @@ proc auto_scaling::nearest_library_row {rows process family tv tt} {
         }
     }
     if {![llength $best]} {
-        error "NL-001: No loaded DB at the requested process/temperature for nearest selection: set=$family process=$process temperature=$tt C"
+        error "NL-001: No loaded non-target DB at the requested process/temperature for nearest selection (the target-corner DB itself is never used): set=$family process=$process target=$tv V temperature=$tt C"
     }
     # Equal distances: use the lower voltage, then reject duplicate revisions.
     set voltage [dict get [lindex $best 0] v]
@@ -1262,6 +1268,8 @@ proc auto_scaling::plan {cfg} {
     dict set result selected $selected
     dict set result excluded $excluded
     dict set result catalog $rows
+    # {DB path, library name} linked by any design cell; used by the LOO checks.
+    dict set result design_library_keys [dict get $used_result used_library_keys]
     dict set result shadows [dict get $cat shadows]
     dict set result unclassified_used $unclassified_used
     dict set result native_umem $native_umem
@@ -1724,6 +1732,167 @@ proc auto_scaling::verify_planned_group_coverage {plan} {
     puts "SCALING GROUP COVERAGE: all $planned planned input DB(s) are active"
 }
 
+# ---------------------------------------------------------------------------
+# LOO 가드. 목표 코너 DB 가 타이밍에 들어가는 길을 update_timing 전에 막습니다.
+#   TL-001 셀이 목표 코너 DB 에 링크됨. clock tree 등 fixed path 밖 셀은 이
+#          스크립트가 다시 링크하지 않으므로 그 DB 값이 그대로 쓰입니다.
+#   TL-002 nearest DB 선택이 목표 코너 DB 를 고름 (nearest_library_row 에서 제외).
+#   TL-003 설계가 쓰는 library 의 active scaling group 에 목표 코너 DB 가 있음.
+#          보간 가중치로 목표 코너 값이 섞입니다.
+# report_lib_groups 문자열이 아니라 DB 파일 경로로 비교하므로 반올림
+# (0.685 -> 0.69) 때문에 놓치거나 잘못 걸리는 일이 없습니다.
+# 증거는 details/<report>.loo_check.txt 에 남습니다.
+# ---------------------------------------------------------------------------
+
+# 목표 process/전압/온도와 정확히 같은 loaded DB 를 {정규화 경로 -> row} 로
+# 돌려줍니다. 이번 실행의 scaling rail library set 이거나 전압 격자가 있는
+# set 만 셉니다. 다른 rail 의 한 점짜리 library(IO 등)가 우연히 목표 전압과
+# 같은 것은 코너 데이터가 아니므로 제외합니다.
+proc auto_scaling::target_corner_rows {plan} {
+    set process [dict get $plan process]
+    set tv [dict get $plan v]
+    set tt [dict get $plan t]
+    set mode [dict get $plan mode]
+    set rows [dict get $plan catalog]
+    set rail_families [dict get $plan family]
+    set modes [dict create]
+    set result [dict create]
+    foreach row $rows {
+        if {[dict get $row process] ne $process ||
+            ![same [dict get $row v] $tv] || ![same [dict get $row t] $tt]} { continue }
+        set family [dict get $row family]
+        if {[lsearch -exact $rail_families $family] < 0} {
+            if {![dict exists $modes $family]} {
+                dict set modes $family [family_scaling_mode $rows $process $family $tv $tt $mode]
+            }
+            if {[dict get $modes $family] eq "STATIC"} { continue }
+        }
+        dict set result [file normalize [dict get $row file]] $row
+    }
+    return $result
+}
+
+proc auto_scaling::append_text {path contents} {
+    file mkdir [file dirname $path]
+    set fp [open $path a]
+    puts -nonewline $fp $contents
+    close $fp
+}
+
+# 설계 셀이 링크한 library 인지. plan 이 모은 {DB, 이름} 키로 판단합니다.
+# collection 핸들을 리스트에 모아 두지 않고 호출하는 쪽 루프에서 바로 거릅니다.
+proc auto_scaling::design_library_key_set {plan} {
+    set used [dict create]
+    foreach key [dict get $plan design_library_keys] { dict set used $key 1 }
+    return $used
+}
+proc auto_scaling::is_design_linked {used lib} {
+    set source [get_attribute -quiet $lib source_file_name]
+    if {$source eq ""} { return 0 }
+    return [dict exists $used [list [file normalize $source] [get_attribute $lib full_name]]]
+}
+
+# TL-001: 어떤 설계 셀도 목표 코너 DB 에 링크되어 있으면 안 됩니다.
+# hold 분석에서 쓰이는 min library 매핑도 같이 봅니다. 목표 코너 DB 목록을
+# 돌려주며 TL-003 이 그대로 씁니다.
+proc auto_scaling::loo_check_linked {plan supply out} {
+    set targets [target_corner_rows $plan]
+    set evidence [detail_path $out .loo_check.txt]
+    set text "LOO_CHECK target process=[dict get $plan process] voltage=[dict get $plan v] V temperature=[dict get $plan t] C\n"
+    append text "TARGET_CORNER_DBS_LOADED: [dict size $targets]\n"
+    dict for {db row} $targets {
+        append text "  TARGET_DB lib=[dict get $row lib_name] family=[dict get $row family]\n    DB=$db\n"
+    }
+    set used [design_library_key_set $plan]
+    set n_libs 0
+    set hits {}
+    foreach_in_collection lib [get_libs -quiet *] {
+        if {![is_design_linked $used $lib]} { continue }
+        incr n_libs
+        foreach attr {source_file_name min_source_file_name} {
+            set db [get_attribute -quiet $lib $attr]
+            if {$db eq ""} { continue }
+            set db [file normalize $db]
+            if {[dict exists $targets $db]} {
+                lappend hits [list [get_attribute $lib full_name] $attr $db]
+            }
+        }
+    }
+    append text "TL-001 DESIGN_LINKED_LIBRARIES: $n_libs LINKED_TO_TARGET_DB: [llength $hits]\n"
+    if {[llength $hits]} {
+        # 실패할 때만 fixed-path 셀 수를 셉니다(library 이름 기준).
+        set counts [dict create]
+        foreach lib_cell [get_object_name [get_attribute -quiet [dict get $supply path_cells] lib_cell]] {
+            dict incr counts [lindex [split $lib_cell /] 0]
+        }
+        set first ""
+        foreach hit $hits {
+            lassign $hit name attr db
+            set n [expr {[dict exists $counts $name] ? [dict get $counts $name] : 0}]
+            set line "TL-001 TARGET_DB_LINKED lib=$name via=$attr fixed_path_cells=$n DB=$db"
+            append text "$line\n"
+            puts $line
+            if {$first eq ""} { set first "lib=$name via=$attr DB=$db" }
+        }
+        append text "LOO_CHECK_STATUS: FAILED (TL-001)\n"
+        write_text $evidence $text
+        error "TL-001: [llength $hits] design-linked librar[expr {[llength $hits] == 1 ? "y is" : "ies are"}] the target-corner DB ([dict get $plan v] V/[dict get $plan t] C). Cells this script does not relink (clock tree, off-path) would be timed with target-corner data, so the run cannot be leave-one-out. Restore a session linked at a non-target corner. First: $first. Evidence: $evidence"
+    }
+    write_text $evidence $text
+    puts "LOO CHECK TL-001: PASSED | target_dbs_loaded=[dict size $targets] design_libraries=$n_libs linked_to_target=0"
+    return $targets
+}
+
+# TL-003: 설계가 링크한 library 의 active scaling group 멤버에 목표 코너 DB 가
+# 있으면 안 됩니다. 이 스크립트가 만든 그룹과 세션에 있던 그룹 모두 봅니다.
+# FIXED_LIBRARY_SET 그룹도 예외 없이 봅니다.
+proc auto_scaling::loo_check_groups {plan targets out} {
+    set evidence [detail_path $out .loo_check.txt]
+    set seen [dict create]
+    set checked 0
+    set hits {}
+    set used [design_library_key_set $plan]
+    foreach_in_collection lib [get_libs -quiet *] {
+        if {![is_design_linked $used $lib]} { continue }
+        set group [get_attribute -quiet $lib lib_scaling_group]
+        if {$group eq "" || ![sizeof_collection $group]} { continue }
+        set paths {}
+        foreach_in_collection member [add_to_collection $group $lib] {
+            set db [get_attribute -quiet $member source_file_name]
+            if {$db eq ""} {
+                append_text $evidence "LOO_CHECK_STATUS: FAILED (TL-003 member without DB)\n"
+                error "TL-003: A scaling-group member has no source_file_name, so exclusion of the target-corner DB cannot be proven. LIB=[get_attribute $member full_name]"
+            }
+            lappend paths [file normalize $db]
+        }
+        set paths [lsort -unique $paths]
+        if {[dict exists $seen $paths]} { continue }
+        dict set seen $paths 1
+        incr checked
+        foreach db $paths {
+            if {[dict exists $targets $db]} {
+                lappend hits [list [get_attribute $lib full_name] [llength $paths] $db]
+            }
+        }
+    }
+    set text "TL-003 ACTIVE_GROUPS_CHECKED: $checked GROUPS_WITH_TARGET_DB: [llength $hits]\n"
+    foreach hit $hits {
+        lassign $hit name size db
+        set line "TL-003 TARGET_DB_IN_GROUP linked_lib=$name members=$size DB=$db"
+        append text "$line\n"
+        puts $line
+    }
+    if {[llength $hits]} {
+        append text "LOO_CHECK_STATUS: FAILED (TL-003)\n"
+        append_text $evidence $text
+        lassign [lindex $hits 0] name size db
+        error "TL-003: [llength $hits] active scaling group(s) used by the design contain the target-corner DB ([dict get $plan v] V/[dict get $plan t] C). Interpolation would mix in target-corner data; PrimeTime cannot remove a library from an active group. Restore a session whose groups exclude the target corner. First: linked_lib=$name DB=$db. Evidence: $evidence"
+    }
+    append text "LOO_CHECK_STATUS: PASSED\n"
+    append_text $evidence $text
+    puts "LOO CHECK TL-003: PASSED | active_groups_checked=$checked groups_with_target_db=0 | evidence=$evidence"
+}
+
 # Opt-in for the separate u_mem LOO flow: its native group is defined first,
 # so only entirely ungrouped scalar families may be added afterward.
 proc auto_scaling::define_missing_scalar_groups {scaling_sets} {
@@ -2105,7 +2274,7 @@ proc auto_scaling::move_legacy_details {out} {
 # Clear only this run's exact output names; never clear the result directory.
 # Remove old sidecars too, so a failed rerun cannot retain old success evidence.
 proc auto_scaling::reset_output_files {out {include_log 0}} {
-    set suffixes {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .dcalc .umem.dcalc .umem_power.txt}
+    set suffixes {"" .missing .selection.tcl .inputs.txt .libgroups.before .libgroups .loo_check.txt .dcalc .umem.dcalc .umem_power.txt}
     if {$include_log} { lappend suffixes .log }
     set previous {}
     foreach suffix $suffixes {
@@ -2511,6 +2680,8 @@ proc auto_scaling::run_after_restore {cfg} {
     set inputs_text [scaling_inputs_text $plan]
     write_text [detail_path $out .inputs.txt] $inputs_text
     puts $inputs_text
+    # LOO 가드 TL-001: 그룹을 만들거나 V/T 를 바꾸기 전에 멈춥니다.
+    set target_corner_dbs [loo_check_linked $plan $supply $out]
     phase_done PLAN_DESIGN_LIBRARIES $phase_started
 
     set rail [lindex [dict get $cfg scaling_power_nets] 0]
@@ -2572,6 +2743,8 @@ proc auto_scaling::run_after_restore {cfg} {
         error "A non-exempt scaling group still contains or rounds to the target corner. Scaling verification failed: [detail_path $out .libgroups]"
     }
     verify_planned_group_coverage $plan
+    # LOO 가드 TL-003: 문자열이 아니라 DB 경로로 그룹 멤버를 다시 확인합니다.
+    loo_check_groups $plan $target_corner_dbs $out
     phase_done PREPARE_SCALING_GROUPS $phase_started
 
     if {[llength $nearest_bindings]} {

@@ -29,6 +29,35 @@ u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아�
 3. 동일한 netlist에서 `1_union.py`로 만든 `fixed_paths.tcl`
 4. Python 3.6 이상
 
+### LOO 가드 (TL-001 ~ TL-003)
+
+`run_scaling_after_restore.tcl`은 목표 코너 DB가 타이밍에 들어갈 수 있는
+경로가 하나라도 있으면 **그룹 정의·V/T 변경·update_timing 전에** 멈춥니다.
+DB 파일 경로로 비교하므로 `report_lib_groups`의 반올림(0.685 → 0.69) 영향을
+받지 않습니다.
+
+| 번호 | 멈추는 경우 | 시점 |
+|---|---|---|
+| `TL-001` | 설계의 어떤 셀(clock tree 등 fixed path 밖 포함)이 목표 코너 DB에 링크됨. hold용 min-library 매핑도 포함 | `PLAN_DESIGN_LIBRARIES` 끝 |
+| `TL-002` | nearest 정책이 목표 코너 DB를 고름 → 멈추지 않고 후보에서 제외. 목표 DB밖에 없으면 `NL-001` | 계획 중 |
+| `TL-003` | 설계가 쓰는 library의 active scaling group 멤버에 목표 코너 DB가 있음 (세션에 있던 그룹, 이 스크립트가 만든 그룹 모두) | `PREPARE_SCALING_GROUPS` 끝 |
+
+"목표 코너 DB"는 목표 process·전압·온도와 정확히 같은 로드된 DB입니다. 이번
+scaling rail의 library set이거나 전압 격자가 있는 set만 셉니다. 다른 rail의 한
+점짜리 library(IO 등)가 우연히 목표 전압과 같은 것은 제외합니다.
+
+목표 코너별로 받는 세션(예: 목표 0.6 V → 0.64 V에 링크, 그룹은 0.6 V만 뺀 전체)은
+세 검사를 모두 통과해야 합니다. 로그에 다음 두 줄이 있어야 합니다.
+
+```text
+LOO CHECK TL-001: PASSED | target_dbs_loaded=... design_libraries=... linked_to_target=0
+LOO CHECK TL-003: PASSED | active_groups_checked=... groups_with_target_db=0 | evidence=...
+```
+
+증거 파일은 `details/<결과 rpt 이름>.loo_check.txt`이며 마지막 줄이
+`LOO_CHECK_STATUS: PASSED`여야 합니다. `target_dbs_loaded=0`은 목표 코너 DB가
+세션에 아예 없다는 뜻으로 정상입니다.
+
 ### u_mem VDDPE LOO가 필요한 경우
 
 기존 `run_scaling_after_restore.tcl`은 u_mem의 **활성 그룹에 목표 VDDPE가
@@ -626,7 +655,9 @@ fixed-path 오류에는 아래의 짧은 번호도 표시되므로 긴 회사 �
 | `SV-003` | delay calculation에서 외삽 또는 scaling 취소 감지 |
 | `SV-004` | `Scaling libraries used` 적용 증거 없음 |
 | `SV-005` | 검증 재시도 시 저장된 실행 정보와 현재 design/config 불일치 |
-| `NL-001` | 가까운 DB의 동일 process/목표 온도 후보가 없거나 선택 전압의 revision이 여러 개 |
+| `NL-001` | 가까운 DB의 동일 process/목표 온도 후보가 없거나(목표 코너 DB 자체는 후보가 아님) 선택 전압의 revision이 여러 개 |
+| `TL-001` | 설계 셀이 목표 코너 DB에 링크됨(min-library 매핑 포함). LOO 불가, 다른 코너에 링크된 세션 필요 |
+| `TL-003` | 설계가 쓰는 active scaling group에 목표 코너 DB가 있음. 목표를 뺀 그룹의 세션 필요 |
 | `NL-002` | DB/동일 이름 셀 조회, signal pin, 실제 V/T 또는 min-library 매핑 사전 검사 실패 |
 | `NL-003` | 재연결 후 PG-pin/supply 연결이 달라짐. 재연결 중 실패하면 원래 DB로 되돌리기 시도 |
 | `NL-004` | 실제 cell 연결 DB가 선택한 가까운 DB와 다르거나 min-library 매핑이 변경됨 |
@@ -721,6 +752,7 @@ restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt
     restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.selection.tcl
     restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.libgroups.before
     restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.libgroups
+    restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.loo_check.txt
     restored_scaled_SSPG_0p57V_25C_RCMAX_V_setup.rpt.dcalc
 ```
 
@@ -740,6 +772,7 @@ report 옆에 남아 있는 같은 코너의 부산물은 일반 재실행 시 �
 | `details/<결과 rpt 이름>.selection.tcl` | 선택된 library family와 scaling 입력 기록 |
 | `details/<결과 rpt 이름>.libgroups.before` | 실행 전 scaling group |
 | `details/<결과 rpt 이름>.libgroups` | 실행에 사용한 scaling group |
+| `details/<결과 rpt 이름>.loo_check.txt` | 목표 코너 DB 목록과 TL-001/TL-003 결과. 마지막 줄 `LOO_CHECK_STATUS: PASSED` |
 | `details/<결과 rpt 이름>.dcalc` | 실제 cell arc에서 scaling library가 사용된 증거 |
 
 다음 문자열이 `.dcalc`에 있어야 합니다.

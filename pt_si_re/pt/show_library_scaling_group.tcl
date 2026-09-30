@@ -114,6 +114,10 @@ proc library_scaling_group_report::catalog_row_reason {row set_name cfg} {
     if {[lsearch -exact $fixed_sets [dict get $row family]] >= 0} {
         if {[dict exists $cfg fixed_library_voltage] &&
             [string equal -nocase [dict get $cfg fixed_library_voltage] nearest]} {
+            # TL-002: the target-corner DB is never a nearest candidate (LOO).
+            if {abs([dict get $row v] - [dict get $cfg target_v]) < 1e-8} {
+                return [list SET_MEMBER EXCLUDED_TARGET_POINT]
+            }
             return [list SET_MEMBER NEAREST_DB_CANDIDATE]
         }
         return [list SET_MEMBER FIXED_RESTORE_DB]
@@ -308,7 +312,7 @@ proc library_scaling_group_report::show_voltage_range {members cfg} {
         } else {
             puts "NEAREST DB CANDIDATE: voltage=[dict get $chosen v] V LIB=[dict get $chosen lib_name] DB=[dict get $chosen file]"
         }
-        puts "NOTE: nearest selection includes exact target points; candidate lookup does not prove instance binding or target-rail scope."
+        puts "NOTE: nearest selection excludes the exact target point (LOO); candidate lookup does not prove instance binding or target-rail scope."
         puts ""
     }
     puts "NOTE: V CHECK uses catalog values and planner rules, not effective PG-pin voltages or a full scaling validation."

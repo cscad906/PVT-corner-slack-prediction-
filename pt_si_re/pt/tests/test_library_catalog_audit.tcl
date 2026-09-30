@@ -107,10 +107,12 @@ assert_contains $text "lookup=SET_MEMBER v_input=EXCLUDED_TARGET_POINT process=S
 assert_contains $text "after_target_exclusion=0.475 lower=0.475 upper=NONE status=CANNOT_BRACKET"
 dict set ::scaling_config fixed_library_set MEM_RCMAX
 set text [query_text MEM_RCMAX]
-assert_contains $text "excluded_target=0 nearest_candidates=2"
+assert_contains $text "excluded_target=1 nearest_candidates=1"
 assert_contains $text "status=NEAREST_DB_POLICY"
-assert_contains $text "NEAREST DB CANDIDATE: voltage=0.685"
-assert_contains $text "lookup=SET_MEMBER v_input=NEAREST_DB_CANDIDATE process=SSPG voltage=0.685"
+assert_contains $text "NEAREST DB CANDIDATE: voltage=0.475"
+assert_contains $text "lookup=SET_MEMBER v_input=EXCLUDED_TARGET_POINT process=SSPG voltage=0.685"
+assert_contains $text "lookup=SET_MEMBER v_input=NEAREST_DB_CANDIDATE process=SSPG voltage=0.475"
+assert_absent $text "NEAREST DB CANDIDATE: voltage=0.685"
 dict set ::scaling_config fixed_library_voltage 0.685
 set text [query_text MEM_RCMAX]
 assert_contains $text "nearest_candidates=0 fixed_restore=2"
@@ -120,7 +122,7 @@ set text [query_text MEM_RCMAX]
 assert_contains $text "nearest_candidates=0 fixed_restore=2"
 assert_contains $text "FIXED DB POLICY: restore; keep linked DB and restored V/T"
 assert_absent $text "NEAREST DB CANDIDATE:"
-original_puts "PASS: detailed reasons, ordinary target exclusion, exact-target nearest eligibility and numeric restore policy remain distinct"
+original_puts "PASS: detailed reasons, ordinary target exclusion, exact target excluded from nearest (LOO) and numeric restore policy remain distinct"
 
 # Scope comes from actual linked DB identity and cached PG classification,
 # never from the voltage-range display. Reading it must not rescan PG pins.
