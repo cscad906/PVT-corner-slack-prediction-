@@ -78,7 +78,7 @@ check [expr {[dict get $static_row family_resolution] eq "ambiguous_static"}] "U
 check [expr {[dict get [dict get [dict get $native groups] MEM_LO] bracket] eq {0.475 0.685}}] "Native VDDPE bracket lost"
 check [expr {[auto_scaling::umem_control_cells $native] eq {top/u_mem_control}}] "Control instance not identified"
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe ""]} {UM-001:*}
-expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.685]} {UM-015:*}
+expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.685]} {UM-015:*NO_BRACKET*}
 set unrounded_report $::native_report
 set ::native_report [string map {0.685 0.69} $::native_report]
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.685]} {UM-015:*}
@@ -86,7 +86,14 @@ set ::native_report $unrounded_report
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.76]} {UM-009:*}
 set original_report $::native_report
 append ::native_report "\n    MEM_TARGET    25.00       { V:0.540 VDDPE:0.540 } 1.00"
-expect_error {auto_scaling::native_umem_scope $supply $cfg} {UM-015:*}
+expect_error {auto_scaling::native_umem_scope $supply $cfg} {UM-015:*BRACKET=0.475 0.685 V*}
+set ::native_report {Group    Library     Temperature Voltage          Process
+Group 1
+    MEM_LO       25.00       { V:0.475 VDDPE:0.475 } 1.00
+    MEM_TARGET   25.00       { V:0.685 VDDPE:0.685 } 1.00
+    MEM_HI       25.00       { V:0.800 VDDPE:0.800 } 1.00
+1}
+expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe 0.685]} {UM-015:*BRACKET=0.475 0.8 V*}
 set ::native_report $original_report
 set ::native_report [string map {VDDPE OTHER} $::native_report]
 expect_error {auto_scaling::native_umem_scope $supply $cfg} {UM-006:*}

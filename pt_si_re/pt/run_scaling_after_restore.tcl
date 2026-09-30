@@ -726,6 +726,7 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             report_lib_groups -scaling -objects $libs -nosplit -show {voltage temperature process}
         }
         set voltages {}
+        set loo_voltages {}
         set members [dict create]
         set matching_rail_vectors {}
         foreach line [split $report "\n"] {
@@ -741,6 +742,8 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             lappend voltages $parsed_voltage
             if {[report_number_may_match $voltage $target]} {
                 lappend matching_rail_vectors $rails
+            } else {
+                lappend loo_voltages $parsed_voltage
             }
         }
         if {![dict exists $members $lib_name]} {
@@ -750,7 +753,13 @@ proc auto_scaling::native_umem_scope {supply cfg} {
             error "UM-008: No native VDDPE library grid at target temperature $target_t C for $lib_name."
         }
         if {[llength $matching_rail_vectors]} {
-            error "UM-015: Native group for $lib_name contains or rounds to VDDPE=$target V at $target_t C. Target-excluded VDDPE scaling is unverified, so this run stops. Check all LOO GROUP AUDIT lines above: u_mem is the first blocking check, not proof that other groups passed. Matching rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
+            set loo_grid [lsort -real -unique $loo_voltages]
+            if {[catch {set loo_pair [bracket $loo_grid $target VDDPE]} loo_reason]} {
+                set loo_feasibility "NO_BRACKET ($loo_reason)"
+            } else {
+                set loo_feasibility "BRACKET=$loo_pair V; active full-session group still cannot be replaced in place"
+            }
+            error "UM-015: Native group for $lib_name includes target VDDPE=$target V at $target_t C. Excluding target leaves VDDPE grid=$loo_grid V; LOO feasibility=$loo_feasibility. This run stops rather than report a non-LOO result. Check LOO GROUP AUDIT for other groups. Matching target rail vectors (first 5): [lrange $matching_rail_vectors 0 4]"
         }
         if {[catch {set pair [bracket $voltages $target VDDPE]} problem]} {
             error "UM-009: Native group for $lib_name cannot perform target-excluded VDDPE interpolation: $problem; loaded VDDPE values=[lsort -real -unique $voltages]"
