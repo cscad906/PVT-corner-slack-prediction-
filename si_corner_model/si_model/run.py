@@ -1834,11 +1834,22 @@ def _print_basis_comparison(y, split, coords, cfg, hid) -> None:
               "seen_loo": best_seen}.get(on) or best_seen
     for key, k, seen_e, hid_mean, hid_worst, edge_e in sorted(rows, key=lambda r: r[3]):
         vo, cross, cmd = key
-        mark = ("  <- chosen" if key == chosen else "")
-        for who, pick in (("seen-LOO", best_seen), ("edge", best_edge),
-                          ("hidden", best_hid)):
-            if key == pick and key != chosen:
-                mark += "  <- %s picks this" % who
+        # Which criterion picks which row, stated either way round. Marking only
+        # the disagreements would make "agrees with the choice" and "was not
+        # computed at all" look the same -- silence -- and the second is normal
+        # for `edge` on a small grid.
+        agree = [who for who, pick in (("seen-LOO", best_seen), ("edge", best_edge),
+                                       ("hidden", best_hid)) if key == pick]
+        if key == chosen:
+            mark = "  <- chosen"
+            active = {"hidden": "hidden", "edge": "edge",
+                      "seen_loo": "seen-LOO"}.get(on, on)
+            others = [w for w in agree if w != active]
+            if others:
+                mark += " (%s agree%s)" % (", ".join(others),
+                                           "" if len(others) > 1 else "s")
+        else:
+            mark = "".join("  <- %s picks this" % w for w in agree)
         print(f"       v^{vo} cross={str(cross):5s} {k:2d} params   "
               f"seen-LOO {seen_e:8.2f}   edge "
               + ("%8.2f" % edge_e if edge_e is not None else "       -")
