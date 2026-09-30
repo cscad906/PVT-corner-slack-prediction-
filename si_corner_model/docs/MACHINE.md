@@ -632,6 +632,100 @@ config.yaml 만 고치고 이 파일을 안 고치면 CI 가 알려준다 — �
 
 ---
 
+## 8.8 외삽을 더 잘하게 — 축 변수(`v_transform`)와 기준(`select_on: edge`)
+
+`run.sh base` 는 OLS만 numpy로 풀고 **히든 코너별 오차**를 찍는다. GPU도 학습도 없고
+**초 단위**다. 그래서 외삽 관련 결정은 전부 여기서 먼저 재고 넘어간다.
+
+### 왜 손댈 게 있나
+
+전압 3점을 **V의 2차식**도 정확히 지나가고, **1/V의 직선**도 정확히 지나간다. 둘 다
+측정값을 하나도 안 틀리는데, **범위 밖의 0.5 V 에서는 서로 다른 값**을 낸다. 즉
+범위 안에서는 변수 선택이 거의 무의미하고, **범위 밖에서는 변수 선택이 답의 대부분**이다.
+
+### `base.v_transform`
+
+```
+none   V          (지금까지의 다항식)
+inv    1/V
+log    log V
+auto   세 개를 다 재보고 select_on 기준으로 제일 좋은 걸 쓴다
+```
+
+`auto` 면 `[VAXIS]` 줄이 후보별 점수와 마진까지 찍는다. 이긴 걸 config 에
+`v_transform: inv` 로 박아두면 매 실행마다 다시 고르지 않는다. 학습하면 **체크포인트에
+같이 저장되고 predict 는 그걸 그대로 재생**한다 (보정은 자기가 올라탔던 base 위에서만
+의미가 있다).
+
+**일부러 상수가 없는 것만 넣었다.** `1/(V - Vth)` 는 alpha-power 지연 법칙을 코드에
+박는 것이고, slack 은 셀 지연 하나가 아니라 `T - (지연 합) + skew - U` 다. 게다가 Vth 가
+PDK/코너마다 다르면 **자신 있게 틀린다**. `1/V` 와 `log V` 는 틀릴 상수가 없는 단순
+단조 변수 변환이라, 이걸 쓰는 건 물리 주장이 아니라 "곡률 가정을 하나 더 후보에 올린다"
+는 뜻이다. 어느 게 맞는지는 드롭마다 측정한다.
+
+### `base.select_on: edge`
+
+`hidden` 은 홀드아웃 코너의 오차로 후보를 고른다. 외삽 실험에서는 **그 홀드아웃이 바로
+결과물**이라, 그걸로 고르면 정답 보고 고르는 셈이고 보고되는 숫자는 "N개 중 제일 좋은 것"
+이 된다. `edge` 는 같은 질문을 **한 칸 안쪽**에서 한다:
+
+> seen 중 **최저 전압 행을 통째로** 빼고 남은 것으로 적합해서, 그 행을 맞혀 본다.
+> 최고 전압 행에 대해서도 같이 하고 평균.
+
+seen 코너만 쓰므로 홀드아웃 라벨을 한 번도 안 읽는다. **드롭마다 다시 계산되는 기준**
+이고, 안에 박힌 상수가 없다.
+
+**약점은 크기다.** 행을 통째로 빼면 전압 하나가 날아가서, 줄어든 격자로 식별이 안 되는
+후보는 **점수가 아예 안 나온다**(표에 `-`). seen 전압이 3개뿐이면 할 말이 거의 없고,
+5개 이상이면 쓸 만하다. 아무 후보도 못 재면 그렇다고 말하고 seen-LOO 로 내려간다.
+
+그래서 **`run.sh base` 가 후보마다 seen-LOO · edge · hidden 을 나란히 찍고, edge 가
+hidden-최적 basis 를 골랐는지 아닌지까지 한 줄로 말해준다.** 새 드롭에서 이 기준을
+믿어도 되는지는 그 줄로 판단한다.
+
+```
+    -- basis candidates (chosen on edge extrapolation (one voltage out)) --
+       v^1 cross=False  3 params   seen-LOO     2.34   edge    10.17   hidden     6.24  <- hidden picks this
+       v^2 cross=True   5 params   seen-LOO     0.01   edge        -   hidden     7.80  <- seen-LOO picks this
+       v^2 cross=False  4 params   seen-LOO     1.37   edge     7.29   hidden     7.89  <- chosen
+       -> the edge criterion does NOT pick the hidden-best basis here.
+```
+
+### 설정 안 건드리고 쓸어보기 — `SI_BASE`
+
+```csh
+env SI_BASE="v_order=1,weighting=local" bash scripts/run.sh base --config config_extrapolation.yaml
+
+foreach t (none inv log)
+  env SI_BASE="v_transform=$t" bash scripts/run.sh base --config config_extrapolation.yaml
+end
+```
+
+`base:` 아래 어떤 키든 `키=값` 으로 준다. 타입은 config 에 있는 타입으로 맞춰지고
+(`cross_terms=false` 는 불리언), **모르는 키는 에러**다 — 조용히 아무것도 안 하는 설정이
+제일 위험하니까. config.yaml 을 고치지 않으므로 `git pull` 이 실험을 먹지 않는다.
+
+### 합성 데이터로 확인한 것 (실제 데이터 수치가 아니다)
+
+테스트 픽스처의 slack 은 `1 - (0.30*(0.8/v)^1.8 + ...)`, 즉 **1/v 의 함수로 만들어져
+있다.** 그래서 `auto` 가 `inv` 를 고르는 게 정답이고, 그걸 확인하는 게 테스트다:
+
+| 설정 | 125C 히든 | m25 히든 |
+|---|---|---|
+| `v_transform: none`, `select_on: hidden` | 6.58 ps | 6.63 ps |
+| `v_transform: auto` → inv, `select_on: hidden` | **0.29 ps** | **0.19 ps** |
+| `v_transform: auto`, `select_on: edge` (실험 config 기본) | 7.89 ps | 0.19 ps |
+
+읽는 법 두 가지:
+- **변수를 고르는 것이 큰 레버다** (6.58 → 0.29). 단 이 20배는 픽스처가 1/v 로 만들어진
+  덕이라 상한이다. **실제 드롭에서 얼마인지는 `[VAXIS]` 줄이 말해준다.**
+- **`edge` 는 격자가 작으면 약하다.** 125C 는 seen 전압 3개 x 레벨 2개 = 6코너뿐이라,
+  행을 빼면 4코너가 남고 hidden-최적이었던 5-파라미터 후보를 **점수조차 못 냈다** →
+  더 나쁜 basis 를 골랐다 (7.89 vs 0.29). m25(9코너)에서는 hidden-최적과 사실상 동일.
+  실제 드롭은 PERIC0 3 / MFC 4 / MIF 6 seen 전압이니, MIF 쪽이 이 기준이 제일 할 말이 많다.
+
+---
+
 ## 8.5 `Killed` 만 뜨고 이유가 안 남을 때
 
 `Killed` 는 SIGKILL 이다. **프로세스가 잡을 수 없어서 죽는 순간에는 아무것도 못 남긴다** —

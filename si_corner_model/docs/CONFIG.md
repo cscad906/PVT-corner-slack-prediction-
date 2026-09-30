@@ -26,12 +26,19 @@ base(OLS) 튜닝은 [OLS.md](OLS.md), 리포트 파싱은 [PARSING.md](PARSING.m
 | `temps[].token` | `tag` | **파일명 안의** 온도 토큰. tag 와 달라도 됨 |
 | `temps[].levels` | — | 그 온도에 존재하는 BEOL 레벨. **온도마다 달라도 된다** |
 | `mode` | `setup` | **setup/hold 를 정하는 한 줄.** 읽을 폴더(`files.subdir`, `files.crosstalk_subdir`)와 쓸 폴더(`out.*`)가 전부 여기서 유도된다. 한 번만 바꿔 돌리려면 파일을 고치지 말고 `run.sh <단계> --mode hold` (또는 `env SI_MODE=hold`) |
+| `base.v_transform` | `none` | OLS 전압 축을 **어떤 변수로** 적합할지: `none`=V, `inv`=1/V, `log`=log V, `auto`=세 개 재보고 `select_on` 기준으로 고름(`[VAXIS]` 줄에 점수·마진). 범위 **밖**을 예측할 때만 큰 차이가 난다 (전압 3점은 V의 2차식도 1/V의 직선도 정확히 지나가고, 범위 밖에서 서로 다른 값을 낸다). 상수가 있는 형태(`1/(V-Vth)`)는 일부러 안 넣었다 — Vth 가 틀리면 자신 있게 틀리고, slack 은 셀 지연 하나가 아니다. 체크포인트에 저장되고 predict 는 재생만 한다. `base.bandwidth` 는 좌표 단위라 변환하면 의미가 달라진다(`weighting: auto` 는 다시 측정하므로 무관) |
+| `base.select_on` | `hidden` | 후보를 무엇으로 채점할지: `hidden`(홀드아웃 오차) / `seen_loo`(seen LOO) / `edge`(**seen 최저·최고 전압 행을 통째로 빼고 그 행을 맞혀 본 오차**). 범위 밖을 예측하는 실험에서는 홀드아웃이 결과물이라 `hidden` 으로 고르면 정답 보고 고르는 셈 → `edge` 가 정직하다. 대신 행을 빼면 전압 하나가 날아가서 격자가 작으면 후보를 아예 못 재고(`-`) 약하다. `run.sh base` 가 후보별로 세 기준을 나란히 찍고 edge 가 hidden-최적을 골랐는지 말해준다 |
 | `out.tag` | `""` | 비우면 꺼짐. 이름을 주면 출력이 `runs/<tag>/<mode>/...` 로 간다 (**mode 위 단계**라 setup/hold 는 그 아래에서 계속 갈린다). 같은 리포트를 다른 seen/hidden 으로 실험할 때, 기존 결과를 덮지 않게 하는 스위치. `config_extrapolation.yaml` 이 이걸 `extrapolation` 으로 쓴다. 일회성은 `--tag <이름>`. **캐시는 태그 안 붙는다** (dataset.npz 는 분할과 무관해서 실험끼리 공유) |
 | `out.cache` | `auto` | `auto` = `cache/<mode>/<design>/<temp>/dataset.npz` |
 | `out.runs` | `auto` | `auto` = `runs/<mode>/<design>/<temp>/` + `runs/<mode>/_all/` |
 | `files.subdir` | `auto` | `auto` = `<mode>`. 폴더명이 다르면 직접 적는다 (`reports`) |
 | `files.crosstalk_subdir` | `auto` | `auto` = `<mode>/xtalk`. `null` 이면 SI 끔 |
 | `task` | `slack` | `slack` \| `slew` |
+
+`base:` 아래 아무 키나 **한 번만** 바꿔 돌려보려면 파일을 고치지 말고
+`env SI_BASE="v_order=1,weighting=local" bash scripts/run.sh base` — 타입은 config 의
+타입으로 맞춰지고 모르는 키는 에러다. `run.sh base` 는 numpy만 쓰고 초 단위라 이렇게
+쓸어보기 좋다.
 
 모델 이름은 `<design>/<tag>`. 공정이 여러 개면 `corners.process` 를 바꿔가며
 **따로 돌린다** (공정도 분리 차원이라 한 번에 섞을 수 없다).

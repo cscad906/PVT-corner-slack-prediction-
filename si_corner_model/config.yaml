@@ -358,9 +358,42 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
+  v_transform: none                 # The VARIABLE the voltage axis is fit in:
+                                    #   none = V (the polynomial you expect)
+                                    #   inv  = 1/V        log = log V
+                                    #   auto = measure all three and keep the
+                                    #          best by select_on, printed as
+                                    #          [VAXIS] with the margin
+                                    #   Why it exists: three seen voltages are
+                                    #   fit EXACTLY by a quadratic in V and by a
+                                    #   straight LINE in 1/V. Both reproduce
+                                    #   every measurement and they disagree
+                                    #   about a voltage outside the range, so
+                                    #   when extrapolating the variable is most
+                                    #   of the answer. Inside the range it
+                                    #   barely matters.
+                                    #   Deliberately parameter-free: 1/(V-Vth)
+                                    #   would encode the alpha-power delay law,
+                                    #   but slack is T - (sum of delays) + skew
+                                    #   - U rather than one cell delay, and a
+                                    #   wrong Vth extrapolates confidently
+                                    #   wrong. 1/V and log V have no constant to
+                                    #   get wrong.
+                                    #   Pinned into the checkpoint: predict
+                                    #   replays it, never re-chooses.
+                                    #   NOTE base.bandwidth is in COORDINATE
+                                    #   units, so a transform changes what it
+                                    #   means (1/V spans a different range than
+                                    #   V). weighting: auto re-measures each
+                                    #   option and is unaffected; a hand-set
+                                    #   `local` needs its bandwidth re-checked.
   select_on: hidden                 # What select_basis scores candidates by.
                                     #   hidden   = error on the held-out corners
                                     #   seen_loo = leave-one-out on seen corners
+                                    #   edge     = hold out the whole LOWEST seen
+                                    #              voltage row, refit on the rest,
+                                    #              score back at it; same for the
+                                    #              highest; average the two
                                     #
                                     # seen_loo is the honest criterion -- it never
                                     # reads a held-out label -- and on this grid it
@@ -381,6 +414,26 @@ base:
                                     # Query corners (no truth) are skipped; if a model
                                     # has no labelled hidden corner at all, it falls
                                     # back to seen_loo on its own.
+                                    #
+                                    # `edge` exists for the case `hidden` cannot
+                                    # serve: predicting OUTSIDE the measured range,
+                                    # where the held-out corners are the deliverable
+                                    # and scoring on them is scoring on the answer.
+                                    # It asks the same shape of question one step in
+                                    # -- reach a voltage row the fit never saw -- and
+                                    # reads no held-out label, so it is honest. It is
+                                    # a criterion recomputed from whatever grid it is
+                                    # given, not a rule tuned on one drop.
+                                    # Its limit is size: dropping a row costs a whole
+                                    # voltage, and a candidate the reduced grid cannot
+                                    # identify is not scored at all. With 3 seen
+                                    # voltages it has little to say; with 5+ it has.
+                                    # If it can score nothing it says so and falls
+                                    # back to seen_loo.
+                                    # `run.sh base` prints seen-LOO, edge and hidden
+                                    # for EVERY candidate side by side, and states
+                                    # whether edge picked the hidden-best basis. Read
+                                    # that before trusting it on a new drop.
 
   level_coords: measured            # Where the BEOL levels sit on their axis.
                                     #

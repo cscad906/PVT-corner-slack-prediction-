@@ -1283,6 +1283,216 @@ def _report_keys(fp):
     return out
 
 
+def _base_project(real_tree, **base):
+    """The real config, pointed at the fixture, with base keys overridden."""
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    p["designs"] = ["boomcore"]
+    p["files"]["crosstalk_subdir"] = None
+    p["train"]["epochs"] = 1
+    p["train"]["device"] = "cpu"
+    p.setdefault("base", {}).update(base)
+    return p
+
+
+def test_v_transform_auto_recovers_the_generating_variable(real_tree, tmp_path,
+                                                           monkeypatch):
+    """base.v_transform: auto picks the axis variable by measurement.
+
+    The fixture's slack is 1 - (0.30*(0.8/v)**1.8 + ... + 0.01*(0.8/v)*level),
+    i.e. exactly a function of 1/v -- so the RIGHT answer here is known in
+    advance: `inv`. That is what makes this a test and not an observation. It
+    says nothing about which variable wins on silicon, where the curve is a sum
+    of cell and net delays and the answer is whatever the [VAXIS] table says.
+
+    A transform that was parsed but never applied to the coordinates would score
+    all three variables identically, which is the failure this pins down.
+    """
+    from si_model.parsing.build_dataset import build
+    from si_model.run import _hidden_err, expand, select
+    from si_model.training.loo import build_design, fit_field, make_split
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def base_err(**base):
+        m = select(expand(_base_project(real_tree, **base)),
+                   design="boomcore", temp="m25")[0]
+        build(m["cfg"])
+        ds = dict(np.load(m["cfg"]["data"]["cache"]))
+        sp = make_split(ds["corners"].tolist(), ds["vt"], m["cfg"])
+        y = ds["slack"]
+        phi, coords, _, _ = build_design(m["cfg"], sp, y=y)
+        loo, _ = fit_field(y, phi, sp, coords, m["cfg"])
+        return m["cfg"]["base"]["axes"][0]["transform"], _hidden_err(y, sp, loo)
+
+    chosen, err_auto = base_err(v_transform="auto")
+    assert chosen == "inv", chosen
+    raw, err_raw = base_err(v_transform="none")
+    assert raw == "none"
+    inv, err_inv = base_err(v_transform="inv")
+    assert inv == "inv"
+    # the transform reaches the numbers, and `auto` landed on the better one
+    assert err_inv < err_raw / 2, (err_inv, err_raw)
+    assert abs(err_auto - err_inv) < 1e-9
+    # log is offered and is NOT silently the same as inv
+    _, err_log = base_err(v_transform="log")
+    assert abs(err_log - err_inv) > 1e-9
+
+
+def test_edge_criterion_cannot_see_the_hidden_corners(real_tree, tmp_path,
+                                                      monkeypatch):
+    """select_on: edge scores on SEEN corners only.
+
+    The point of the criterion is to rank candidates where the hidden corners
+    are the deliverable -- predicting below the measured range -- so it must be
+    computable without their labels. Corrupting every hidden label must leave it
+    bit-identical; the hidden criterion on the same data must move, or this test
+    would pass on a criterion that ignores its input.
+    """
+    from si_model.parsing.build_dataset import build
+    from si_model.run import _edge_err, _hidden_err, expand, select
+    from si_model.training.loo import build_design, fit_field, make_split
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+    # A small basis on purpose: holding a whole voltage row out costs 2 of the
+    # 10 seen corners, and the config's own 9-parameter basis does not fit in
+    # the 8 that are left -- which the criterion reports as "cannot score", not
+    # as a number. That path is checked at the end.
+    m = select(expand(_base_project(real_tree, v_order=1, cross_terms=False,
+                                    select=False)),
+               design="boomcore", temp="m25")[0]
+    build(m["cfg"])
+    ds = dict(np.load(m["cfg"]["data"]["cache"]))
+    sp = make_split(ds["corners"].tolist(), ds["vt"], m["cfg"])
+    y = np.asarray(ds["slack"], float)
+    phi, coords, _, _ = build_design(m["cfg"], sp, y=y)
+    assert phi.shape[1] == 4, phi.shape        # 1 + dv + drc + drc2
+
+    y2 = y.copy()
+    y2[:, sp.hidden_idx] = 1e6
+    e1 = _edge_err(y, sp, phi, coords, m["cfg"])
+    e2 = _edge_err(y2, sp, phi, coords, m["cfg"])
+    assert e1 is not None and e1 == e2
+
+    loo1, _ = fit_field(y, phi, sp, coords, m["cfg"])
+    loo2, _ = fit_field(y2, phi, sp, coords, m["cfg"])
+    assert _hidden_err(y, sp, loo1) != _hidden_err(y2, sp, loo2)
+
+    # two seen voltages cannot give a fold back: the criterion says so instead
+    # of scoring on whatever is left
+    sp2 = make_split(ds["corners"].tolist(), ds["vt"], m["cfg"])
+    keep = np.round(sp2.vt[:, 0], 9) >= 0.6 - 1e-9
+    sp2.seen = np.asarray(sp2.seen, bool) & keep
+    sp2.hidden = ~sp2.seen
+    assert len(np.unique(np.round(sp2.vt[sp2.seen_idx, 0], 9))) == 2
+    assert _edge_err(y, sp2, phi, coords, m["cfg"]) is None
+
+    # and a basis the fold cannot identify is not scored either
+    big = select(expand(_base_project(real_tree)), design="boomcore", temp="m25")[0]
+    phi_big, co_big, _, _ = build_design(big["cfg"], sp, y=y)
+    assert phi_big.shape[1] > int(np.asarray(sp.seen, bool).sum()) - 2
+    assert _edge_err(y, sp, phi_big, co_big, big["cfg"]) is None
+
+
+def test_si_base_sets_any_base_key_for_one_run(real_tree, monkeypatch):
+    """SI_BASE=key=value,...: sweep the base without editing a tracked file.
+
+    Values arrive as strings and have to land as the type the key already has,
+    or `cross_terms=false` is a non-empty string and reads as true. An unknown
+    key is an error: the whole reason this path exists is that a setting which
+    silently does nothing is indistinguishable from one that does nothing
+    useful.
+    """
+    from si_model.run import expand, select
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.setenv("SI_BASE", "v_order=1,cross_terms=false,v_transform=inv,"
+                                  "min_loo_dof=2,level_fit_margin=0.5")
+    p = load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    assert p["base"]["v_order"] == 1 and isinstance(p["base"]["v_order"], int)
+    assert p["base"]["cross_terms"] is False
+    assert p["base"]["v_transform"] == "inv"
+    assert p["base"]["min_loo_dof"] == 2
+    assert p["base"]["level_fit_margin"] == 0.5
+    # and it reaches the model, not just the project dict
+    p["designs"] = ["boomcore"]
+    m = select(expand(p), design="boomcore", temp="m25")[0]
+    assert m["cfg"]["base"]["axes"][0]["transform"] == "inv"
+    assert m["cfg"]["base"]["axes"][0]["order"] == 1
+    assert m["cfg"]["base"]["cross_terms"] is False
+    assert m["cfg"]["base"]["min_loo_dof"] == 2
+
+    monkeypatch.setenv("SI_BASE", "v_orderr=1")
+    with pytest.raises(AssertionError, match="unknown base key"):
+        load_project(os.path.join(REPO_ROOT, "config.yaml"))
+    monkeypatch.setenv("SI_BASE", "v_transform=quadratic")
+    with pytest.raises(AssertionError, match="v_transform must be one of"):
+        expand(_base_project(real_tree))
+
+
+def test_transformed_axis_survives_predict_and_the_checkpoint(real_tree, tmp_path,
+                                                              monkeypatch):
+    """A transformed axis has to be the SAME axis everywhere, and it has to be
+    replayed from the checkpoint.
+
+    Two failures this pins down, both of which produce plausible numbers rather
+    than an error:
+
+    (1) The coordinate query path (`predict --at`) encodes the target itself. If
+    it built coordinates in V while the model was fit in 1/V, the answer would
+    still look like a slack. So a query AT a hidden corner's coordinates must
+    reproduce the evaluation path there, under the transform. Random weights,
+    not the trained ones: after one epoch the correction is near its zero init
+    and the comparison would only exercise the base.
+
+    (2) The variable is part of the base the correction was trained on. predict
+    must take it from the checkpoint, not from whatever the config now says --
+    the same reason the order and the level coordinates are pinned.
+    """
+    pytest.importorskip("torch")
+    import torch
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import _load_predictor, expand, select, stage_train
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    m = select(expand(_base_project(real_tree, v_transform="inv")),
+               design="boomcore", temp="m25")[0]
+    build(m["cfg"])
+    stage_train(m)
+
+    tr = _load_predictor(m)
+    assert tr.cfg["base"]["axes"][0]["transform"] == "inv"
+    torch.manual_seed(0)
+    for prm in list(tr.model.parameters()) + list(tr.enc.parameters()):
+        prm.data.normal_(0.0, 0.3)
+    H = tr.split.hidden_idx
+    assert len(H)
+    a = tr.predict_corners(H)
+    b = tr.predict_coords(tr.ds["vt"][H], tr.split.vt[H])
+    base = tr.base_hat.cpu().numpy()[:, H]
+    assert np.abs(a - base).max() > 1.0, "the residual must be large enough to matter"
+    np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-3)
+
+    # (2) the config now says `none`; the checkpoint says `inv` and wins
+    m2 = select(expand(_base_project(real_tree, v_transform="none")),
+                design="boomcore", temp="m25")[0]
+    tr2 = _load_predictor(m2)
+    assert tr2.cfg["base"]["axes"][0]["transform"] == "inv"
+    np.testing.assert_allclose(tr2.predict_corners(H),
+                               _load_predictor(m).predict_corners(H),
+                               rtol=1e-6, atol=1e-6)
+    # the record that makes the replay possible is in the file, not inferred
+    ck = torch.load(os.path.join(m["cfg"]["train"]["out_dir"], "best.pt"),
+                    map_location="cpu")
+    assert ck["cfg"]["base"]["_resolved"]["v_transform"] == "inv"
+    # (that this is not vacuous -- that the transform moves the base at all --
+    # is test_v_transform_auto_recovers_the_generating_variable above)
+
+
 def _deep_diff(a, b, at=""):
     """Dotted paths where two parsed configs differ. Lists compare by index."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -1371,6 +1581,8 @@ def test_extrapolation_config_is_config_yaml_plus_the_holdout():
         exp = yaml.safe_load(f)
 
     assert sorted(_deep_diff(main, exp)) == [
+        "base.select_on",
+        "base.v_transform",
         "corners.hidden_voltages",
         "designs.MFC_Timing_Report.temps.0.hidden_corners",
         "designs.MFC_Timing_Report.temps.1.hidden_corners",
@@ -1382,6 +1594,12 @@ def test_extrapolation_config_is_config_yaml_plus_the_holdout():
     ]
     assert exp["out"]["tag"] == "extrapolation"
     assert exp["corners"]["hidden_voltages"] == [0.5, 0.475]
+    # the two extrapolation-specific choices: measure the axis variable, and
+    # rank candidates WITHOUT the held-out row, which is this run's deliverable
+    assert exp["base"]["v_transform"] == "auto"
+    assert exp["base"]["select_on"] == "edge"
+    assert main["base"]["v_transform"] == "none"
+    assert main["base"]["select_on"] == "hidden"
     assert exp["corners"]["hidden_corners"] == []          # unchanged, already empty
     for t in exp["temps"]:
         assert t["hidden_corners"] == []

@@ -226,6 +226,60 @@ def _env_level_overrides(p: dict) -> None:
     if lc:
         p.setdefault("base", {})["level_coords"] = lc
         print(f"[ENV] base.level_coords <- SI_LEVEL_COORDS {lc}", flush=True)
+    _env_base_overrides(p)
+
+
+def _env_base_overrides(p: dict) -> None:
+    """``SI_BASE="key=value,key=value"``: set any base key for one run.
+
+    The base has a dozen knobs whose right values are data-dependent, and
+    `run.sh base` scores them in seconds with no GPU -- so the bottleneck to
+    knowing which is right is editing a tracked file between runs. Same reason
+    as SI_LEVEL_VALUES above, one general form:
+
+        env SI_BASE="v_order=1,weighting=local" bash scripts/run.sh base
+        foreach o (1 2 3)
+          env SI_BASE="v_order=$o" bash scripts/run.sh base --design cpu
+        end
+
+    Values are coerced to the type the key already has in the config, so
+    `cross_terms=false` is a bool and `v_order=2` an int. Unknown keys are an
+    error: base keys are whitelisted on the way in (see _check_base_keys), and a
+    typo that silently did nothing is the failure mode this whole path exists to
+    avoid.
+    """
+    raw = os.environ.get("SI_BASE")
+    if not raw:
+        return
+    cur = p.get("base") or {}
+    out = {}
+    for part in raw.split(","):
+        if not part.strip():
+            continue
+        assert "=" in part, (
+            f"SI_BASE: expected key=value pairs separated by commas, got {part!r}")
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        assert k in BASE_KEYS, (
+            f"SI_BASE: unknown base key {k!r}; known keys are "
+            f"{sorted(BASE_KEYS)}")
+        ref = cur.get(k)
+        if isinstance(ref, bool) or v.lower() in ("true", "false"):
+            out[k] = v.lower() == "true"
+        elif isinstance(ref, int) and not isinstance(ref, bool):
+            out[k] = int(v)
+        elif isinstance(ref, float):
+            out[k] = float(v)
+        elif isinstance(ref, list):
+            out[k] = [float(x) for x in v.split(":")]
+        else:
+            # `auto` and the mode names are strings; a bare number for a key
+            # that is `auto` in the file (v_order: auto) still has to become one
+            out[k] = int(v) if v.lstrip("-").isdigit() else v
+    assert out, "SI_BASE is set but parsed to nothing"
+    p.setdefault("base", {}).update(out)
+    print("[ENV] base <- SI_BASE " + ", ".join(f"{k}={out[k]}" for k in sorted(out)),
+          flush=True)
 
 
 def _merge(base, over):
@@ -493,7 +547,7 @@ def fit_level_coords(y, sp, cfg, verbose=True):
 
     import numpy as np
 
-    from si_model.config import expand_terms, fit_scales
+    from si_model.config import axis_coords, expand_terms
     from si_model.model.base_ols import design_matrix
     from si_model.training.loo import Split, fit_field
 
@@ -520,10 +574,7 @@ def fit_level_coords(y, sp, cfg, verbose=True):
         vt2 = sp.vt.copy()
         for name, coord in lv.items():
             vt2[np.abs(sp.vt[:, 1] - lv_all[name]) < 1e-9, 1] = coord
-        ref_vt = vt2[sp.ref_ci]
-        scales = np.asarray(fit_scales(cfg))
-        return vt2, np.stack([(vt2[:, a] - ref_vt[a]) / scales[a]
-                              for a in range(vt2.shape[1])], 1)
+        return vt2, axis_coords(cfg, vt2, vt2[sp.ref_ci])
 
     def scorer(lvl_order):
         """seen-LOO under a level map, with basis and level order held fixed.
@@ -638,6 +689,90 @@ def _hidden_err(y, sp, loo):
     return float(np.mean(errs)) if errs else None
 
 
+def _edge_err(y, sp, phi, coords, cfg):
+    """One-step-out extrapolation error, measured on SEEN corners only.
+
+    Hold out the whole lowest-voltage row of the SEEN grid, refit on the rest,
+    and score the prediction back at that row; then the same for the highest.
+    That is the shape of the question a held-out voltage row asks, so a
+    candidate that wins here is the candidate that extrapolates -- and it is
+    computed without looking at the hidden corners at all, which is what makes
+    it usable when the hidden corners ARE the deliverable (predicting below the
+    measured range, where scoring on them would be scoring on the answer).
+
+    This is a CRITERION, not a tuned rule: it is recomputed from whatever grid
+    it is handed, so there is no constant in it to be wrong on another drop.
+    Its weakness is size -- dropping a whole row costs one voltage of an already
+    small grid, and a candidate the reduced grid cannot identify is not scored
+    at all. Returns None when neither end can be fit, so the caller falls back
+    to a criterion that can be, loudly, instead of ranking on nothing.
+
+    The reference corner may itself be in the masked row (ref_voltage is
+    usually the top of the grid). That is fine: the anchor sets where the
+    coordinate origin is, which does not depend on which corners are fit, and
+    the intercept is a fitted term.
+    """
+    import numpy as np
+
+    from si_model.training.loo import Split, fit_field
+
+    S = sp.seen_idx
+    vs = np.unique(np.round(sp.vt[S, 0], 9))
+    if len(vs) < 3:
+        return None          # dropping one end would leave a single voltage
+    errs = []
+    for edge in (vs[0], vs[-1]):
+        row = np.abs(np.round(sp.vt[:, 0], 9) - edge) < 1e-9
+        seen2 = np.asarray(sp.seen, bool) & ~row
+        held = np.asarray(sp.seen, bool) & row
+        # The fold only has to be IDENTIFIABLE (K <= n), not to have leave-one-out
+        # room to spare: nothing is left out inside it, the fit is used once to
+        # predict outside itself. base.min_loo_dof guards the LOO residual the
+        # network trains on, which is a different thing, and applying it here
+        # left a 3-seen-voltage grid with a single scorable candidate -- the
+        # criterion then "picked" the only row it could see rather than the best
+        # one. A candidate that exactly interpolates its fold is allowed to
+        # compete and is usually where this criterion earns its keep: that is
+        # the case whose extrapolation goes wild, and now it is measured doing it.
+        if not held.any() or int(seen2.sum()) < phi.shape[1]:
+            continue
+        sp2 = Split(list(sp.corners), sp.vt, seen2, ~seen2, sp.ref_ci)
+        try:
+            loo, _ = fit_field(y, phi, sp2, coords, cfg)
+        except (AssertionError, ValueError, np.linalg.LinAlgError):
+            continue
+        e = np.abs(loo[:, held] - y[:, held])
+        if np.isfinite(e).any():
+            errs.append(float(np.nanmean(e)))
+    return float(np.mean(errs)) if errs else None
+
+
+def _select_err(y, sp, phi, coords, cfg, on, loo=None):
+    """The number the three selectors rank by, under base.select_on.
+
+    One place, so `select_basis`, `select_weighting` and `select_v_transform`
+    cannot end up ranking by different things. None means "this criterion could
+    not score this candidate"; the caller decides what to do about it.
+    """
+    import numpy as np
+
+    from si_model.training.loo import fit_field
+
+    if loo is None:
+        loo, _ = fit_field(y, phi, sp, coords, cfg)
+    if on == "hidden":
+        return _hidden_err(y, sp, loo)
+    if on == "edge":
+        return _edge_err(y, sp, phi, coords, cfg)
+    S = sp.seen_idx
+    return float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
+
+
+CRIT_LABEL = {"hidden": "hidden-corner error",
+              "edge": "edge extrapolation (one voltage out)",
+              "seen_loo": "seen-LOO"}
+
+
 def select_weighting(y, sp, phi, coords, cfg, verbose=True):
     """Pick base.weighting among plain / local / adaptive, by the same
     criterion select_basis uses. Enabled by ``base.weighting: auto``.
@@ -668,12 +803,12 @@ def select_weighting(y, sp, phi, coords, cfg, verbose=True):
     declared = str(cfg["base"].get("weighting", "plain"))
     if declared != "auto":
         return cfg
-    on_hidden = str(cfg["base"].get("select_on", "hidden")) == "hidden"
-    if not on_hidden:
+    on = str(cfg["base"].get("select_on", "hidden"))
+    if on == "seen_loo":
         if verbose and _base_loud():
-            print("[WEIGHT] weighting: auto needs select_on: hidden -- seen-LOO "
-                  "was measured ranking the weightings backwards. Using plain.",
-                  flush=True)
+            print("[WEIGHT] weighting: auto needs select_on: hidden or edge -- "
+                  "seen-LOO was measured ranking the weightings backwards. "
+                  "Using plain.", flush=True)
         cfg = copy.deepcopy(cfg)
         cfg["base"]["weighting"] = "plain"
         return cfg
@@ -687,9 +822,9 @@ def select_weighting(y, sp, phi, coords, cfg, verbose=True):
         c["base"]["weighting"] = mode
         try:
             loo, _ = fit_field(y, phi, sp, coords, c)
+            h = _select_err(y, sp, phi, coords, c, on, loo)
         except (AssertionError, ValueError, np.linalg.LinAlgError):
             continue
-        h = _hidden_err(y, sp, loo)
         if h is None:
             continue
         rows.append((h, ("plain", "local", "adaptive").index(mode), mode,
@@ -707,10 +842,95 @@ def select_weighting(y, sp, phi, coords, cfg, verbose=True):
     if verbose and _base_loud():
         for h, _, mode, se in rows:
             mark = "  <- chosen" if mode == best else ""
-            print(f"[WEIGHT] {mode:9s} hidden {h * 1000:8.2f} ps   "
+            print(f"[WEIGHT] {mode:9s} {CRIT_LABEL[on]} {h * 1000:8.2f} ps   "
                   f"seen-LOO {se * 1000:8.2f}{mark}", flush=True)
     cfg = copy.deepcopy(cfg)
     cfg["base"]["weighting"] = best
+    return cfg
+
+
+def select_v_transform(y, sp, cfg, verbose=True):
+    """Pick the voltage axis VARIABLE -- V, 1/V or log V -- by base.select_on.
+    Enabled by ``base.v_transform: auto``; a concrete name is left alone.
+
+    A polynomial in the raw voltage is a choice, and outside the fitted range it
+    is most of the answer. Three seen voltages are fit EXACTLY by a quadratic in
+    V and, separately, by a straight line in 1/V; both reproduce every
+    measurement and they disagree about a fourth voltage below the range. Which
+    disagreement is right is a property of the data, so it is measured here in
+    the same way the order and the level coordinates are, rather than argued
+    from a delay model: `1/(V - Vth)` would encode the alpha-power law, but
+    slack is T - (sum of delays) + skew - U rather than one cell delay, and a
+    wrong Vth extrapolates confidently. 1/V and log V have no constant in them
+    to be wrong -- they are monotone reparameterizations of the same axis.
+
+    Each variable is given its OWN best basis before being scored, because a
+    variable that needs one order fewer is exactly what a better variable looks
+    like; comparing them on a basis chosen for one of them would hide that.
+
+    Ties, and anything that cannot be scored, go to `none`: the variable stays
+    the one the axis is measured in unless something measurably beats it.
+    """
+    import copy
+
+    import numpy as np
+
+    from si_model.config import AXIS_TRANSFORMS, axis_coords, expand_terms
+    from si_model.model.base_ols import design_matrix
+
+    if str(cfg["base"].get("v_transform", "none")) != "auto":
+        return cfg
+    on = str(cfg["base"].get("select_on", "hidden"))
+    S = sp.seen_idx
+    nv = len(np.unique(np.round(sp.vt[S, 0], 9)))
+    nlv = len(np.unique(np.round(sp.vt[S, 1], 9)))
+    rows = []
+    for i, name in enumerate(AXIS_TRANSFORMS):
+        c = copy.deepcopy(cfg)
+        c["base"]["axes"][0]["transform"] = name
+        c["base"]["v_transform"] = name
+        try:
+            coords = axis_coords(c, sp.vt, sp.vt[sp.ref_ci])
+        except AssertionError:                  # non-positive axis: not offered
+            continue
+        if c["base"].get("select", True):
+            c = select_basis(y, sp, coords, c, verbose=False)
+        exps, names, _ = expand_terms(c, [nv, nlv])
+        phi = design_matrix(coords, exps)
+        if len(S) - phi.shape[1] < int(cfg["base"].get("min_loo_dof", 1)):
+            continue
+        try:
+            err = _select_err(y, sp, phi, coords, c, on)
+        except (AssertionError, ValueError, np.linalg.LinAlgError):
+            continue
+        if err is None:
+            continue
+        rows.append((err, i, name, int(c["base"]["axes"][0]["order"]),
+                     bool(c["base"]["cross_terms"])))
+    if not rows:
+        if verbose and _base_loud():
+            print("[VAXIS] v_transform: auto could not score any variable "
+                  "-- keeping the axis as measured (none)", flush=True)
+        cfg = copy.deepcopy(cfg)
+        cfg["base"]["v_transform"] = "none"
+        return cfg
+    rows.sort()
+    best = rows[0][2]
+    if verbose and _base_loud():
+        for err, _, name, vo, cross in rows:
+            mark = "  <- chosen" if name == best else ""
+            print(f"[VAXIS] {name:5s} best basis v^{vo} cross={str(cross):5s}   "
+                  f"{CRIT_LABEL[on]} {err * 1000:8.2f} ps{mark}", flush=True)
+        if best != "none":
+            plain = [r[0] for r in rows if r[2] == "none"]
+            if plain:
+                print(f"[VAXIS] -> {best} is {(1 - rows[0][0] / plain[0]) * 100:.0f}% "
+                      f"better than the raw voltage axis on this grid. Pin it "
+                      f"with base.v_transform: {best} to stop re-choosing.",
+                      flush=True)
+    cfg = copy.deepcopy(cfg)
+    cfg["base"]["axes"][0]["transform"] = best
+    cfg["base"]["v_transform"] = best
     return cfg
 
 
@@ -792,37 +1012,58 @@ def select_basis(y, sp, coords, cfg, verbose=True):
     nlv = len(np.unique(np.round(sp.vt[S, 1], 9)))
     v_cap = int(cfg["base"]["axes"][0]["order"])
     min_dof = int(cfg["base"].get("min_loo_dof", 1))
-    on_hidden = str(cfg["base"].get("select_on", "hidden")) == "hidden"
-    best = None
-    tried = []
-    skipped = []
-    for vo in range(1, v_cap + 1):
-        for cross, cmd in ((False, 2), (True, 2), (True, 3)):
-            c = copy.deepcopy(cfg)
-            c["base"]["axes"][0]["order"] = vo
-            c["base"]["cross_terms"] = cross
-            c["base"]["cross_max_degree"] = cmd
-            exps, names, _ = expand_terms(c, [nv, nlv])
-            phi = design_matrix(coords, exps)
-            dof = len(S) - phi.shape[1]
-            if dof < min_dof:
-                skipped.append((vo, cross, cmd, len(names) + 1, dof))
-                continue
-            loo, _ = fit_field(y, phi, sp, coords, c)
-            seen_e = float(np.nanmean(np.abs(loo[:, S] - y[:, S])))
-            err = _hidden_err(y, sp, loo) if on_hidden else seen_e
-            if err is None:                        # no labelled hidden corner
-                on_hidden, err = False, seen_e
-            tried.append((err, vo, cross, cmd, len(names) + 1, dof))
-            if best is None or err < best[0]:
-                best = (err, vo, cross, cmd, names)
+    def sweep(on):
+        """Every candidate scored by the SAME criterion, or not at all.
+
+        Scoring some candidates on one criterion and the rest on another was
+        possible before: the first candidate the criterion could not score
+        switched it for the remainder of the loop, and the winner was then the
+        best of two different competitions. A criterion that cannot score a
+        candidate now drops that candidate; if it can score none, the caller
+        re-runs the whole sweep on a criterion that can.
+        """
+        best, tried, skipped = None, [], []
+        for vo in range(1, v_cap + 1):
+            for cross, cmd in ((False, 2), (True, 2), (True, 3)):
+                c = copy.deepcopy(cfg)
+                c["base"]["axes"][0]["order"] = vo
+                c["base"]["cross_terms"] = cross
+                c["base"]["cross_max_degree"] = cmd
+                exps, names, _ = expand_terms(c, [nv, nlv])
+                phi = design_matrix(coords, exps)
+                dof = len(S) - phi.shape[1]
+                if dof < min_dof:
+                    skipped.append((vo, cross, cmd, len(names) + 1, dof))
+                    continue
+                err = _select_err(y, sp, phi, coords, c, on)
+                if err is None:
+                    skipped.append((vo, cross, cmd, len(names) + 1, dof))
+                    continue
+                tried.append((err, vo, cross, cmd, len(names) + 1, dof))
+                if best is None or err < best[0]:
+                    best = (err, vo, cross, cmd, names)
+        return best, tried, skipped
+
+    on = str(cfg["base"].get("select_on", "hidden"))
+    best, tried, skipped = sweep(on)
+    if best is None and on != "seen_loo":
+        # `hidden` with only query corners to score, or `edge` on a grid too
+        # small to give a fold back. Say which, because the criterion that ran
+        # is not the one the config asked for.
+        if verbose and _base_loud():
+            print(f"[BASIS] select_on: {on} could not score any candidate "
+                  f"({CRIT_LABEL[on]} needs labels {'at the hidden corners' if on == 'hidden' else 'and a third seen voltage'}) "
+                  f"-- ranking by seen-LOO instead", flush=True)
+        on = "seen_loo"
+        best, tried, skipped = sweep(on)
+    on_hidden = on == "hidden"
     assert best is not None, (
         f"no usable basis: every candidate had fewer than base.min_loo_dof="
         f"{min_dof} leave-one-out degrees of freedom on {len(S)} seen corners. "
         f"Lower base.min_loo_dof, reduce the holdout, or add more corners.")
     err, vo, cross, cmd, names = best
     if verbose and _base_loud():
-        crit = "hidden-corner error" if on_hidden else "seen-LOO"
+        crit = CRIT_LABEL[on]
         print(f"[BASIS] picked by {crit}: v^{vo} cross={cross}"
               + (f"(deg{cmd})" if cross else "")
               + f" -> {len(names) + 1} params, {crit} {err * 1000:.2f} ps",
@@ -888,6 +1129,7 @@ BASE_KEYS = frozenset((
     "weighting", "cross_terms", "cross_max_degree", "select", "min_loo_dof",
     "bandwidth", "adaptive_grid", "adaptive_k", "adaptive_amp_ratio",
     "adaptive_clip_frac", "fit_level_values", "level_fit_margin", "level_coords", "select_on",
+    "v_transform",
 ))
 
 
@@ -1069,6 +1311,11 @@ def expand(p: dict) -> "list[dict]":
                      # the grid cannot identify -- so this only makes the higher
                      # orders available to be chosen.
                      "order": _order(bt.get("v_order"), len(seen_v), 6),
+                     # `auto` means "choose one", and the axis can only hold a
+                     # concrete transform -- select_v_transform writes the
+                     # winner here, exactly as select_basis writes the order
+                     "transform": ("none" if str(bt.get("v_transform", "none")) == "auto"
+                                   else str(bt.get("v_transform", "none"))),
                      "fit_scale": float(bt.get("v_fit_scale", 1.0)),
                      "token_scale": float(bt.get("v_token_scale", 0.1)),
                      "gap_cap": float(bt.get("v_gap_cap", 2.5))},
@@ -1088,6 +1335,7 @@ def expand(p: dict) -> "list[dict]":
                 "min_loo_dof": int(bt.get("min_loo_dof", 1)),
                 "level_coords": str(bt.get("level_coords", "measured")),
                 "select_on": str(bt.get("select_on", "hidden")),
+                "v_transform": str(bt.get("v_transform", "none")),
                 "fit_level_values": bool(bt.get("fit_level_values", False)),
                 "level_fit_margin": float(bt.get("level_fit_margin", 0.02)),
                 "adaptive_k": bt.get("adaptive_k", 6),
@@ -1102,6 +1350,13 @@ def expand(p: dict) -> "list[dict]":
                 base["adaptive_grid"] = bt["adaptive_grid"]
             if bt.get("weighting") == "local":
                 assert bt.get("bandwidth"), "base.weighting: local requires base.bandwidth"
+            from si_model.config import AXIS_TRANSFORMS
+            assert base["v_transform"] in ("auto",) + AXIS_TRANSFORMS, (
+                f"{design} temp {tag}: base.v_transform must be one of "
+                f"{('auto',) + AXIS_TRANSFORMS}, got {base['v_transform']!r}")
+            assert str(bt.get("select_on", "hidden")) in ("hidden", "seen_loo", "edge"), (
+                f"{design} temp {tag}: base.select_on must be hidden, edge or "
+                f"seen_loo, got {bt.get('select_on')!r}")
             assert str(bt.get("weighting", "plain")) in (
                 "plain", "local", "adaptive", "auto"), (
                 f"base.weighting must be plain / local / adaptive / auto, "
@@ -1542,29 +1797,46 @@ def _print_basis_comparison(y, split, coords, cfg, hid) -> None:
             key = (vo, cross, cmd)
             if any(r[0] == key for r in rows):        # cmd is a no-op without cross
                 continue
+            # The edge score alongside the other two is the whole point of this
+            # table: `hidden` is the truth and cannot be used to choose when the
+            # hidden corners are the deliverable, `seen-LOO` can always be used
+            # and was measured ranking BACKWARDS here, and `edge` is the
+            # candidate proxy. Printing all three per row is what shows whether
+            # the proxy tracks the truth ON THIS DROP, instead of taking it on
+            # faith from another one.
+            edge_e = _edge_err(y, split, phi, coords, c)
             rows.append((key, len(names) + 1, seen_e,
-                         float(np.mean(hid_e)), float(np.max(hid_e))))
+                         float(np.mean(hid_e)), float(np.max(hid_e)),
+                         None if edge_e is None else edge_e * 1000.0))
     if not rows:
         return
-    on_hidden = str(cfg["base"].get("select_on", "hidden")) == "hidden"
-    crit = "hidden-corner error" if on_hidden else "seen-LOO"
-    print(f"    -- basis candidates (chosen on {crit}) --")
+    on = str(cfg["base"].get("select_on", "hidden"))
+    print(f"    -- basis candidates (chosen on {CRIT_LABEL[on]}) --")
     best_seen = min(rows, key=lambda r: r[2])[0]
     best_hid = min(rows, key=lambda r: r[3])[0]
-    chosen = best_hid if on_hidden else best_seen
-    for key, k, seen_e, hid_mean, hid_worst in sorted(rows, key=lambda r: r[3]):
+    scored = [r for r in rows if r[5] is not None]
+    best_edge = min(scored, key=lambda r: r[5])[0] if scored else None
+    chosen = {"hidden": best_hid, "edge": best_edge,
+              "seen_loo": best_seen}.get(on) or best_seen
+    for key, k, seen_e, hid_mean, hid_worst, edge_e in sorted(rows, key=lambda r: r[3]):
         vo, cross, cmd = key
         mark = ("  <- chosen" if key == chosen else "")
-        if not on_hidden and key == best_hid:
-            mark += "  <- best hidden"
-        if on_hidden and key == best_seen:
-            mark += "  <- seen-LOO would have picked this"
+        for who, pick in (("seen-LOO", best_seen), ("edge", best_edge),
+                          ("hidden", best_hid)):
+            if key == pick and key != chosen:
+                mark += "  <- %s picks this" % who
         print(f"       v^{vo} cross={str(cross):5s} {k:2d} params   "
-              f"seen-LOO {seen_e:8.2f}   hidden {hid_mean:8.2f} "
-              f"(worst {hid_worst:7.2f}){mark}")
+              f"seen-LOO {seen_e:8.2f}   edge "
+              + ("%8.2f" % edge_e if edge_e is not None else "       -")
+              + f"   hidden {hid_mean:8.2f} (worst {hid_worst:7.2f}){mark}")
+    if best_edge is not None:
+        agree = "DOES" if best_edge == best_hid else "does NOT"
+        print(f"       -> the edge criterion {agree} pick the hidden-best basis "
+              f"here. That is the check on using it where the hidden corners "
+              f"cannot be scored (predicting outside the measured range).")
     if best_seen == best_hid:
         return
-    if on_hidden:
+    if on == "hidden":
         gap = dict((r[0], r[3]) for r in rows)
         print(f"       -> seen-LOO would have taken {gap[best_seen]:.2f} ps "
               f"instead of {gap[best_hid]:.2f}. That gap is why select_on is "
@@ -1853,6 +2125,12 @@ def _pin_training_base(m: dict, ck: dict) -> None:
     b["axes"][1]["levels"] = {str(k): float(v) for k, v in r["levels"].items()}
     b["axes"][1]["order"] = int(r["level_order"])
     b["weighting"] = str(r["weighting"])
+    # The axis VARIABLE is part of the base just as much as the order is: a
+    # correction trained on a fit in 1/V means nothing on a fit in V.
+    # Checkpoints written before this key existed have no entry, and those were
+    # all fit in the untransformed axis, which is what "none" says.
+    b["axes"][0]["transform"] = str(r.get("v_transform", "none"))
+    b["v_transform"] = str(r.get("v_transform", "none"))
     # nothing is chosen again: every selection is replayed, not re-run
     b["select"] = False
     b["level_coords"] = "declared"

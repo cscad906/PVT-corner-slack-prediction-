@@ -138,6 +138,64 @@ def fit_scales(cfg: dict) -> "list[float]":
     return [float(a.get("fit_scale", 1.0)) for a in axes(cfg)]
 
 
+# Axis transforms. A polynomial in the raw axis value is only one choice of
+# variable, and outside the fitted range the choice is most of the answer: the
+# same three seen voltages fit exactly by a quadratic in V and by a LINE in 1/V,
+# and the two disagree about 0.5 V. So the variable is offered as a choice and
+# picked by the same measured criterion as the order -- not asserted.
+#
+# Deliberately PARAMETER-FREE. `1/(V - Vth)` with a fitted or assumed Vth would
+# encode the alpha-power delay law, but slack is T - (sum of delays) + skew - U,
+# not one cell delay, and a wrong Vth extrapolates confidently wrong. 1/V and
+# log V carry no constant to get wrong: they are monotone reparameterizations of
+# the axis, so a fit in them is still a fit to the data, just with a different
+# curvature prior. Whether that prior helps is measured per dataset.
+AXIS_TRANSFORMS = ("none", "inv", "log")
+
+
+def _apply_transform(name: str, x):
+    import numpy as np
+
+    if name == "none":
+        return x
+    x = np.asarray(x, float)
+    assert np.all(x > 0), (
+        "base.v_transform: %s needs a strictly positive axis, got min %g. "
+        "Voltages are positive; a level/temperature axis is not and must stay "
+        "`none`." % (name, float(np.min(x))))
+    return 1.0 / x if name == "inv" else np.log(x)
+
+
+def axis_transforms(cfg: dict) -> "list[str]":
+    out = []
+    for a in axes(cfg):
+        t = str(a.get("transform", "none") or "none")
+        assert t in AXIS_TRANSFORMS, (
+            "unknown axis transform %r on axis %r -- one of %s"
+            % (t, a.get("name"), list(AXIS_TRANSFORMS)))
+        out.append(t)
+    return out
+
+
+def axis_coords(cfg: dict, vt, ref):
+    """[C, A] fit coordinates: transform the axis, subtract the reference, scale.
+
+    The ONE place this is computed. It used to be written out three times (the
+    design build, the level-coordinate search, and the coordinate query path in
+    predict), which is three chances for a query to be encoded differently from
+    how the model was fit -- a mismatch that shows up as a plausible number, not
+    as an error.
+    """
+    import numpy as np
+
+    vt = np.asarray(vt, float)
+    ref = np.asarray(ref, float)
+    trs, scales = axis_transforms(cfg), fit_scales(cfg)
+    return np.stack([(_apply_transform(trs[a], vt[:, a])
+                      - _apply_transform(trs[a], ref[a:a + 1])[0]) / scales[a]
+                     for a in range(vt.shape[1])], 1)
+
+
 def axis_levels(cfg: dict) -> "dict | None":
     """Name->value map for a CATEGORICAL second axis (BEOL/RC, process, ...),
     declared as ``levels:`` on axis 1 in the config -- e.g.

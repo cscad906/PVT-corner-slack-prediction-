@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from si_model.config import axes, expand_terms, fit_scales
+from si_model.config import axes, axis_coords, expand_terms, fit_scales
 from si_model.model.base_ols import (design_matrix, fit_base, fit_base_adaptive,
                                       fit_base_local)
 from si_model.parsing.keys import RC_VAL
@@ -250,12 +250,18 @@ def build_design(cfg: dict, split: Split, y=None):
         ax = caller_cfg["base"]["axes"][1]
         ax["levels"] = dict(cfg["base"]["axes"][1].get("levels") or {})
         ax["order"] = cfg["base"]["axes"][1]["order"]
-    ref_vt = split.vt[split.ref_ci]
-    scales = np.asarray(fit_scales(cfg))
-    A = split.vt.shape[1]
-    coords = np.stack([(split.vt[:, a] - ref_vt[a]) / scales[a] for a in range(A)], 1)
+    # The axis VARIABLE is chosen before the coordinates are built, since it
+    # is what they are built from; the basis is chosen after, on those
+    # coordinates. Both write into cfg, so predict replays one decision.
+    if y is not None and str(cfg["base"].get("v_transform", "none")) == "auto":
+        from si_model.run import select_v_transform
+        cfg = select_v_transform(y, split, cfg)
+        caller_cfg["base"]["v_transform"] = cfg["base"]["v_transform"]
+        caller_cfg["base"]["axes"][0]["transform"] = \
+            cfg["base"]["axes"][0]["transform"]
+    coords = axis_coords(cfg, split.vt, split.vt[split.ref_ci])
     seen_levels = [int(np.unique(np.round(split.vt[split.seen_idx, a], 9)).size)
-                   for a in range(A)]
+                   for a in range(split.vt.shape[1])]
     if y is not None and cfg["base"].get("select", True):
         from si_model.run import select_basis
         cfg = select_basis(y, split, coords, cfg)
@@ -285,6 +291,7 @@ def build_design(cfg: dict, split: Split, y=None):
                    (cfg["base"]["axes"][1].get("levels") or {}).items()},
         "level_order": int(cfg["base"]["axes"][1]["order"]),
         "weighting": str(cfg["base"].get("weighting", "plain")),
+        "v_transform": str(cfg["base"]["axes"][0].get("transform", "none")),
     }
     return phi, coords, exps, names
 

@@ -829,7 +829,7 @@ class Trainer:
         Corners are processed ``corner_chunk`` at a time because the SI arrays
         are the largest in the pipeline.
         """
-        from si_model.config import fit_scales
+        from si_model.config import axis_coords
         from si_model.model.base_ols import design_matrix
         from si_model.training.loo import Split, fit_field
 
@@ -839,9 +839,7 @@ class Trainer:
         Q = len(base_vt)
 
         vt_aug = np.concatenate([np.asarray(sp.vt, float), base_vt], 0)
-        ref = vt_aug[sp.ref_ci]
-        scales = np.asarray(fit_scales(self.cfg))
-        co = (vt_aug - ref) / scales
+        co = axis_coords(self.cfg, vt_aug, vt_aug[sp.ref_ci])
         phi = design_matrix(co, self.base.exps)
         y = np.asarray(self.ds["slack"], float)
         y = np.concatenate([y, np.full((self.N, Q), np.nan)], 1)

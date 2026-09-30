@@ -12,6 +12,7 @@
 #  not interpolation inside it like config.yaml's scattered holdout.
 #
 #    bash scripts/run.sh list    --config config_extrapolation.yaml   # check first
+#    bash scripts/run.sh base    --config config_extrapolation.yaml   # seconds, no GPU
 #    bash scripts/run.sh train   --config config_extrapolation.yaml
 #    bash scripts/run.sh predict --config config_extrapolation.yaml
 #    bash scripts/run.sh merge   --config config_extrapolation.yaml
@@ -19,17 +20,34 @@
 #  Results go to runs/extrapolation/<mode>/ -- see out.tag below -- so the main
 #  results in runs/<mode>/ are never touched. The CACHE is shared with the main
 #  config on purpose (dataset.npz does not depend on the seen/hidden split), so
-#  there is nothing to rebuild: run train directly. `all` would re-parse once,
-#  because this file is newer than the cache, and write the same bytes back.
+#  there is nothing to rebuild: run base and train directly. `all` would
+#  re-parse once, because this file is newer than the cache, and write the same
+#  bytes back.
 #
-#  THIS FILE IS A COPY of config.yaml. Only four things differ:
+#  Two settings here are about extrapolating rather than about the holdout, and
+#  both are measured rather than assumed -- see base.v_transform and
+#  base.select_on below:
+#    * the axis VARIABLE is chosen from V, 1/V, log V. Outside the fitted range
+#      that choice is most of the answer; inside it, it barely matters.
+#    * candidates are ranked by `edge` -- reach one seen voltage row the fit
+#      never saw -- because the held-out row IS the deliverable here, and
+#      ranking on it would be ranking on the answer.
+#  Start with `run.sh base`: it prints seen-LOO, edge and hidden for every
+#  candidate and says whether edge picked the hidden-best one. That table is the
+#  evidence for or against these two settings ON YOUR DROP, and it costs
+#  seconds. Sweep further without editing any file:
+#      env SI_BASE="v_order=1" bash scripts/run.sh base --config config_extrapolation.yaml
+#
+#  THIS FILE IS A COPY of config.yaml. Only six things differ:
 #      out.tag                     extrapolation   (where output goes)
 #      corners.hidden_voltages     [0.5, 0.475]    (the whole row is hidden)
 #      temps[].hidden_corners      emptied         (3 places: here + MFC + MIF)
+#      base.v_transform            auto            (choose V / 1/V / log V)
+#      base.select_on              edge            (rank without the answer)
 #      the header you are reading
 #  Anything else that differs between the two files is drift, i.e. a bug.
 #  tests/test_all.py::test_extrapolation_config_is_config_yaml_plus_the_holdout
-#  compares them key by key and fails if a fifth difference appears, so a fix
+#  compares them key by key and fails if a seventh difference appears, so a fix
 #  to config.yaml that belongs here cannot be silently missed -- but the fix
 #  still has to be COPIED here by hand.
 #
@@ -68,11 +86,11 @@ designs:
       - tag: "125"
         token: 125
         levels: [rcmax, cmax]
-        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages is the only holdout
       - tag: m25
         token: m25
         levels: [rcmax, cmax, rcmin]
-        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages is the only holdout
 
   MIF_Timing_Report:
     corners:
@@ -81,11 +99,11 @@ designs:
       - tag: "125"
         token: 125
         levels: [rcmax, cmax]
-        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages is the only holdout
       - tag: m25
         token: m25
         levels: [rcmax, cmax, rcmin]
-        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
+        hidden_corners: []              # emptied for this experiment: corners.hidden_voltages is the only holdout
 
 _designs_note: |                    # (FYI) designs takes one of three forms:
                                     #
@@ -119,11 +137,11 @@ temps:                              # Temperature = split dimension (own model).
     # single global list cannot express this (125C has no rcmin).
     # Any holdout key from corners.* below applies to this temp only when
     # written here.
-    hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
+    hidden_corners: []              # emptied for this experiment: corners.hidden_voltages is the only holdout
   - tag: m25
     token: m25
     levels: [rcmax, cmax, rcmin]
-    hidden_corners: []              # emptied for this experiment: corners.hidden_voltages [0.5] is the only holdout
+    hidden_corners: []              # emptied for this experiment: corners.hidden_voltages is the only holdout
 
 # * setup or hold. This one line sets every read and write location.
 #   mode: setup  ->  read  <root>/<design>/setup/ , <root>/<design>/setup/xtalk/
@@ -186,11 +204,26 @@ out:                                # Rarely touched. auto = follows mode.
                                     #   runs/extrapolation/hold/). The cache is
                                     #   deliberately NOT tagged: it is the same
                                     #   parse of the same reports.
+                                    # (set above for this experiment)
+                                    # "" = off. A name here puts every output
+                                    #   under runs/<tag>/<mode>/ instead of
+                                    #   runs/<mode>/, so a SECOND config -- a
+                                    #   different seen/hidden split of the same
+                                    #   reports -- can run without overwriting
+                                    #   these results. It sits ABOVE the mode, so
+                                    #   setup and hold still split underneath.
+                                    #   See config_extrapolation.yaml, which sets
+                                    #   it to `extrapolation`. One-off:
+                                    #     run.sh all --tag extrapolation
+                                    #   The cache is NOT tagged: dataset.npz does
+                                    #   not depend on the split, so experiments
+                                    #   share one parse.
   cache: auto                       # cache/<mode>/<design>/<temp>/dataset.npz
-                                    #   (shared with config.yaml -- no rebuild)
-  runs: auto                        # left auto: out.tag decides. Setting this by
-                                    #   hand would replace the whole
-                                    #   runs/<tag>/<mode> path and freeze the mode
+  runs: auto                        # runs/<mode>/<design>/<temp>/ + runs/<mode>/_all/
+                                    #   Leave auto when using out.tag -- writing a
+                                    #   path here replaces the whole
+                                    #   runs/<tag>/<mode> and freezes the mode,
+                                    #   which is an error rather than a surprise
 
 
 # --- 2. Corner definition and which corners to hide ------------- [REQUIRED] --
@@ -245,11 +278,10 @@ corners:
                                     #   starts at 0.475. So each circuit loses
                                     #   exactly its own lowest row, and each one
                                     #   trains from 0.54 V up.
-                                    #   Applies to every design, since designs
-                                    #   inherit these globals; the per-temperature
-                                    #   hidden_corners lists are emptied below so
-                                    #   that this is the ONLY holdout (the keys
-                                    #   take the union, not the last one written).
+                                    #   The per-temperature hidden_corners lists
+                                    #   are emptied below so this is the ONLY
+                                    #   holdout (the keys take the union, not the
+                                    #   last one written).
   seen_voltages: []                 # The other direction: only these are seen,
                                     #   every other voltage is hidden (for training
                                     #   a dense voltage grid from a sparse one)
@@ -395,9 +427,60 @@ base:
   cross_max_degree: 2               # Cap on cross-term total degree (2 with few
                                     #   corners, 3 when there are plenty)
 
-  select_on: hidden                 # What select_basis scores candidates by.
+  v_transform: auto                 # MEASURED here, not none: extrapolating is
+                                    #   exactly the case where the variable
+                                    #   matters. Read the [VAXIS] lines -- they
+                                    #   print every candidate with its margin, and
+                                    #   pinning the winner (v_transform: inv, say)
+                                    #   stops it being re-chosen every run.
+                                    # The VARIABLE the voltage axis is fit in:
+                                    #   none = V (the polynomial you expect)
+                                    #   inv  = 1/V        log = log V
+                                    #   auto = measure all three and keep the
+                                    #          best by select_on, printed as
+                                    #          [VAXIS] with the margin
+                                    #   Why it exists: three seen voltages are
+                                    #   fit EXACTLY by a quadratic in V and by a
+                                    #   straight LINE in 1/V. Both reproduce
+                                    #   every measurement and they disagree
+                                    #   about a voltage outside the range, so
+                                    #   when extrapolating the variable is most
+                                    #   of the answer. Inside the range it
+                                    #   barely matters.
+                                    #   Deliberately parameter-free: 1/(V-Vth)
+                                    #   would encode the alpha-power delay law,
+                                    #   but slack is T - (sum of delays) + skew
+                                    #   - U rather than one cell delay, and a
+                                    #   wrong Vth extrapolates confidently
+                                    #   wrong. 1/V and log V have no constant to
+                                    #   get wrong.
+                                    #   Pinned into the checkpoint: predict
+                                    #   replays it, never re-chooses.
+                                    #   NOTE base.bandwidth is in COORDINATE
+                                    #   units, so a transform changes what it
+                                    #   means (1/V spans a different range than
+                                    #   V). weighting: auto re-measures each
+                                    #   option and is unaffected; a hand-set
+                                    #   `local` needs its bandwidth re-checked.
+  select_on: edge                   # NOT hidden here. The held-out row is the
+                                    #   deliverable of this experiment, so ranking
+                                    #   candidates on it would be ranking them on
+                                    #   the answer and the reported error would be
+                                    #   the best of N, not an estimate. `edge`
+                                    #   asks the same question one step in, using
+                                    #   seen corners only.
+                                    #   Cross-check it: `run.sh base` prints edge
+                                    #   AND hidden per candidate and says whether
+                                    #   they agree. If they disagree badly on your
+                                    #   drop, that is worth knowing before the
+                                    #   number is quoted anywhere.
+                                    # What select_basis scores candidates by.
                                     #   hidden   = error on the held-out corners
                                     #   seen_loo = leave-one-out on seen corners
+                                    #   edge     = hold out the whole LOWEST seen
+                                    #              voltage row, refit on the rest,
+                                    #              score back at it; same for the
+                                    #              highest; average the two
                                     #
                                     # seen_loo is the honest criterion -- it never
                                     # reads a held-out label -- and on this grid it
@@ -418,6 +501,26 @@ base:
                                     # Query corners (no truth) are skipped; if a model
                                     # has no labelled hidden corner at all, it falls
                                     # back to seen_loo on its own.
+                                    #
+                                    # `edge` exists for the case `hidden` cannot
+                                    # serve: predicting OUTSIDE the measured range,
+                                    # where the held-out corners are the deliverable
+                                    # and scoring on them is scoring on the answer.
+                                    # It asks the same shape of question one step in
+                                    # -- reach a voltage row the fit never saw -- and
+                                    # reads no held-out label, so it is honest. It is
+                                    # a criterion recomputed from whatever grid it is
+                                    # given, not a rule tuned on one drop.
+                                    # Its limit is size: dropping a row costs a whole
+                                    # voltage, and a candidate the reduced grid cannot
+                                    # identify is not scored at all. With 3 seen
+                                    # voltages it has little to say; with 5+ it has.
+                                    # If it can score nothing it says so and falls
+                                    # back to seen_loo.
+                                    # `run.sh base` prints seen-LOO, edge and hidden
+                                    # for EVERY candidate side by side, and states
+                                    # whether edge picked the hidden-best basis. Read
+                                    # that before trusting it on a new drop.
 
   level_coords: measured            # Where the BEOL levels sit on their axis.
                                     #
