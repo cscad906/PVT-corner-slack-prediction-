@@ -663,6 +663,44 @@ PDK/코너마다 다르면 **자신 있게 틀린다**. `1/V` 와 `log V` 는 �
 단조 변수 변환이라, 이걸 쓰는 건 물리 주장이 아니라 "곡률 가정을 하나 더 후보에 올린다"
 는 뜻이다. 어느 게 맞는지는 드롭마다 측정한다.
 
+### `split.blind_hidden` — 히든 코너를 아예 안 본다고 가정
+
+내삽 실험에서는 홀드아웃을 보고 고르고 있었다. 후보 basis도, 학습 에폭도 (`best.pt` 는
+매 에폭 **히든 코너 점수**가 가장 좋을 때 저장된다). 그래서 보고되는 히든 오차는
+"N개 중 제일 좋은 것" 이지 held-out 추정치가 아니었고, `run.sh train` 이 그렇다고
+경고를 찍고 있었다.
+
+외삽 실험에서는 그 홀드아웃이 **결과물 자체**라 그럴 수 없다. `split.blind_hidden: true`
+한 줄이 **모든 결정**에서 히든 코너를 뺀다:
+
+| 결정 | blind_hidden: false | true |
+|---|---|---|
+| basis (차수·cross) | 히든 오차로 고름 | seen만 (`select_on: edge`) |
+| 축 변수 (`v_transform`) | 히든 오차로 고름 | seen만 |
+| weighting | 히든 오차로 고름 | seen만 |
+| 학습 에폭 (`best.pt`) | **히든 오차로 고름** | **seen 코너 모니터로 고름** |
+| 히든 MAE·WNS 출력 | 찍음 | **그대로 찍음** |
+
+**노브를 결정마다 따로 두지 않았다.** 노브가 여러 개면 서로 어긋난다 — 그래서 한 개고,
+`base.select_on: hidden` 과 같이 켜면 **에러로 거부**한다(그 기준은 정확히 히든 라벨로
+채점하는 것이니까).
+
+측정·출력은 그대로다. 달라지는 건 그 숫자의 **의미**다. `run.sh train` 의 경고가 뒤집힌다:
+
+```
+  NOTE: split.blind_hidden -- no choice here read these corners (basis, axis
+        variable, weighting and epoch were all picked on seen corners), so this
+        number is a held-out estimate rather than a best-of-N.
+```
+
+`summary.json` 에도 `"selected_on": "seen_only (blind_hidden)"`, `"blind_hidden": true` 로
+남는다.
+
+**대가는 있다.** seen 기준 모니터는 히든 품질이 꺾인 뒤에도 계속 좋아져서 **늦은 에폭을
+집는 경향**이 있다 (실측: 125C 에서 5.81 ps 를 저장했고 그때 피크는 0.94 ps 였다).
+그게 "숫자가 말하는 그대로를 의미하게" 만드는 값이다. 홀드아웃이 손에 있고 그걸로 튜닝할
+생각이면 끄고 쓰면 된다 (기본값 false, 즉 기존 동작).
+
 ### `base.select_on: edge`
 
 `hidden` 은 홀드아웃 코너의 오차로 후보를 고른다. 외삽 실험에서는 **그 홀드아웃이 바로

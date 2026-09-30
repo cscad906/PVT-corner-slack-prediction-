@@ -225,6 +225,32 @@ corners:
   query_corners: []                 # e.g. [[0.57, cmax], [0.62, rcmax]]
 
 split:
+  blind_hidden: false               # false = as before (tune against the
+                                    #   holdout). true = the held-out corners
+                                    #   take part in NO decision: not the basis,
+                                    #   not the axis variable, not the
+                                    #   weighting, not the training epoch.
+                                    #   They are still measured,
+                                    #   scored and printed -- that is the
+                                    #   deliverable -- they just do not steer
+                                    #   anything, so the reported number is a
+                                    #   held-out estimate instead of the best of
+                                    #   N over them.
+                                    #   ONE switch rather than a knob per
+                                    #   decision, because knobs disagree: it
+                                    #   refuses to run with base.select_on:
+                                    #   hidden (which ranks candidates by exactly
+                                    #   those labels) and sends the epoch monitor
+                                    #   to the seen-corner one.
+                                    #   Cost, measured: the seen monitor keeps
+                                    #   improving after hidden quality peaks, so
+                                    #   it tends to keep a late epoch (125C
+                                    #   shipped 5.81 ps where the peak was 0.94).
+                                    #   That is the price of the number meaning
+                                    #   what it says. Turn it on when the holdout
+                                    #   IS the question (predicting outside the
+                                    #   measured range); leave it off when you
+                                    #   are tuning against a holdout you have.
   min_seen: auto                    # Guard on the minimum number of seen corners.
                                     #   auto = seen voltages x levels (i.e. checks
                                     #   the grid is full) -> a single missing

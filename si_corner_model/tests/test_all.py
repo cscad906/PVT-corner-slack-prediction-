@@ -7,6 +7,7 @@ Three parts:
   2. corner discovery      -- filename -> corner label, temp/level filters
   3. engine math/helpers   -- basis construction, OLS base, path-key/cell parsing
 """
+import json
 import os
 
 import numpy as np
@@ -1493,6 +1494,82 @@ def test_transformed_axis_survives_predict_and_the_checkpoint(real_tree, tmp_pat
     # is test_v_transform_auto_recovers_the_generating_variable above)
 
 
+def test_blind_hidden_keeps_every_choice_off_the_held_out_corners(
+        real_tree, tmp_path, monkeypatch):
+    """split.blind_hidden: the held-out corners are measured and reported, but
+    no DECISION reads them.
+
+    Tested the only way that means anything -- by changing what those corners
+    say. Shift every held-out label by 5 ns and train again from the same seed:
+    under blind_hidden the chosen epoch and every weight must come out
+    bit-identical, because nothing consulted them. With blind_hidden off the
+    same shift must change the result, or the test would pass on a run that
+    ignores its input anyway.
+
+    The basis, the axis variable and the weighting are covered by
+    test_edge_criterion_cannot_see_the_hidden_corners; what is left, and what
+    this pins down, is the training epoch -- the last place a held-out label was
+    still steering a choice.
+    """
+    pytest.importorskip("torch")
+    import torch
+
+    from si_model.parsing.build_dataset import build
+    from si_model.run import expand, select, stage_train
+    from si_model.training.loo import make_split
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def model_for(blind):
+        p = _base_project(real_tree, select_on="edge" if blind else "hidden")
+        p["train"]["epochs"] = 4
+        p["split"]["blind_hidden"] = blind
+        return select(expand(p), design="boomcore", temp="m25")[0]
+
+    base = model_for(False)
+    build(base["cfg"])
+    clean = base["cfg"]["data"]["cache"]
+    ds = dict(np.load(clean))
+    sp = make_split(ds["corners"].tolist(), ds["vt"], base["cfg"])
+    assert len(sp.hidden_idx)
+    ds["slack"][:, sp.hidden_idx] += 5000.0          # 5 ns off, at the holdout
+    dirty = os.path.join(os.path.dirname(clean), "dirty.npz")
+    np.savez(dirty, **ds)
+
+    def train(blind, cache, tag):
+        m = model_for(blind)
+        m["cfg"]["data"]["cache"] = cache
+        m["cfg"]["train"]["out_dir"] = os.path.join("runs", tag)
+        stage_train(m)
+        ck = torch.load(os.path.join("runs", tag, "best.pt"), map_location="cpu")
+        with open(os.path.join("runs", tag, "summary.json")) as f:
+            summ = json.load(f)
+        return ck["epoch"], ck["model"], summ
+
+    def same(a, b):
+        return (sorted(a) == sorted(b)
+                and all(torch.equal(a[k], b[k]) for k in a))
+
+    e1, w1, s1 = train(True, clean, "blind_clean")
+    e2, w2, _ = train(True, dirty, "blind_dirty")
+    assert s1["selected_on"] == "seen_only (blind_hidden)"
+    assert s1["blind_hidden"] is True
+    assert e1 == e2 and same(w1, w2), (e1, e2)
+
+    e3, w3, s3 = train(False, clean, "open_clean")
+    e4, w4, _ = train(False, dirty, "open_dirty")
+    assert s3["selected_on"] == "hidden_corners"
+    assert e3 != e4 or not same(w3, w4), "the shift must matter when not blind"
+
+    # and the switch cannot be half-set: selecting ON the held-out corners
+    # while claiming not to see them is refused rather than resolved
+    p = _base_project(real_tree, select_on="hidden")
+    p["split"]["blind_hidden"] = True
+    with pytest.raises(AssertionError, match="blind_hidden"):
+        expand(p)
+
+
 def _deep_diff(a, b, at=""):
     """Dotted paths where two parsed configs differ. Lists compare by index."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -1589,6 +1666,7 @@ def test_extrapolation_config_is_config_yaml_plus_the_holdout():
         "designs.MIF_Timing_Report.temps.0.hidden_corners",
         "designs.MIF_Timing_Report.temps.1.hidden_corners",
         "out.tag",
+        "split.blind_hidden",
         "temps.0.hidden_corners",
         "temps.1.hidden_corners",
     ]
@@ -1598,6 +1676,9 @@ def test_extrapolation_config_is_config_yaml_plus_the_holdout():
     # rank candidates WITHOUT the held-out row, which is this run's deliverable
     assert exp["base"]["v_transform"] == "auto"
     assert exp["base"]["select_on"] == "edge"
+    # nothing in this experiment may be chosen by looking at the held-out row
+    assert exp["split"]["blind_hidden"] is True
+    assert main["split"]["blind_hidden"] is False
     assert main["base"]["v_transform"] == "none"
     assert main["base"]["select_on"] == "hidden"
     assert exp["corners"]["hidden_corners"] == []          # unchanged, already empty

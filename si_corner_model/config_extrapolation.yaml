@@ -38,16 +38,17 @@
 #  seconds. Sweep further without editing any file:
 #      env SI_BASE="v_order=1" bash scripts/run.sh base --config config_extrapolation.yaml
 #
-#  THIS FILE IS A COPY of config.yaml. Only six things differ:
+#  THIS FILE IS A COPY of config.yaml. Only seven things differ:
 #      out.tag                     extrapolation   (where output goes)
 #      corners.hidden_voltages     [0.5, 0.475]    (the whole row is hidden)
 #      temps[].hidden_corners      emptied         (3 places: here + MFC + MIF)
 #      base.v_transform            auto            (choose V / 1/V / log V)
 #      base.select_on              edge            (rank without the answer)
+#      split.blind_hidden          true            (NO choice reads the holdout)
 #      the header you are reading
 #  Anything else that differs between the two files is drift, i.e. a bug.
 #  tests/test_all.py::test_extrapolation_config_is_config_yaml_plus_the_holdout
-#  compares them key by key and fails if a seventh difference appears, so a fix
+#  compares them key by key and fails if an eighth difference appears, so a fix
 #  to config.yaml that belongs here cannot be silently missed -- but the fix
 #  still has to be COPIED here by hand.
 #
@@ -294,6 +295,32 @@ corners:
   query_corners: []                 # e.g. [[0.57, cmax], [0.62, rcmax]]
 
 split:
+  blind_hidden: true                # TRUE here -- this experiment's whole
+                                    #   point. The held-out corners take part
+                                    #   in NO decision: not the basis,
+                                    #   not the axis variable, not the
+                                    #   weighting, not the training epoch.
+                                    #   They are still measured,
+                                    #   scored and printed -- that is the
+                                    #   deliverable -- they just do not steer
+                                    #   anything, so the reported number is a
+                                    #   held-out estimate instead of the best of
+                                    #   N over them.
+                                    #   ONE switch rather than a knob per
+                                    #   decision, because knobs disagree: it
+                                    #   refuses to run with base.select_on:
+                                    #   hidden (which ranks candidates by exactly
+                                    #   those labels) and sends the epoch monitor
+                                    #   to the seen-corner one.
+                                    #   Cost, measured: the seen monitor keeps
+                                    #   improving after hidden quality peaks, so
+                                    #   it tends to keep a late epoch (125C
+                                    #   shipped 5.81 ps where the peak was 0.94).
+                                    #   That is the price of the number meaning
+                                    #   what it says. Turn it on when the holdout
+                                    #   IS the question (predicting outside the
+                                    #   measured range); leave it off when you
+                                    #   are tuning against a holdout you have.
   min_seen: auto                    # Guard on the minimum number of seen corners.
                                     #   auto = seen voltages x levels (i.e. checks
                                     #   the grid is full) -> a single missing

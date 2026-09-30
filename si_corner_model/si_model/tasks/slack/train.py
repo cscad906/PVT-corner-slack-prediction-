@@ -96,6 +96,9 @@ class Trainer:
         # standardize). The base is not in there -- it is refitted on this
         # circuit's own measurements, because it is per path.
         self.transfer = cfg.get("_transfer")
+        # "the held-out corners are not visible to any decision" -- see
+        # run.expand. Read once, here, so every use is the same answer.
+        self.blind_hidden = bool((cfg.get("split") or {}).get("blind_hidden", False))
         if lambda_si is not None:
             cfg["train"]["lambda_si"] = lambda_si
         self.dev = torch.device(cfg["train"].get("device", "cuda")
@@ -625,7 +628,15 @@ class Trainer:
             # third split to keep the two jobs apart. report() says so.
             # With no measured hidden corner there is nothing to select on, so
             # fall back to the seen-based monitor rather than checkpoint on NaN.
-            if len(self.eval_hidden_idx):
+            # `split.blind_hidden` takes that same seen-only route on purpose:
+            # when the held-out corners are the deliverable -- predicting
+            # outside the measured range -- choosing the epoch on them is
+            # choosing on the answer, and the reported number stops being an
+            # estimate of anything. Known cost, measured: the seen monitor kept
+            # improving after hidden quality had peaked and turned around, so it
+            # tends to keep a late epoch (125C shipped 5.81 ps where the peak
+            # was 0.94). That is the price of the number meaning what it says.
+            if len(self.eval_hidden_idx) and not self.blind_hidden:
                 mon = float(hid["mae"].mean() + 0.3 * hid["mae"].max())
             else:
                 mon = float(val["mae"].mean() + 0.3 * val["mae"].max())
@@ -989,8 +1000,10 @@ class Trainer:
         summary["si_branch"] = bool(self.has_si)
         summary["enc_blocks"] = self.cfg["model"].get("enc_blocks", 3)
         summary["best_epoch"] = best_ep + 1
-        summary["selected_on"] = ("hidden_corners" if len(self.eval_hidden_idx)
-                                  else "seen_loo")
+        summary["selected_on"] = (
+            "seen_only (blind_hidden)" if self.blind_hidden
+            else ("hidden_corners" if len(self.eval_hidden_idx) else "seen_loo"))
+        summary["blind_hidden"] = bool(self.blind_hidden)
         # Written whether or not it was printed: the per-corner breakdown is the
         # thing the screen stops showing by default, so it has to survive here.
         summary["by_corner"] = {
@@ -1004,7 +1017,7 @@ class Trainer:
         if _verbose():
             print(f"  [all paths] model {s['hidden_mae_ps']:.2f} ps "
                   f"(worst {s['hidden_worst_ps']:.2f})")
-        if _verbose() and len(self.eval_hidden_idx):
+        if _verbose() and len(self.eval_hidden_idx) and not self.blind_hidden:
             # Say it plainly: the epoch was chosen by this same number, so it is
             # a best-case, not a held-out estimate. Quote it as such.
             print("  NOTE: the epoch was selected on these corners, so this "
@@ -1013,6 +1026,15 @@ class Trainer:
                   "estimate. For an unbiased\n"
                   "        figure, score a corner that took no part in "
                   "selection.")
+        elif _verbose() and len(self.eval_hidden_idx):
+            # The opposite note, and the reason blind_hidden exists: nothing
+            # about these corners entered any choice, so this IS held out.
+            print("  NOTE: split.blind_hidden -- no choice here read these "
+                  "corners (basis, axis\n"
+                  "        variable, weighting and epoch were all picked on "
+                  "seen corners), so this\n"
+                  "        number is a held-out estimate rather than a "
+                  "best-of-N.")
         with open(f"{out_dir}/summary.json", "w") as f:
             json.dump(summary, f, indent=2)
         # per-(path, corner) prediction dump: truth vs base vs model

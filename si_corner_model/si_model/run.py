@@ -1283,10 +1283,24 @@ def expand(p: dict) -> "list[dict]":
             # missing report still trips the guard even with a scattered holdout.
             n_expect = len(seen_v) * n_seen_lv - len(hidden_corners)
             min_seen = sp.get("min_seen", "auto")
+            # One switch for "the held-out corners are not visible", rather
+            # than a knob per decision that can disagree with the others: it
+            # covers the basis, the axis variable, the weighting AND the
+            # training epoch. They are still measured and reported -- that is
+            # the deliverable -- they just take no part in any choice, so the
+            # number reported is a held-out estimate instead of the best of N.
+            blind = bool(sp.get("blind_hidden", False))
+            if blind:
+                assert str(bt.get("select_on", "hidden")) != "hidden", (
+                    f"{design} temp {tag}: split.blind_hidden means no decision "
+                    f"may read a held-out label, but base.select_on is `hidden`, "
+                    f"which ranks candidates by exactly that. Use `edge` (hold "
+                    f"out the outermost SEEN voltage row instead) or `seen_loo`.")
             split = {
                 "hidden_levels": [lv for lv in hidden_lv if lv in levels],
                 "hidden_corners": hidden_corners,
                 "min_seen": (n_expect if str(min_seen) == "auto" else int(min_seen)),
+                "blind_hidden": blind,
             }
             if seen_decl:
                 split["seen_voltages"] = seen_v
