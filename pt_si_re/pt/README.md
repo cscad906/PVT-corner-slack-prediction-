@@ -317,7 +317,7 @@ set FIXED_PATH_FILE "/company/work/pt_scaling_eval/input/fixed_paths.tcl"
 set RESULT_FOLDER   "/company/work/pt_scaling_eval/scaling_output"
 set PROGRESS_INTERVAL_MINUTES 10
 
-set SCALING_POWER_NET "실제_scaling_rail_이름"
+set SCALING_POWER_NET "실제_scaling_rail_이름"   ;# 여러 개면 "VDD VDD_CPU" 또는 "VDD,VDD_CPU"
 
 # Optional: selected sets keep their restored DB and conditions.
 set FIXED_LIBRARY_SET     ""          ;# 셋 이름/공통 패턴, 없으면 빈칸
@@ -340,7 +340,7 @@ set FIXED_LIBRARY_VOLTAGE "restore"   ;# 현재 연결 DB 유지. 숫자는 nomi
 | `ANALYSIS` | setup은 `setup`, hold는 `hold` |
 | `FIXED_PATH_FILE` | 공통 `fixed_paths.tcl`의 절대경로 |
 | `RESULT_FOLDER` | 결과 `.rpt`를 저장할 폴더의 절대경로. 부산물은 자동으로 `details/`에 저장 |
-| `SCALING_POWER_NET` | `available supply nets`에 실제로 있는 코어 target supply net 하나의 정확한 이름. u_mem의 `VDDPE` PG 핀 이름을 입력하는 곳이 아님 |
+| `SCALING_POWER_NET` | `available supply nets`에 실제로 있는 코어 target supply net의 정확한 이름. 여러 개면 공백 또는 쉼표로 구분하며 모두 같은 `TARGET_VOLTAGE`를 받음. 빠뜨린 net의 셀은 조용히 fixed가 되므로 로그의 `AUTO-FIXED POWER NETS`를 확인. u_mem의 `VDDPE` PG 핀 이름을 입력하는 곳이 아님 |
 | `FIXED_LIBRARY_SET` | 내삽에서 제외하고 기존 DB를 유지할 셋 이름/공통 패턴. 여러 개는 공백으로 구분. 빈칸이면 명시적 예외 없음 |
 | `FIXED_LIBRARY_VOLTAGE` | 기본 `"restore"`: 기존 DB와 V/T 유지. 숫자: 기존 DB nominal 전압 확인. `"nearest"`를 명시할 때만 가까운 DB로 재연결 |
 
@@ -960,7 +960,7 @@ domain을 확정한 뒤 실행해야 합니다.
 - [ ] 실행 Git commit hash를 기록했다.
 - [ ] Tcl 맨 위 `USER SETTINGS`의 target process/voltage/temperature/BEOL/axis/analysis를 기록했다.
 - [ ] `FIXED_PATH_FILE`과 `RESULT_FOLDER`를 절대경로로 지정했다.
-- [ ] target voltage를 실제로 적용할 `SCALING_POWER_NET` 하나의 정확한 이름을 설정했다.
+- [ ] target voltage를 실제로 적용할 `SCALING_POWER_NET`의 정확한 이름을 모두 설정했다(여러 개면 공백/쉼표 구분). `AUTO-FIXED POWER NETS`에 스케일링할 net이 남아 있지 않다.
 - [ ] 로그에서 나머지 supply net이 `AUTO-FIXED POWER NETS`로 분류됐는지 확인했다.
 - [ ] 로그의 `FIXED-PATH CELL SCOPE`에서 target-voltage cell 수를 확인했다.
 - [ ] `APPLY CELL-LEVEL VOLTAGE`가 설정한 scaling rail만 표시한다.

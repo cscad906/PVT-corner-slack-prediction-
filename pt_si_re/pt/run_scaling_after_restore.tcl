@@ -29,9 +29,12 @@ set RESULT_FOLDER   "auto_scaling_output"
 # 긴 작업의 진행 상황 출력 간격(분). 계산 결과에는 영향을 주지 않습니다.
 set PROGRESS_INTERVAL_MINUTES 10
 
-# target voltage를 적용할 확실한 실제 supply net 하나만 입력하십시오.
-# restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
-set SCALING_POWER_NET "" ;# target voltage 적용 rail
+# target voltage를 적용할 실제 supply net을 입력하십시오. 여러 개면 공백 또는
+# 쉼표로 구분합니다(예: "VDD VDD_CPU"). 모두 같은 TARGET_VOLTAGE를 받습니다.
+# 적지 않은 나머지 supply net은 모두 자동으로 fixed 처리됩니다. 스케일링해야
+# 할 net을 빠뜨리면 그 net의 셀은 조용히 fixed가 되므로 로그의
+# AUTO-FIXED POWER NETS 목록을 꼭 확인하십시오.
+set SCALING_POWER_NET "" ;# target voltage 적용 rail(들)
 
 # VDDPE는 u_mem Liberty/셀의 PG 핀 이름입니다. supply net 이름이 아니므로
 # RESTORED SUPPLY NETS/Available supply nets 목록에 VDDPE가 없어도 됩니다.
@@ -2981,6 +2984,32 @@ proc auto_scaling::verify_after_run {cfg} {
 
 
 
+# SCALING_POWER_NET 에는 net 을 하나 이상 공백 또는 쉼표로 적습니다.
+# 적은 net 은 모두 같은 TARGET_VOLTAGE 를 받습니다. 빈 항목(",,")과 같은
+# 이름의 중복은 오타로 보고 멈춥니다.
+proc auto_scaling::scaling_net_list {text} {
+    set text [string trim $text]
+    if {$text eq ""} {
+        error "Set SCALING_POWER_NET in USER SETTINGS at the top of this Tcl."
+    }
+    set nets {}
+    foreach item [split $text ,] {
+        set item [string trim $item]
+        if {$item eq ""} {
+            error "SCALING_POWER_NET has an empty comma-separated item: '$text'"
+        }
+        foreach name [regexp -all -inline {\S+} $item] { lappend nets $name }
+    }
+    set seen [dict create]
+    foreach name $nets {
+        if {[dict exists $seen $name]} {
+            error "SCALING_POWER_NET lists '$name' twice: '$text'"
+        }
+        dict set seen $name 1
+    }
+    return $nets
+}
+
 proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
@@ -3022,13 +3051,7 @@ proc auto_scaling::build_restore_config {} {
     }
     set filename "scaled_[string toupper $process]_${vtag}V_${ttag}C_${beol}_${axis}_${analysis}.rpt"
 
-    foreach {setting_name setting_value} [list \
-        SCALING_POWER_NET $::SCALING_POWER_NET] {
-        if {[string trim $setting_value] eq ""} {
-            error "Set $setting_name in USER SETTINGS at the top of this Tcl."
-        }
-    }
-    set scaling_power_nets [list $::SCALING_POWER_NET]
+    set scaling_power_nets [scaling_net_list $::SCALING_POWER_NET]
 
     set fixed_family [string trim $::FIXED_LIBRARY_SET]
     set fixed_voltage ""
