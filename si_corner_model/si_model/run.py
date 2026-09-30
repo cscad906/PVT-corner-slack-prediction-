@@ -1817,9 +1817,14 @@ def _print_slack_vs_voltage(y, split, measured, field, gap=None, cfg=None) -> No
                     gv.append(float(np.median(col)))
         clk = float(np.median(gv)) if gv else float("nan")
         clocks.append(clk)
+        # "no clock" is said out loud rather than left blank: a row whose edge
+        # times did not parse looks exactly like a row nobody asked about, and
+        # the period is what makes a per-voltage clock plan correctable at all.
         print("     %6.3f V %s%s" % (v, "".join(cells),
-                                     "" if not np.isfinite(clk)
-                                     else "    clock %.4f ns" % clk))
+                                     "    clock     n/a" if gap is not None
+                                     and not np.isfinite(clk)
+                                     else ("" if not np.isfinite(clk)
+                                           else "    clock %.4f ns" % clk)))
     fin = [c for c in clocks if np.isfinite(c)]
     if not fin:
         print("     (clock: this cache has no edge times -- re-run build to "

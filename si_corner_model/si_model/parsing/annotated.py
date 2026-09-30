@@ -81,8 +81,13 @@ ENDPOINT_RE = re.compile(r"^\s+Endpoint:\s+(\S+)")
 # edge, and their gap is what a clock period change scales. Single-cycle setup
 # -> the gap IS the period; multicycle -> N periods; hold -> both are the same
 # edge and the gap is zero, which is why hold does not move with frequency.
-CLOCK_EDGE_RE = re.compile(r"^\s+clock \S+ \((?:rise|fall) edge\)(.*)$")
-_NUM_RE = re.compile(r"-?\d+\.\d+")
+# The clock NAME may contain spaces in some flows ("clock my clk (rise edge)"),
+# so everything up to the parenthesised edge is taken lazily rather than as one
+# non-space token. The times themselves are read with the number pattern defined
+# further down -- there used to be a second, stricter copy of it here, which the
+# later definition silently overrode: it read as "a value without a decimal
+# point will not parse" while the opposite was true.
+CLOCK_EDGE_RE = re.compile(r"^\s+clock .*?\((?:rise|fall) edge\)(.*)$")
 # cell pin row:  <inst/pin> (<libcell>) [<-] [trans] [incr] [&] path r|f
 #
 # The report is column-aligned (Fanout Cap Trans Incr Path) and blank columns

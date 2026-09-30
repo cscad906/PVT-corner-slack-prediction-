@@ -2179,6 +2179,28 @@ def test_clock_edge_row_column_layouts():
     assert (p0.launch_edge, p0.capture_edge) == (0.0, 2.0), \
         (p0.launch_edge, p0.capture_edge)
 
+    # Spellings that must not cost the clock period, each through the parser.
+    # The period is what makes a grid measured at one clock per voltage usable
+    # at all, so a row this misses disables that correction silently -- and the
+    # value is a vendor formatting choice, not information.
+    for name, sub in (
+            ("integer edge times",
+             lambda t: _re.sub(r"^(\s+clock \S+ \(rise edge\))\s+2\.0000\s+2\.0000",
+                               r"\1        2        2", t, flags=_re.M)),
+            ("a clock name with a space",
+             lambda t: t.replace("clock clk (rise edge)", "clock my clk (rise edge)")),
+            ("signed exponent times",
+             lambda t: _re.sub(r"^(\s+clock \S+ \(rise edge\))\s+2\.0000\s+2\.0000",
+                               r"\1  +2.0e+00  +2.0e+00", t, flags=_re.M)),
+    ):
+        txt2 = sub(_fake_report(0.6, 0.0))
+        fp2 = os.path.join(tempfile.mkdtemp(), "v.rpt")
+        with open(fp2, "w") as f:
+            f.write(txt2)
+        q = next(iter(parse_annotated(fp2).values()))
+        assert (q.launch_edge, q.capture_edge) == (0.0, 2.0), (name, q.launch_edge,
+                                                              q.capture_edge)
+
 
 def test_predictions_file_carries_a_per_corner_summary(real_tree, tmp_path, monkeypatch):
     """predictions_<tag>.csv ends with a per-corner block, and merge rebuilds
