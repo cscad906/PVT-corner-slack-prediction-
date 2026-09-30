@@ -18,9 +18,14 @@ python3 analysis/compare_scaling_mae.py scaled_hold.rpt ground_truth_hold.rpt \
 python3 analysis/compare_point_delays.py scaled.rpt ground_truth.rpt \
     --output-dir results/point_delay_comparison
 
-python3 analysis/plot_ground_truth_slack.py ground_truth/*.rpt \
+python3 analysis/plot_ground_truth_slack.py ground_truth/ \
     --output-dir results/ground_truth_slack
 ```
+
+`plot_ground_truth_slack.py`에 디렉터리를 주면 하위 `.rpt`를 모두 읽습니다.
+리포트별 통계와 함께 `ALL_REPORTS` 행에 전체 path 관측값의 평균·분포를
+기록합니다. 같은 path가 여러 코너에 있으면 코너마다 한 번씩 집계합니다.
+직접 파일을 나열하는 기존 방식도 사용할 수 있습니다.
 
 원본 `fixed_paths.tcl`을 잃어버렸지만 ground-truth report가 남아 있으면 다음처럼
 복원합니다.

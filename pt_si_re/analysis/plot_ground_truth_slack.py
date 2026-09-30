@@ -4,21 +4,24 @@
 
 QUICK START (run from the pt_si_re directory)
     python3 analysis/plot_ground_truth_slack.py \
-        ground_truth/*.rpt \
+        ground_truth/ \
         --output-dir results/ground_truth_slack
 
-    One-report example:
+    One-report example (file inputs still work):
     python3 analysis/plot_ground_truth_slack.py \
         ground_truth/TARGET.rpt \
         --output-dir results/one_corner
 
 INPUT
-    Give one or more ground-truth reports made with fixed_paths.tcl. Every path
+    Give a directory, one or more report files, or both. Directories are scanned
+    recursively for .rpt files. Repeated files are counted only once. Every path
     must begin with:
 
         ### FIXED_PATH idx=... key=...
 
-    Reports are summarized independently and may contain different path sets.
+    Reports are summarized independently and together in ALL_REPORTS. The
+    combined row treats each resolved corner/path pair as one observation.
+    Reports may contain different path sets.
     For a fair corner comparison, use reports made from the same fixed_paths.tcl.
 
 TIME UNIT AND INCLUDED PATHS
@@ -36,7 +39,7 @@ STATISTICS
 
 OUTPUT
     --output-dir results/ground_truth_slack creates:
-      ground_truth_slack_summary.csv       per-report summary
+      ground_truth_slack_summary.csv       combined and per-report summary
       ground_truth_path_slacks.csv         per-path slack and status
       ground_truth_slack_distribution.svg  common-bin histograms
       ground_truth_slack_boxplot.svg       min/Q1/median/Q3/max/mean
@@ -102,6 +105,22 @@ def unique_labels(paths):
     return labels
 
 
+def expand_report_inputs(inputs):
+    """Expand directories deterministically and deduplicate explicit overlaps."""
+    files = set()
+    for item in inputs:
+        if item.is_file():
+            files.add(item.resolve())
+        elif item.is_dir():
+            files.update(path.resolve() for path in item.rglob("*")
+                         if path.is_file() and path.suffix.lower() == ".rpt")
+        else:
+            raise ValueError(f"input file or directory not found: {item}")
+    if not files:
+        raise ValueError("no .rpt files found in the input directories")
+    return sorted(files, key=str)
+
+
 def load_reports(paths, factor):
     reports = []
     path_rows = []
@@ -132,11 +151,26 @@ def load_reports(paths, factor):
     return reports, path_rows
 
 
+def combined_report(reports):
+    """Pool resolved corner/path observations without duplicating path CSV rows."""
+    label = "ALL_REPORTS"
+    used = {report.label for report in reports}
+    while label in used:
+        label += "_TOTAL"
+    return ReportData(
+        label=label,
+        path=None,
+        total=sum(report.total for report in reports),
+        unresolved=sum(report.unresolved for report in reports),
+        values_ps=[value for report in reports for value in report.values_ps],
+    )
+
+
 def summary_row(report):
     values = report.values_ps
     return {
         "report": report.label,
-        "source_report": str(report.path),
+        "source_report": "" if report.path is None else str(report.path),
         "total_blocks": report.total,
         "resolved_paths": len(values),
         "unresolved_paths": report.unresolved,
@@ -219,7 +253,7 @@ def write_terminal_histogram(path, reports, bins):
         lines.extend([
             "=" * 100,
             f"REPORT     : {report.label}",
-            f"SOURCE     : {report.path}",
+            f"SOURCE     : {report.path if report.path is not None else 'all input reports'}",
             f"PATHS      : resolved {len(report.values_ps)} / total {report.total}; "
             f"unresolved {report.unresolved}; violated {row['violated_paths']}",
             f"MEAN       : {row['mean_ps']:.3f} ps",
@@ -395,7 +429,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Ground-truth fixed-path report\ubcc4 slack \ud1b5\uacc4\uc640 \ubd84\ud3ec \uadf8\ub798\ud504\ub97c \uc0dd\uc131\ud569\ub2c8\ub2e4.")
     parser.add_argument("reports", type=Path, nargs="+",
-                        help="fixed_paths.tcl\ub85c \uc0dd\uc131\ud55c ground-truth .rpt \ud30c\uc77c\ub4e4")
+                        help="ground-truth .rpt files or directories (directories include nested .rpt files)")
     parser.add_argument("--output-dir", type=Path, default=Path("ground_truth_slack_stats"),
                         help="\uacb0\uacfc \ud3f4\ub354 (\uae30\ubcf8\uac12: ground_truth_slack_stats)")
     parser.add_argument("--bins", type=int, default=30,
@@ -404,12 +438,17 @@ def main():
 
     if args.bins < 2:
         parser.error("--bins must be at least 2")
-    for report in args.reports:
-        if not report.is_file():
-            parser.error(f"file not found: {report}")
+    try:
+        report_paths = expand_report_inputs(args.reports)
+    except ValueError as error:
+        parser.error(str(error))
 
-    reports, path_rows = load_reports(args.reports, NS_TO_PS)
-    summaries = [summary_row(report) for report in reports]
+    try:
+        reports, path_rows = load_reports(report_paths, NS_TO_PS)
+    except ValueError as error:
+        parser.error(str(error))
+    plotted_reports = [combined_report(reports)] + reports
+    summaries = [summary_row(report) for report in plotted_reports]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.output_dir / "ground_truth_slack_summary.csv"
     paths_path = args.output_dir / "ground_truth_path_slacks.csv"
@@ -420,9 +459,9 @@ def main():
     write_csv(summary_path, summaries, list(summaries[0]))
     write_csv(paths_path, path_rows,
               ["report", "source_report", "idx", "path_key", "slack_ps", "status"])
-    write_distribution_svg(distribution_path, reports, args.bins)
-    write_boxplot_svg(boxplot_path, reports)
-    write_terminal_histogram(terminal_path, reports, args.bins)
+    write_distribution_svg(distribution_path, plotted_reports, args.bins)
+    write_boxplot_svg(boxplot_path, plotted_reports)
+    write_terminal_histogram(terminal_path, plotted_reports, args.bins)
 
     print("=== Ground-truth slack statistics ===")
     for row in summaries:
