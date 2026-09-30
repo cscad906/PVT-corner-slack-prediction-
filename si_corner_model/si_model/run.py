@@ -1703,14 +1703,14 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
-    _print_slack_vs_voltage(y, split, measured, field)
+    _print_slack_vs_voltage(y, split, measured, field, ds.get("cycle_gap"))
     _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
         _print_basis_comparison(y, split, coords, cfg, hid)
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
 
 
-def _print_slack_vs_voltage(y, split, measured, field) -> None:
+def _print_slack_vs_voltage(y, split, measured, field, gap=None) -> None:
     """The measured field against voltage, mean over paths, one row per voltage.
 
     The curve the base is being asked to follow, in the one place it is being
@@ -1724,8 +1724,20 @@ def _print_slack_vs_voltage(y, split, measured, field) -> None:
         rather than that the fit needs tuning.
       * the held-out row sits parallel to the trend, offset by a constant ->
         the corner was measured under different conditions (clock period,
-        derate), which shifts every path equally. Check the cycle gap with
-        `run.sh check --file <that report>`.
+        derate), which shifts every path equally. The clock column beside it
+        says whether the period is the difference.
+
+    The clock column is the capture-minus-launch edge gap this stage reads
+    straight out of the cache, one number per voltage. It matters because slack
+    is T - (sum of delays) + skew - U, and T is a DESIGN CHOICE, not a function
+    of voltage: a grid measured at one period per voltage (lower V, slower
+    clock, as DVFS does) is a grid where the field being fitted is
+    T(V) - delay(V). Inside the measured range a polynomial absorbs the T part
+    silently; outside it, extrapolating means extrapolating someone's frequency
+    plan, which is not a smooth curve and shows up as the same constant miss at
+    every candidate order. When the column is not flat, the fix is exact rather
+    than a better fit: slack(T') = slack(T) + N*(T'-T), so every corner can be
+    normalised to one period before fitting and converted back afterwards.
 
     Printed for every run because it costs nothing and it is the first thing
     anyone asks for once a number looks wrong -- reconstructing it by hand from
@@ -1739,10 +1751,12 @@ def _print_slack_vs_voltage(y, split, measured, field) -> None:
     if len(vs) < 2:
         return
     lv = np.unique(np.round(split.vt[:, 1], 9))
+    gap = None if gap is None else np.asarray(gap, float)
     print("    [measured slack vs voltage]  mean over paths, ps"
           + ("   (* = held out)" if not split.seen.all() else ""))
+    clocks = []
     for v in vs:
-        cells = []
+        cells, gv = [], []
         for l in lv:
             hit = [ci for ci in range(split.vt.shape[0])
                    if abs(round(split.vt[ci, 0], 9) - v) < 1e-9
@@ -1753,8 +1767,33 @@ def _print_slack_vs_voltage(y, split, measured, field) -> None:
             ci = hit[0]
             cells.append("%11.1f%s" % (float(np.nanmean(y[:, ci])) * 1000.0,
                                        " " if split.seen[ci] else "*"))
-        print("     %6.3f V %s" % (v, "".join(cells)))
+            if gap is not None and gap.shape[1] > ci:
+                col = gap[:, ci]
+                col = col[np.isfinite(col) & (col > 1e-12)]
+                if len(col):
+                    gv.append(float(np.median(col)))
+        clk = float(np.median(gv)) if gv else float("nan")
+        clocks.append(clk)
+        print("     %6.3f V %s%s" % (v, "".join(cells),
+                                     "" if not np.isfinite(clk)
+                                     else "    clock %.4f ns" % clk))
     print("              " + "".join("%12s" % ("lv %+.2f" % l) for l in lv))
+    fin = [c for c in clocks if np.isfinite(c)]
+    if not fin:
+        print("     (clock: this cache has no edge times -- re-run build to "
+              "read them, which is what tells a period change from a real bend)")
+        return
+    if max(fin) - min(fin) > 1e-6:
+        print("     (!) THE CLOCK PERIOD IS NOT THE SAME AT EVERY VOLTAGE "
+              "(%.4f .. %.4f ns)." % (min(fin), max(fin)))
+        print("         Then the field being fitted is T(V) - delay(V), and T(V)"
+              " is a frequency plan,")
+        print("         not physics. Inside the grid the polynomial absorbs it;"
+              " outside it, every")
+        print("         candidate order misses by the same constant. Normalise"
+              " to one period first")
+        print("         -- slack(T') = slack(T) + N*(T'-T) is exact -- or quote"
+              " results per period.")
 
 
 def _print_seen_fit(y, phi, split, field, unit) -> None:
