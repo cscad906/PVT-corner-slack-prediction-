@@ -29,6 +29,17 @@ proc get_attribute {args} {
     set attribute [lindex $args end]
     switch -- $attribute {
         full_name { return $object }
+        lib_cell {
+            set result {}
+            foreach cell $object {
+                if {$cell eq "top/u_logic"} {
+                    lappend result CORE/LOGIC
+                } else {
+                    lappend result MEM_LO/CELL
+                }
+            }
+            return $result
+        }
         pin_name { return VDDPE }
         type { return primary_power }
         lib_scaling_group { return {MEM_LO MEM_HI} }
@@ -49,10 +60,14 @@ Group 1
 proc report_lib_groups {args} { return $::native_report }
 
 set supply [dict create path_cells {top/u_mem0 top/u_logic}]
-set cfg [dict create target_vddpe 0.54 target_t 25 target_v 0.54]
+set cfg [dict create target_vddpe 0.54 target_t 25 target_v 0.54 \
+    vddpe_name_patterns {*u_mem*}]
 set native [auto_scaling::native_umem_scope $supply $cfg]
 check [expr {[dict get [auto_scaling::native_umem_scope [dict create path_cells {top/u_logic}] [dict replace $cfg target_vddpe ""]] cell_names] eq ""}] "Empty u_mem scope requires no setting"
 check [expr {[dict get $native cell_names] eq {top/u_mem0}}] "Wrong fixed-path macro scope"
+check [expr {[dict get [auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns {*nomatch*, MEM_*}]] cell_names] eq {top/u_mem0}}] "Linked-library wildcard did not select the macro"
+check [expr {[dict get [auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns ""]] cell_names] eq ""}] "Blank pattern did not disable macro selection"
+expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg vddpe_name_patterns {*u_mem*,,MEM_*}]} {UM-020:*}
 check [expr {[dict get [dict get [dict get $native groups] MEM_LO] bracket] eq {0.475 0.685}}] "Native VDDPE bracket lost"
 check [expr {[auto_scaling::umem_control_cells $native] eq {top/u_mem_control}}] "Control instance not identified"
 expect_error {auto_scaling::native_umem_scope $supply [dict replace $cfg target_vddpe ""]} {UM-001:*}

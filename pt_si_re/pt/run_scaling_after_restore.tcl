@@ -29,9 +29,12 @@ set PROGRESS_INTERVAL_MINUTES 10
 # restore session에서 조회된 나머지 supply net은 모두 자동으로 fixed 처리됩니다.
 set SCALING_POWER_NET "" ;# target voltage 적용 rail
 
-# Fixed-path u_mem instances use the restored native VDDPE scaling group.
-# Set their target VDDPE voltage independently from TARGET_VOLTAGE. Leave blank
-# only when no fixed-path cell name contains u_mem. No supply net is changed.
+# 고정 경로에서 VDDPE scaling할 셀 이름 또는 연결된 library 이름을 지정합니다.
+# * 와 ? 사용 가능. 여러 패턴은 쉼표로 구분: "*u_mem*,*sram*"
+# 빈칸이면 VDDPE macro scaling을 사용하지 않습니다.
+set VDDPE_SCALING_NAME_PATTERNS "*u_mem*"
+# 선택된 셀이 있을 때 목표 VDDPE 전압을 입력하십시오. 코어 TARGET_VOLTAGE와
+# 다를 수 있습니다. 공급 net 전체의 전압은 변경하지 않습니다.
 set TARGET_VDDPE_VOLTAGE ""
 
 # Optional: keep selected sets at their restored DB/conditions, without interpolation.
@@ -623,17 +626,46 @@ proc auto_scaling::bracket {values target axis} {
     return [list $lower $upper]
 }
 
-# Use PrimeTime's actual multirail group for fixed-path u_mem cells. Library
+# Use PrimeTime's actual multirail group for fixed-path macro cells. Library
 # filenames/one-dimensional nominal voltages cannot identify the VDDPE axis.
 proc auto_scaling::native_umem_scope {supply cfg} {
-    set names {}
-    foreach name [get_object_name [dict get $supply path_cells]] {
-        if {[string match -nocase *u_mem* $name]} { lappend names $name }
+    set raw_patterns [string trim [option $cfg vddpe_name_patterns "*u_mem*"]]
+    if {$raw_patterns eq ""} {
+        return [dict create cell_names {} library_names {} groups {} name_patterns {}]
     }
-    if {![llength $names]} { return [dict create cell_names {} library_names {} groups {}] }
+    set patterns {}
+    foreach item [split $raw_patterns ,] {
+        set pattern [string trim $item]
+        if {$pattern eq ""} {
+            error "UM-020: VDDPE_SCALING_NAME_PATTERNS has an empty comma-separated pattern."
+        }
+        lappend patterns $pattern
+    }
+    set path_cells [dict get $supply path_cells]
+    set lib_cells [get_attribute $path_cells lib_cell]
+    if {[sizeof_collection $lib_cells] != [sizeof_collection $path_cells]} {
+        error "UM-021: Cannot map every fixed-path cell to its linked library."
+    }
+    set names {}
+    foreach name [get_object_name $path_cells] lib_cell [get_object_name $lib_cells] {
+        set slash [string first / $lib_cell]
+        if {$slash <= 0} { error "UM-021: Cannot read linked library from $lib_cell" }
+        set library [string range $lib_cell 0 [expr {$slash-1}]]
+        foreach pattern $patterns {
+            if {[string match -nocase $pattern $name] ||
+                [string match -nocase $pattern $library]} {
+                lappend names $name
+                puts "VDDPE MACRO MATCH: cell=$name library=$library pattern=$pattern"
+                break
+            }
+        }
+    }
+    if {![llength $names]} {
+        return [dict create cell_names {} library_names {} groups {} name_patterns $patterns]
+    }
     set requested [string trim [option $cfg target_vddpe ""]]
     if {$requested eq ""} {
-        error "UM-001: Fixed paths contain u_mem cells; set TARGET_VDDPE_VOLTAGE. It may differ from TARGET_VOLTAGE."
+        error "UM-001: VDDPE_SCALING_NAME_PATTERNS selected fixed-path cells; set TARGET_VDDPE_VOLTAGE. It may differ from TARGET_VOLTAGE."
     }
     set target [number $requested]
     set target_t [number [need $cfg target_t]]
@@ -693,7 +725,8 @@ proc auto_scaling::native_umem_scope {supply cfg} {
         puts "U_MEM NATIVE SCALING: lib=$lib_name target_vddpe=$target V bracket=$pair V fixed_path_cells=[llength $names]"
     }
     return [dict create cell_names [lsort -unique $names] \
-        library_names [dict keys $library_names] groups $group_records target_vddpe $target]
+        library_names [dict keys $library_names] groups $group_records \
+        target_vddpe $target name_patterns $patterns]
 }
 
 proc auto_scaling::umem_control_cells {native} {
@@ -1916,6 +1949,7 @@ proc auto_scaling::scaling_inputs_text {plan} {
             [llength [dict get $group selected]] [dict get $plan v] [dict get $plan t]]
     }
     set native_umem [option $plan native_umem [dict create cell_names {} groups {}]]
+    lappend lines "VDDPE_MACRO_NAME_PATTERNS=[option $native_umem name_patterns {}]"
     dict for {lib record} [dict get $native_umem groups] {
         lappend lines "U_MEM_NATIVE_GROUP lib=$lib target_vddpe=[dict get $native_umem target_vddpe] V bracket=[dict get $record bracket] V"
         lappend lines "  FIXED_PATH_CELLS=[dict get $native_umem cell_names]"
@@ -2556,7 +2590,7 @@ proc auto_scaling::build_restore_config {} {
     foreach name {
         TARGET_PROCESS TARGET_VOLTAGE TARGET_TEMPERATURE TARGET_BEOL SCALING_AXIS
         ANALYSIS FIXED_PATH_FILE RESULT_FOLDER PROGRESS_INTERVAL_MINUTES
-        SCALING_POWER_NET TARGET_VDDPE_VOLTAGE
+        SCALING_POWER_NET VDDPE_SCALING_NAME_PATTERNS TARGET_VDDPE_VOLTAGE
         FIXED_LIBRARY_SET FIXED_LIBRARY_VOLTAGE
     } {
         if {![info exists ::$name]} {
@@ -2619,6 +2653,7 @@ proc auto_scaling::build_restore_config {} {
         delay_type $delay_type \
         fixed_tcl $::FIXED_PATH_FILE \
         scaling_power_nets $scaling_power_nets \
+        vddpe_name_patterns [string trim $::VDDPE_SCALING_NAME_PATTERNS] \
         target_vddpe [string trim $::TARGET_VDDPE_VOLTAGE] \
         fixed_library_set $fixed_family \
         fixed_library_voltage $fixed_voltage \
