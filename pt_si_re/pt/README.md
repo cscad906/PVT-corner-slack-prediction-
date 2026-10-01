@@ -3,8 +3,6 @@
 이 문서는 처음 코드를 전달받은 담당자가 PrimeTime restore session에서 native
 library scaling을 실행하고, 동일한 fixed path의 ground truth와 비교하는 절차를
 설명합니다. 일반 scaling 실행 파일은 `run_scaling_after_restore.tcl`입니다.
-u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아래의 별도 LOO
-준비/실행 파일을 사용합니다.
 
 ## 1. 전달할 파일과 담당자 준비물
 
@@ -15,8 +13,6 @@ u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아�
 | `pt/run_scaling_after_restore.tcl` | restore session에서 PT scaling 및 fixed-path 측정 | `pt_shell` |
 | `pt/run_scaling_after_restore_net.tcl` | (실험) net 모드: `SCALING_POWER_NET` 전체에 목표 전압을 걸어 clock tree·경로 밖 셀까지 스케일링. 원본을 load-only로 불러 씀 | `pt_shell` |
 | `pt/check_loo_groups_after_restore.tcl` | 현재 full-group session에서 fixed-path 관련 그룹의 목표 코너 포함 여부를 읽기 전용으로 일괄 조회 | `pt_shell` |
-| `pt/prepare_umem_loo.tcl` | 기존 u_mem 그룹을 읽고 목표 VDDPE DB를 제외한 새 그룹 Tcl 생성(읽기 전용) | `pt_shell` |
-| `pt/run_umem_loo_after_restore.tcl` | 목표를 제외한 u_mem 그룹을 새로 정의하고 fixed-path 측정 | `pt_shell` |
 | `pt/show_library_voltages.tcl` | 로드된 library의 Operating Conditions 전압/온도 목록 조회 | `pt_shell` |
 | `pt/show_library_scaling_group.tcl` | 입력한 library가 속한 scaling group의 전체 library와 전압/온도/rail 조회 | `pt_shell` |
 | `fixed_paths.tcl` | 모든 비교에 공통으로 사용할 경로 목록 | `pt_shell` |
@@ -91,37 +87,18 @@ source /path/to/pt/check_loo_groups_after_restore.tcl
 교체되지 않습니다. 로컬 PrimeTime V-2023.12-SP4 검증에서는 `SLG-316`이
 출력되고 명령의 반환값이 `0`이었으며 그룹 내용은 그대로였습니다.
 
-먼저 일반 파일의 USER SETTINGS에 `FIXED_PATH_FILE`, `RESULT_FOLDER`,
-`VDDPE_SCALING_NAME_PATTERNS`, `TARGET_VDDPE_VOLTAGE` 및 다른 목표 조건을
-설정합니다. 현재 full-group 세션에서는 다음 한 줄을 실행합니다.
+u_mem 을 스케일링하려면 일반 파일의 USER SETTINGS 에서 네이티브 모드를 켭니다.
+이 모드는 library 이름이 아니라 PrimeTime 그룹의 `VDDPE` rail 값을 직접 읽어
+목표 위아래 DB 를 고릅니다. 이름에 전압이 두 개 들어 있어 이름만으로 축을
+정할 수 없는 u_mem library 도 이 방식으로 처리됩니다.
 
 ```tcl
-source /path/to/pt/prepare_umem_loo.tcl
+set VDDPE_SCALING_NAME_PATTERNS "*u_mem*"
+set TARGET_VDDPE_VOLTAGE <TARGET_VOLTAGE 와 같은 값>   ;# VDDPE 가 코어 net 에 있음
 ```
 
-이 명령은 세션을 변경하지 않고 `<RESULT_FOLDER>/umem_loo_group.tcl`을
-생성합니다. 목표 DB를 제외한 뒤 같은 u_mem 그룹 안에 목표 VDDPE보다
-낮고 높은 DB가 모두 없거나, 현재 u_mem 셀이 목표 DB에 직접 연결돼 있으면
-명확한 `UML-*` 오류로 중단합니다. 다른 그룹의 고전압 DB를 임의로 합치지
-않습니다.
-
-**실제 LOO 실행에는 원래 u_mem 그룹이 정의되기 전의 restore session**이
-필요합니다. 같은 디자인과 fixed path를 사용하고, u_mem 셀은 제외하지 않은
-source DB에 연결돼 있어야 합니다. 그 세션에서 다음을 실행합니다.
-
-```tcl
-source /path/to/pt/run_umem_loo_after_restore.tcl
-```
-
-실행 파일은 생성한 그룹을 정의한 뒤 원래 scaling 절차를 호출합니다.
-코어 그룹이 아직 없다면 원래 planner의 목표 제외 입력으로 추가 정의합니다.
-현재 full-group session에서 실행하면 그룹 변경 전에 `UML-019`로 중단합니다.
-결과는 일반 실행 결과와 구별되도록 `umem_loo_` 접두사가 붙습니다.
-생성한 그룹은 PrimeTime 기본 true-scaling 옵션을 사용합니다. 기존 u_mem
-그룹이 `-excluded_rail_names`, `-best_match`, `-exact_match_only` 같은 별도
-옵션으로 만들어졌다면 이 옵션은 그룹 보고서에서 복원할 수 없으므로 원래
-그룹 생성 Tcl과 비교한 뒤 적용해야 합니다. 회사 데이터/세션에서는 아직
-이 새 흐름의 실제 timing 실행을 검증하지 못했습니다.
+LOO 는 목표 코너를 그룹에서 뺀 코너별 restore session 으로 보장합니다. 그 세션의
+u_mem 그룹에도 목표 VDDPE 가 남아 있으면 `UM-015` 로 멈춥니다.
 
 `run_scaling_after_restore.tcl`은 DB, netlist, SDC, SPEF를 새로 읽지 않습니다.
 전부 restore session에 들어 있어야 합니다. target library가 메모리에 로드되어
