@@ -1967,6 +1967,12 @@ proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperat
         puts "TARGET CORNER IN SCALING GROUP: $last_corner_detail"
         return 1
     }
+    # 설계 셀이 하나도 링크하지 않은 그룹은 PT 가 어떤 셀에도 쓸 수 없으므로
+    # LOO 와 무관합니다. 이름으로 같은 family 에 묶였을 뿐인 그런 그룹 때문에
+    # 멈추지 않도록, design_library_keys 가 있으면 건너뛰고 기록만 남깁니다.
+    set linked [dict create]
+    foreach key [option $plan design_library_keys {}] { dict set linked $key 1 }
+    set use_linked [dict size $linked]
     set seen [dict create]
     foreach_in_collection lib [get_libs -quiet *] {
         set group [get_attribute -quiet $lib lib_scaling_group]
@@ -1975,12 +1981,14 @@ proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperat
         set keys {}
         set all_fixed 1
         set has_relevant 0
+        set has_linked 0
         foreach_in_collection member $members {
             set path [get_attribute $member source_file_name]
             set key [list [file normalize $path] [get_attribute $member full_name]]
             lappend keys $key
             if {![dict exists $allowed $key]} { set all_fixed 0 }
             if {[dict exists $relevant $key]} { set has_relevant 1 }
+            if {[dict exists $linked $key]} { set has_linked 1 }
         }
         set keys [lsort -unique $keys]
         if {[dict exists $seen $keys]} { continue }
@@ -1991,6 +1999,12 @@ proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperat
         if {$all_fixed} { continue }
         redirect -variable group_text {
             report_lib_groups -scaling -objects $lib -nosplit -show {voltage temperature process}
+        }
+        if {$use_linked && !$has_linked} {
+            if {[report_has_corner $group_text $rail $voltage $temperature]} {
+                puts "TARGET CORNER IN UNUSED SCALING GROUP (ignored; no design cell links any member): lib=[get_attribute $lib full_name] members=[llength $keys] group line: $last_corner_match"
+            }
+            continue
         }
         if {[report_has_corner $group_text $rail $voltage $temperature]} {
             # 어느 그룹의 어느 줄(rail:값)인지 남깁니다. multirail 이면 목표 값이

@@ -23,7 +23,14 @@ proc sizeof_collection {items} { return [llength $items] }
 proc get_object_name {items} { return $items }
 proc foreach_in_collection {name objects body} {
     upvar 1 $name item
-    foreach item $objects { uplevel 1 $body }
+    foreach item $objects {
+        set code [catch {uplevel 1 $body} result options]
+        if {$code == 3} { break }
+        if {$code == 4} { continue }
+        # Like the real command, a return inside the body leaves the caller.
+        if {$code == 2} { return -level 2 $result }
+        if {$code != 0} { return -options $options $result }
+    }
 }
 proc add_to_collection {group lib} { return [concat $group [list $lib]] }
 proc get_libs {args} { return [dict keys $::lib_db] }
@@ -145,6 +152,41 @@ dict set ::groups CORE_054 {CORE_08}
 dict set ::groups CORE_069 {CORE_0685 CORE_08}
 auto_scaling::loo_check_groups $plan $targets $out
 puts "PASS: TL-003 path-based group check, no rounding false match, missing-source rejection, unused groups ignored"
+
+# Text check in reuse mode: a group that no design cell links cannot affect
+# timing, so a target-voltage line in it is reported but does not stop.
+proc redirect {args} {
+    set index [lsearch -exact $args -variable]
+    upvar 1 [lindex $args [expr {$index+1}]] output
+    set output [uplevel 1 [lindex $args end]]
+}
+proc report_lib_groups {args} {
+    set lib [lindex $args [expr {[lsearch -exact $args -objects]+1}]]
+    if {[string match LS_* $lib]} {
+        return "Group 2\n    LS_A   25.00   { VDDI:0.685 VDDO:0.685 }   1.00\n    LS_B   25.00   { VDDI:0.75 VDDO:0.75 }   1.00\n"
+    }
+    return "Group 1\n    CORE_054   25.00   0.54   1.00\n    CORE_08   25.00   0.80   1.00\n"
+}
+foreach name {LS_A LS_B} { dict set ::lib_db $name /fixture/$name.db }
+set ::groups [dict create CORE_054 {CORE_08} LS_A {LS_B} LS_B {LS_A}]
+set relevant_rows {}
+foreach name {CORE_054 CORE_08 LS_A LS_B} {
+    lappend relevant_rows [dict create file /fixture/$name.db lib_name $name]
+}
+set all_text "[report_lib_groups -objects CORE_054][report_lib_groups -objects LS_A]"
+set plan [dict create scaling_library_rows $relevant_rows fixed_library_rows {} \
+    design_library_keys [list [list /fixture/CORE_054.db CORE_054]]]
+check [expr {![auto_scaling::report_has_unapproved_corner $all_text $plan VDD 0.685 25]}] \
+    "An unused group stopped the run"
+dict set plan design_library_keys [list [list /fixture/CORE_054.db CORE_054] [list /fixture/LS_A.db LS_A]]
+check [auto_scaling::report_has_unapproved_corner $all_text $plan VDD 0.685 25] \
+    "A used group holding the target was not caught"
+check [string match "*matched VDDI:0.685*" $::auto_scaling::last_corner_detail] \
+    "Stop detail lacks the matched rail: $::auto_scaling::last_corner_detail"
+dict unset plan design_library_keys
+check [auto_scaling::report_has_unapproved_corner $all_text $plan VDD 0.685 25] \
+    "Without design keys the old full check must still stop"
+puts "PASS: reuse-mode group check ignores groups no design cell links, still stops on used ones"
 
 file delete -force $tmp
 puts "ALL LOO TARGET GUARD TESTS PASSED"
