@@ -62,6 +62,8 @@ set FIXED_LIBRARY_VOLTAGE "restore" ;# keep restored DB; optional numeric nomina
 
 namespace eval auto_scaling {
     variable last_library_scope {}
+    variable last_corner_match ""
+    variable last_corner_detail ""
     variable progress_file ""
     variable progress_monitor_pids {}
     variable progress_total_epoch 0
@@ -1567,7 +1569,10 @@ proc auto_scaling::verify_scaling_result {out fixed delay_type pba_mode scaled_c
     return $evidence_file
 }
 
+# 걸린 줄은 last_corner_match 에 남겨 에러 메시지에 그대로 보여 줍니다.
 proc auto_scaling::report_has_corner {text rail voltage temperature} {
+    variable last_corner_match
+    set last_corner_match ""
     foreach line [split $text "\n"] {
         if {[regexp {^\s+\S+\s+(\S+)\s+\{([^\n]*)\}} $line -> found_t rails]} {
             if {[catch {number $found_t} parsed_t] || ![same $parsed_t $temperature]} {
@@ -1578,7 +1583,10 @@ proc auto_scaling::report_has_corner {text rail voltage temperature} {
             foreach pair [regexp -all -inline {[^[:space:]:]+:[-+]?[0-9]+(?:\.[0-9]+)?} $rails] {
                 set colon [string last ":" $pair]
                 set found_v [string range $pair [expr {$colon+1}] end]
-                if {[report_number_may_match $found_v $voltage]} { return 1 }
+                if {[report_number_may_match $found_v $voltage]} {
+                    set last_corner_match "[string trim $line] (matched $pair)"
+                    return 1
+                }
             }
         } elseif {[regexp {^\s+\S+\s+(\S+)\s+(\S+)} $line -> found_t found_v] &&
             ![catch {number $found_t} parsed_t] &&
@@ -1586,6 +1594,7 @@ proc auto_scaling::report_has_corner {text rail voltage temperature} {
             [same $parsed_t $temperature] &&
             [report_number_may_match $found_v $voltage]} {
             # One-rail libraries can be printed as a scalar Voltage column.
+            set last_corner_match [string trim $line]
             return 1
         }
     }
@@ -1940,6 +1949,9 @@ proc auto_scaling::define_missing_scalar_groups {scaling_sets} {
 # A fixed-set exception applies only to a whole group of that declared set.
 # Mixed groups remain subject to the target-exclusion check.
 proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperature} {
+    variable last_corner_match
+    variable last_corner_detail
+    set last_corner_detail ""
     if {![report_has_corner $text $rail $voltage $temperature]} { return 0 }
     set scoped [dict exists $plan scaling_library_rows]
     set relevant [dict create]
@@ -1950,7 +1962,11 @@ proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperat
     foreach row [option $plan fixed_library_rows {}] {
         dict set allowed [list [file normalize [dict get $row file]] [dict get $row lib_name]] 1
     }
-    if {!$scoped && ![dict size $allowed]} { return 1 }
+    if {!$scoped && ![dict size $allowed]} {
+        set last_corner_detail "group line: $last_corner_match"
+        puts "TARGET CORNER IN SCALING GROUP: $last_corner_detail"
+        return 1
+    }
     set seen [dict create]
     foreach_in_collection lib [get_libs -quiet *] {
         set group [get_attribute -quiet $lib lib_scaling_group]
@@ -1976,7 +1992,13 @@ proc auto_scaling::report_has_unapproved_corner {text plan rail voltage temperat
         redirect -variable group_text {
             report_lib_groups -scaling -objects $lib -nosplit -show {voltage temperature process}
         }
-        if {[report_has_corner $group_text $rail $voltage $temperature]} { return 1 }
+        if {[report_has_corner $group_text $rail $voltage $temperature]} {
+            # 어느 그룹의 어느 줄(rail:값)인지 남깁니다. multirail 이면 목표 값이
+            # 스케일링 rail 에 있는지 고정 rail 에 있는지 이 줄로 판단합니다.
+            set last_corner_detail "linked_lib=[get_attribute $lib full_name] members=[llength $keys] group line: $last_corner_match"
+            puts "TARGET CORNER IN SCALING GROUP: $last_corner_detail"
+            return 1
+        }
     }
     return 0
 }
@@ -2716,7 +2738,7 @@ proc auto_scaling::run_after_restore {cfg} {
     set has_existing_group [regexp -line {^Group[[:space:]]+[0-9]+} $groups_before]
     if {$has_existing_group} {
         if {[report_has_unapproved_corner $groups_before $plan $rail $target_v $target_t]} {
-            error "An existing non-exempt scaling group contains or rounds to target $target_v V/$target_t C. Target-excluded scaling cannot be proven with this group."
+            error "An existing non-exempt scaling group contains or rounds to target $target_v V/$target_t C. Target-excluded scaling cannot be proven with this group. $::auto_scaling::last_corner_detail. For a multirail line, check whether the matched rail is a pin on the scaling net (real) or a fixed rail (coincidence)."
         }
         puts "RESTORE MODE: Reusing existing scaling groups."
         # The separate u_mem LOO flow creates its target-excluded native group
@@ -2743,7 +2765,7 @@ proc auto_scaling::run_after_restore {cfg} {
     }
     write_text [detail_path $out .libgroups] $groups_after
     if {[report_has_unapproved_corner $groups_after $plan $rail $target_v $target_t]} {
-        error "A non-exempt scaling group still contains or rounds to the target corner. Scaling verification failed: [detail_path $out .libgroups]"
+        error "A non-exempt scaling group still contains or rounds to the target corner. $::auto_scaling::last_corner_detail. Scaling verification failed: [detail_path $out .libgroups]"
     }
     verify_planned_group_coverage $plan
     # LOO 가드 TL-003: 문자열이 아니라 DB 경로로 그룹 멤버를 다시 확인합니다.

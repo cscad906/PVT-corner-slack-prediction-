@@ -1061,7 +1061,7 @@ proc auto_scaling_net::run_after_restore {cfg} {
     set has_existing_group [regexp -line {^Group[[:space:]]+[0-9]+} $groups_before]
     if {$has_existing_group} {
         if {[auto_scaling::report_has_unapproved_corner $groups_before $plan $rail $target_v $target_t]} {
-            error "An existing non-exempt scaling group contains or rounds to target $target_v V/$target_t C. Target-excluded scaling cannot be proven with this group."
+            error "An existing non-exempt scaling group contains or rounds to target $target_v V/$target_t C. Target-excluded scaling cannot be proven with this group. $::auto_scaling::last_corner_detail. For a multirail line, check whether the matched rail is a pin on the scaling net (real) or a fixed rail (coincidence)."
         }
         puts "RESTORE MODE: Reusing existing scaling groups."
         if {[auto_scaling::option $cfg create_missing_scaling_groups 0]} {
@@ -1084,7 +1084,7 @@ proc auto_scaling_net::run_after_restore {cfg} {
     }
     auto_scaling::write_text [auto_scaling::detail_path $out .libgroups] $groups_after
     if {[auto_scaling::report_has_unapproved_corner $groups_after $plan $rail $target_v $target_t]} {
-        error "A non-exempt scaling group still contains or rounds to the target corner. Scaling verification failed: [auto_scaling::detail_path $out .libgroups]"
+        error "A non-exempt scaling group still contains or rounds to the target corner. $::auto_scaling::last_corner_detail. Scaling verification failed: [auto_scaling::detail_path $out .libgroups]"
     }
     auto_scaling::verify_planned_group_coverage $plan
     # LOO guard TL-003 (from the original), then NET-001.

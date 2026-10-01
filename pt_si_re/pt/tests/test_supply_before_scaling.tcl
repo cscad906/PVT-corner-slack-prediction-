@@ -27,6 +27,11 @@ Group 2
     Mem_target    25.00        { VDD:0.540 VDDPE:0.685 } 1.00
 1}
 assert [auto_scaling::report_has_corner $multirail_group_report VDDPE 0.685 25] "Multirail target corner was missed"
+# The matched line and rail are kept for the stop message.
+assert [string match "*Mem_target*matched VDDPE:0.685*" $::auto_scaling::last_corner_match] \
+    "Matched group line not recorded: $::auto_scaling::last_corner_match"
+assert [auto_scaling::report_has_corner $scalar_group_report VDD 0.685 25] "Scalar target corner was missed"
+assert [string match "Core_target*0.685*" $::auto_scaling::last_corner_match] "Scalar match not recorded"
 proc sizeof_collection {objects} { return [llength $objects] }
 proc get_object_name {objects} { return $objects }
 proc foreach_in_collection {name objects body} {
