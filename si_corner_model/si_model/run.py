@@ -1737,14 +1737,16 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
-    _print_slack_vs_voltage(y, split, measured, field, ds.get("cycle_gap"), cfg)
+    _print_slack_vs_voltage(y, split, measured, field, ds.get("cycle_gap"), cfg,
+                            off)
     _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
         _print_basis_comparison(y, split, coords, cfg, hid)
         _print_weighting_comparison(y, phi, split, coords, cfg, hid)
 
 
-def _print_slack_vs_voltage(y, split, measured, field, gap=None, cfg=None) -> None:
+def _print_slack_vs_voltage(y, split, measured, field, gap=None, cfg=None,
+                            off=None) -> None:
     """The measured field against voltage, mean over paths, one row per voltage.
 
     The curve the base is being asked to follow, in the one place it is being
@@ -1825,6 +1827,33 @@ def _print_slack_vs_voltage(y, split, measured, field, gap=None, cfg=None) -> No
                                      and not np.isfinite(clk)
                                      else ("" if not np.isfinite(clk)
                                            else "    clock %.4f ns" % clk)))
+    # The same grid at ONE period: what the fit actually sees once the clock
+    # plan is taken out. Without it the only visible curve is the one carrying
+    # the plan, and "is the normalised field smooth?" -- the question that
+    # decides whether extrapolating it can work at all -- cannot be answered
+    # from the screen.
+    if off is not None:
+        T_ref = [clocks[i] for i, v in enumerate(vs)
+                 if abs(round(float(split.vt[split.ref_ci, 0]), 9) - v) < 1e-9]
+        print("    [same, at the anchor's period%s]  this is what the fit sees"
+              % ("" if not T_ref or not np.isfinite(T_ref[0])
+                 else " %.4f ns" % T_ref[0]))
+        print("     %6s %s" % ("", "".join("%12s" % h for h in head)))
+        norm = np.asarray(y, float) - np.asarray(off, float)[:, :y.shape[1]]
+        for v in vs:
+            cells = []
+            for l in lv:
+                hit = [ci for ci in range(split.vt.shape[0])
+                       if abs(round(split.vt[ci, 0], 9) - v) < 1e-9
+                       and abs(round(split.vt[ci, 1], 9) - l) < 1e-9]
+                if not hit or not measured[hit[0]]:
+                    cells.append("%12s" % "-")
+                    continue
+                ci = hit[0]
+                cells.append("%11.1f%s" % (float(np.nanmean(norm[:, ci])) * 1000.0,
+                                           " " if split.seen[ci] else "*"))
+            print("     %6.3f V %s" % (v, "".join(cells)))
+
     fin = [c for c in clocks if np.isfinite(c)]
     if not fin:
         print("     (clock: this cache has no edge times -- re-run build to "
