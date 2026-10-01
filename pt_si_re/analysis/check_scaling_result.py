@@ -71,8 +71,9 @@ MEANINGS = (
                    "None may be the target DB or carry the target voltage in its name. Independent of the script."),
     ("inputs", "The DBs planned for interpolation lie below AND above the target. An input AT the target is a leak; "
                "one-sided inputs would be extrapolation."),
-    ("coverage", "static_library = fixed-path cells whose library has no scaling group; they keep the restored "
-                 "(link-corner) timing, so >0 means the result is partly unscaled. Unclassified = P/V/T unreadable."),
+    ("coverage", "WARN = fixed-path cells ON A SCALING NET whose library has no scaling group; they keep the "
+                 "restored (link-corner) timing, so the result is partly unscaled. INFO = such cells on auto-fixed "
+                 "nets, expected. Unclassified = P/V/T unreadable."),
     ("paths", "Fixed paths PT could not time in this run. They drop out of the MAE comparison."),
     ("evidence", "SCALING VERIFICATION: PT shows scaling on a real cell arc of a fixed path, with no extrapolation."),
     ("net", "Net mode only. NET-001: every library on the scaled net has a scaling group. net power: every PG pin "
@@ -80,7 +81,7 @@ MEANINGS = (
     ("nets", "Listed vs auto-fixed supply nets. An auto-fixed net that should scale leaves its cells unscaled "
              "WITHOUT an error, so read this line."),
     ("SUMMARY", "target_dbs = target-corner DBs loaded in the session (0 is best); used_dbs_V = voltages of the DBs "
-                "PT used; static / missing = unscaled fixed-path cells / untimed fixed paths."),
+                "PT used; static = unscaled fixed-path cells on scaling nets; missing = untimed fixed paths."),
 )
 
 CODE_INFO = {
@@ -260,14 +261,29 @@ def check_log(run, report_exists):
         run.add("INFO", "nets", "auto-fixed nets (%s): %s   <- no net that should scale may be here"
                 % (fixed.group(1), fixed.group(2).strip()))
 
-    scope = last_match(lines, re.compile(r"^FIXED-PATH CELL SCOPE: all=(\d+) .*static_library=(\d+)"))
+    # static_library mixes two kinds of unscaled fixed-path cells:
+    #   on a scaling net but without a scaling group -> a real gap (WARN)
+    #   on an auto-fixed net                         -> expected, its rail never changes (INFO)
+    # Scaling-net cells = target_rail (supply scope); scaled ones = target_voltage.
+    supply = last_match(lines, re.compile(r"^FIXED-PATH SUPPLY SCOPE: all=(\d+) target_rail=(\d+) fixed_rail=(\d+)"))
+    scope = last_match(lines, re.compile(
+        r"^FIXED-PATH CELL SCOPE: all=(\d+) scalable_library=(\d+) target_voltage=(\d+) static_library=(\d+)"))
     if scope:
-        run.static = int(scope.group(2))
-        if run.static:
-            run.add("WARN", "coverage", "%d of %s fixed-path cells use a library without an active "
-                    "scaling group (static_library); they keep restored timing" % (run.static, scope.group(1)))
+        total, static = scope.group(1), int(scope.group(4))
+        if supply:
+            on_rail = max(0, int(supply.group(2)) - int(scope.group(3)))
+            on_fixed = max(0, static - on_rail)
         else:
-            run.add("PASS", "coverage", "static_library=0 (all %s fixed-path cells scalable)" % scope.group(1))
+            on_rail, on_fixed = static, 0
+        run.static = on_rail
+        if on_rail:
+            run.add("WARN", "coverage", "%d of %s fixed-path cells are on a scaling net but their library has "
+                    "no active scaling group; they keep the restored (link-corner) timing" % (on_rail, total))
+        else:
+            run.add("PASS", "coverage", "every fixed-path cell on a scaling net is scaled (%s cells)" % total)
+        if on_fixed:
+            run.add("INFO", "coverage", "%d of %s fixed-path cells are on auto-fixed nets with an ungrouped "
+                    "library; expected, their rail does not change" % (on_fixed, total))
     unclassified = last_match(lines, re.compile(r"^UNCLASSIFIED FIXED-PATH LIBRARIES \(not scaled\): (.*)$"))
     if unclassified:
         run.add("WARN", "coverage", "unclassified fixed-path libraries (not scaled): %s"

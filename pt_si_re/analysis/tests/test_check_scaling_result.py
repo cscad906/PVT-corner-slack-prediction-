@@ -139,6 +139,22 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual((run.static, run.missing), (12, 2))
         self.assertEqual(len(self.messages(run, "WARN")), 3)
 
+    def test_unscaled_cells_split_by_rail(self):
+        base = GOOD_LOG.replace("FIXED-PATH CELL SCOPE: all=4 scalable_library=4 target_voltage=3 static_library=0",
+                                "FIXED-PATH SUPPLY SCOPE: all=5580 target_rail=5570 fixed_rail=10\n"
+                                "FIXED-PATH CELL SCOPE: all=5580 scalable_library=5569 target_voltage=5568 static_library=11")
+        self.good_run(log=base)
+        run = self.run_one()
+        self.assertEqual((run.verdict(), run.static), ("WARN", 2))
+        self.assertTrue(any(m.startswith("2 of 5580") and "scaling net" in m for m in self.messages(run, "WARN")))
+        self.assertTrue(any(m.startswith("9 of 5580") and "auto-fixed" in m for m in self.messages(run, "INFO")))
+        # All unscaled cells on fixed nets: expected, so PASS with an INFO line.
+        self.tearDown(); self.setUp()
+        self.good_run(log=base.replace("target_voltage=5568", "target_voltage=5570"))
+        run = self.run_one()
+        self.assertEqual((run.verdict(), run.static), ("PASS", 0))
+        self.assertTrue(any(m.startswith("11 of 5580") for m in self.messages(run, "INFO")))
+
     def test_net_mode_requires_net_checks_and_warns_on_skipped_clock(self):
         log = GOOD_LOG + ("NET CHECK NET-001: PASSED | libraries=1\nNET POWER VERIFICATION: PASSED | x\n"
                           "CLOCK SCALING VERIFICATION: SKIPPED (no clock-network cell)\n")

@@ -31,7 +31,7 @@ net 모드 `_net.rpt` 모두). 중간에 멈춘 실행도 로그로 찾아서 �
 | `loo LOO_CHECK` | `.loo_check.txt` | 위 두 검사의 파일 기록. "not even loaded" 는 목표 DB 가 세션에 아예 없음(가장 강함), "loaded, none linked or grouped" 도 LOO |
 | `loo .dcalc` | `.dcalc` | **PT 가 직접** 실제 셀 지연 계산에 쓴 DB 목록. 목표 DB 나 이름에 목표 전압이 든 DB 가 없어야 함. 스크립트 판단과 독립된 증거 |
 | `inputs` | `.inputs.txt` | 보간 입력 DB 가 목표 아래와 위에 다 있다. 목표와 같은 입력은 누설, 한쪽뿐이면 외삽 |
-| `coverage` | 로그 | `static_library` = 그룹 없는 library 를 쓰는 fixed-path 셀 수. 이 셀은 링크 코너 값 그대로라 0 보다 크면 결과 일부가 스케일링 안 된 것 |
+| `coverage` | 로그 | WARN = **scaling net 위**인데 library 에 그룹이 없어 스케일링 안 된 fixed-path 셀 수(링크 코너 값 그대로, 진짜 빈틈). INFO = 자동 fixed net 위 셀이라 원래 안 바뀌어야 하는 것(정상) |
 | `paths` | 로그 | PT 가 이번 실행에서 못 잡은 경로 수. MAE 비교에서 빠짐 |
 | `evidence` | 로그 | `SCALING VERIFICATION`: fixed path 의 실제 셀에 스케일링이 적용됐고 외삽이 없음 |
 | `net` | 로그 | net 모드만. NET-001 net 위 library 모두 그룹 있음 / net power 모든 PG 핀이 목표 전압 / clock 클럭 셀도 스케일링됨 |
