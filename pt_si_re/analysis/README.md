@@ -7,6 +7,39 @@ PrimeTime에서 `source`하는 Tcl 파일은 `pt/` 디렉토리에 있습니다.
 - `compare_point_delays.py`: 동일 timing point의 `Incr` delay를 cell/net 및 path 구간별로 비교
 - `plot_ground_truth_slack.py`: 여러 ground-truth report의 slack 통계, CSV, SVG 및 터미널 histogram 생성
 - `recover_fixed_paths_from_ground_truth.py`: 남아 있는 ground-truth report에서 scaling용 fixed path 목록 복원
+- `check_scaling_result.py`: scaling 결과 폴더의 LOO·스케일링 검증 항목을 한 번에 검사(읽기 전용)
+
+## scaling 결과 자동 검사 (`check_scaling_result.py`)
+
+```bash
+python3 analysis/check_scaling_result.py <RESULT_FOLDER> [<RESULT_FOLDER> ...]
+```
+
+폴더 안의 `restored_scaled_*.rpt` 를 전부 찾아 코너마다 검사합니다(path 모드와
+net 모드 `_net.rpt` 모두). 중간에 멈춘 실행도 로그로 찾아서 보여 줍니다.
+결과 파일은 읽기만 하고, 같은 내용을 `<RESULT_FOLDER>/check_summary.txt` 에 씁니다.
+화면 출력은 영어이고, 맨 끝 `WHAT THE ITEMS MEAN` 에 항목 뜻이 나옵니다.
+
+판정: 하나라도 `FAIL` 이면 그 코너 숫자는 쓰지 않습니다. `WARN` 은 LOO 는 깨끗하지만
+일부가 스케일링 안 됐거나 경로가 빠진 경우입니다.
+
+| 항목 | 무엇을 보나 | 뜻 |
+|---|---|---|
+| `run` | 로그의 `RUN END` | PT 실행이 끝까지 성공했는가. FAIL 이면 그 결과는 못 씀 |
+| `loo TL-001` | 로그 | 설계의 어떤 셀도 목표 코너 DB 에 링크돼 있지 않다(hold min 매핑 포함). 셀이 정답 DB 를 직접 읽지 않음 |
+| `loo TL-003` | 로그 | 설계가 쓰는 scaling group 어디에도 목표 코너 DB 가 없다(파일 경로 비교). 보간에도 정답이 섞일 수 없음 |
+| `loo LOO_CHECK` | `.loo_check.txt` | 위 두 검사의 파일 기록. "not even loaded" 는 목표 DB 가 세션에 아예 없음(가장 강함), "loaded, none linked or grouped" 도 LOO |
+| `loo .dcalc` | `.dcalc` | **PT 가 직접** 실제 셀 지연 계산에 쓴 DB 목록. 목표 DB 나 이름에 목표 전압이 든 DB 가 없어야 함. 스크립트 판단과 독립된 증거 |
+| `inputs` | `.inputs.txt` | 보간 입력 DB 가 목표 아래와 위에 다 있다. 목표와 같은 입력은 누설, 한쪽뿐이면 외삽 |
+| `coverage` | 로그 | `static_library` = 그룹 없는 library 를 쓰는 fixed-path 셀 수. 이 셀은 링크 코너 값 그대로라 0 보다 크면 결과 일부가 스케일링 안 된 것 |
+| `paths` | 로그 | PT 가 이번 실행에서 못 잡은 경로 수. MAE 비교에서 빠짐 |
+| `evidence` | 로그 | `SCALING VERIFICATION`: fixed path 의 실제 셀에 스케일링이 적용됐고 외삽이 없음 |
+| `net` | 로그 | net 모드만. NET-001 net 위 library 모두 그룹 있음 / net power 모든 PG 핀이 목표 전압 / clock 클럭 셀도 스케일링됨 |
+| `nets` | 로그 | 적은 net 과 자동 fixed net 목록. 스케일링해야 할 net 이 fixed 쪽에 있으면 에러 없이 그 셀이 빠지므로 눈으로 확인 |
+
+맨 끝 `SUMMARY` 표: `target_dbs` 는 세션에 올라온 목표 코너 DB 수(0 이 가장 좋음),
+`used_dbs_V` 는 PT 가 실제로 쓴 DB 전압, `static`/`missing` 은 위 coverage/paths 숫자입니다.
+마지막 줄 코드: `OK-SCALECHECK` 전부 PASS, `W-SCALECHECK` WARN 있음, `E-SCALECHECK` FAIL 있음.
 
 ```bash
 python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt \
