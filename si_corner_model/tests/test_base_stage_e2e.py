@@ -241,6 +241,23 @@ def test_period_normalisation_makes_the_clock_plan_irrelevant(tmp_path, monkeypa
     e_true, _ = run(dvfs, base={"period_norm": True}, hide=low)
     assert abs(e_true - e_dvfs) < 1e-6, (e_true, e_dvfs)
 
+    # ONE story per screen. The candidate table refits every candidate, so it
+    # has to refit the field that was actually fitted: it used to be handed the
+    # measured field after the fit had normalised, and printed hidden errors
+    # from a different problem -- ~1650 ps on the company drop -- directly under
+    # a [hidden mean] of ~100. Whoever read the screen reported the big number,
+    # and the correction looked broken when it was working.
+    _, out2 = run(dvfs, hide=low)
+    rows = [l for l in out2.splitlines()
+            if l.strip().startswith("v^") and "hidden" in l]
+    assert rows, out2
+    hid_col = [float(l.split("hidden")[1].split("(")[0]) for l in rows]
+    mean = [float(l.split("]")[1].split()[0]) for l in out2.splitlines()
+            if "[hidden mean]" in l][0]
+    chosen = [h for h, l in zip(hid_col, rows) if "<- chosen" in l]
+    assert chosen and abs(chosen[0] - mean) < 0.05, (chosen, mean)
+    assert max(hid_col) < 10 * max(mean, 1.0), (max(hid_col), mean)
+
     # and the numbers printed are the slack each corner really has: the 0.5 V
     # row was measured at 3.0 ns, so its mean measured slack must be ~1 ns
     # HIGHER than the flat-plan version, not normalised away

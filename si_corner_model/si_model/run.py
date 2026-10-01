@@ -1677,12 +1677,21 @@ def stage_base(m: dict) -> None:
     # whole point. `native` is kept for the diagnostics that must show the
     # slack as measured.
     off = period_offset(ds, split, cfg) if field == "slack" else None
+    # `y` is the field the fit SEES, and it stays that for the rest of this
+    # stage. It used to be swapped back to the measured field after the fit,
+    # which left every diagnostic below refitting candidates on a different
+    # problem from the one that was solved: the candidate table and the
+    # weighting table printed hidden errors from the un-normalised field (on the
+    # company drop, ~1650 ps) directly under a [hidden mean] computed from the
+    # normalised one (~100 ps). Reading the screen top to bottom gave two
+    # answers and no way to tell which was which.
     y = native if off is None else native - off
     phi, coords, _, _ = build_design(cfg, split, y=y)
     loo, picks = fit_field(y, phi, split, coords, cfg)
-    if off is not None:
-        loo = loo + off
-        y = native
+    # Back to the slack each corner actually has, for the error against the
+    # measurement. The difference is the same either way -- the offset cancels
+    # -- so this only decides which numbers the message prints.
+    loo_native = loo if off is None else loo + off
     if not _base_loud():
         # This stage is diagnostic only: it writes nothing, and train fits its
         # own base. Under `all` it still runs (asked for: compute unchanged)
@@ -1708,7 +1717,7 @@ def stage_base(m: dict) -> None:
         print("  [adaptive] " + ", ".join(f"{k}:{v}" for k, v in sorted(picks.items(), key=str)))
 
     def err(ci: int) -> float:
-        t, q = y[:, ci], loo[:, ci]
+        t, q = native[:, ci], loo_native[:, ci]
         if field == "slack":
             return float(np.nanmean(np.abs(q - t)) * 1000.0)              # ps
         return float(np.nanmean(np.abs(q - t) / np.clip(np.abs(t), 1e-9, None)) * 100)
@@ -1723,7 +1732,7 @@ def stage_base(m: dict) -> None:
         # derate shifts every path by a constant, and then every basis is wrong
         # by the same amount). Measured on the company drop: the whole candidate
         # table came out at ~1490 ps, which no choice of order can explain.
-        t, q = y[:, ci], loo[:, ci]
+        t, q = native[:, ci], loo_native[:, ci]
         sc = 1000.0 if field == "slack" else 1.0
         print(f"    hidden {split.corners[ci]:22s} {err(ci):8.3f} {unit}"
               f"   measured {float(np.nanmean(t)) * sc:10.1f}"
@@ -1737,8 +1746,8 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
-    _print_slack_vs_voltage(y, split, measured, field, ds.get("cycle_gap"), cfg,
-                            off)
+    _print_slack_vs_voltage(native, split, measured, field,
+                            ds.get("cycle_gap"), cfg, off)
     _print_level_spacing(y, split, cfg)
     if hid and field == "slack":
         _print_basis_comparison(y, split, coords, cfg, hid)
