@@ -55,6 +55,25 @@ python3 analysis/plot_ground_truth_slack.py ground_truth/ \
     --output-dir results/ground_truth_slack
 ```
 
+### 코너별 클럭 주기가 다를 때 (`--align-period`)
+
+스케일링 run 은 링크 코너 세션의 SDC 주기를, GT 는 목표 코너의 주기를 씁니다. 둘이
+다르면 slack 오차에 주기 차이가 통째로 들어가 MAE 가 커집니다(`CLOCK VALIDATION:
+INVALID`, `capture clock edge MAE` 가 주기 차이와 비슷).
+
+```bash
+python3 analysis/compare_scaling_mae.py scaled.rpt ground_truth.rpt --analysis setup --align-period
+```
+
+기존 출력은 그대로 두고 `=== PERIOD-ALIGNED ===` 블록과 `period_aligned.txt` 를 더
+만듭니다. 경로마다 **그 경로 리포트에 찍힌 launch/capture edge 시간**의 차이를 slack
+오차에서 뺍니다(setup: capture−launch, hold: launch−capture). 전체 주기를 하나로 가정하지
+않으므로 클럭이 여러 개거나 분주 클럭·multicycle 이어도 경로별로 맞게 빠집니다. 클럭
+이름·rise/fall·path group/type 이 두 리포트에서 다르거나 edge 줄이 여러 개인 경로는
+보정하지 않고 개수만 셉니다(`clock_mismatch`, `multi_edge`). 코너별 SDC 의 uncertainty
+같은 다른 차이는 빠지지 않으며 `path_diagnostics.txt` 에 따로 보입니다.
+보정 후 MAE 가 주기 차이를 뺀 스케일링 오차입니다.
+
 `plot_ground_truth_slack.py`에 디렉터리를 주면 하위 `.rpt`를 모두 읽습니다.
 리포트별 통계와 함께 `ALL_REPORTS` 행에 전체 path 관측값의 평균·분포를
 기록합니다. 같은 path가 여러 코너에 있으면 코너마다 한 번씩 집계합니다.

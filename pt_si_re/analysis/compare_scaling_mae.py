@@ -1018,7 +1018,7 @@ def write_summary_text(path, summary):
         component_line("arrival", summary),
         component_line("required", summary),
         "",
-    ] + wns_lines(summary) + [""] + diagnostic_summary_lines(summary) + [
+    ] + wns_lines(summary) + [""] + diagnostic_summary_lines(summary) + period_alignment_lines(summary) + [
         "",
         "Clock validation",
         f"status              : {summary['clock_validation_status']}",
@@ -1167,7 +1167,12 @@ def share_lines(summary):
             f"abs_error={compact_number(summary['wns_abs_error_ps'])}ps "
             f"error_percent={compact_number(summary['wns_error_percent'])} "
             f"paths={summary['compared_paths']} excluded={summary['excluded_paths']}"),
-    ] + ([diagnostic_share_line(summary["path_diagnostics"])] if "path_diagnostics" in summary else [])
+    ] + ([diagnostic_share_line(summary["path_diagnostics"])] if "path_diagnostics" in summary else []) + (
+        [f"ALIGNED_SHARE mae={compact_number(summary['period_alignment']['mae_ps'])}ps "
+         f"bias={compact_number(summary['period_alignment']['bias_ps'])}ps "
+         f"aligned={summary['period_alignment']['counts']['aligned']} "
+         f"clock_mismatch={summary['period_alignment']['counts']['clock_mismatch']}"]
+        if summary.get("period_alignment") else [])
 
 
 def safe_corner_name(report_path):
@@ -1207,6 +1212,113 @@ def create_result_dir(output_root, corner_name):
             run_number += 1
 
 
+def period_alignment(rows, analysis):
+    """Remove each path's ideal clock-edge difference from its slack error.
+
+    The scaled run keeps the restored (link-corner) SDC while the ground truth
+    uses the target corner's SDC, so clock periods can differ. Each path uses
+    its OWN launch/capture edge times from both reports, so several clocks,
+    generated clocks and multicycle paths need no global period. Paths whose
+    clock name, edge type, path group or path type differ, or with several
+    ideal edges, are not aligned and are counted instead.
+    """
+    counts = {"aligned": 0, "clock_mismatch": 0, "multi_edge": 0, "edge_unavailable": 0}
+    aligned = []
+    shifts_by_pair = {}
+    for row in rows:
+        row["period_shift_ps"] = None
+        row["aligned_err_ps"] = None
+        row["alignment_status"] = None
+        if row["pt_scaling_err_ps"] is None:
+            continue
+        if (analysis not in ("setup", "hold") or row["launch_edge_error_ps"] is None or
+                row["capture_edge_error_ps"] is None):
+            row["alignment_status"] = "edge_unavailable"
+        elif row["clock_status"] != "match":
+            row["alignment_status"] = "clock_mismatch"
+        elif row["launch_clock_ambiguous"] or row["capture_clock_ambiguous"]:
+            row["alignment_status"] = "multi_edge"
+        else:
+            row["alignment_status"] = "aligned"
+        counts[row["alignment_status"]] += 1
+        if row["alignment_status"] != "aligned":
+            continue
+        if analysis == "setup":
+            # setup slack = required - arrival
+            shift = row["capture_edge_error_ps"] - row["launch_edge_error_ps"]
+        else:
+            # hold slack = arrival - required
+            shift = row["launch_edge_error_ps"] - row["capture_edge_error_ps"]
+        row["period_shift_ps"] = shift
+        row["aligned_err_ps"] = row["pt_scaling_err_ps"] - shift
+        aligned.append(row)
+        pair = "{}->{}".format(row["scaled_launch_clock"][0], row["scaled_capture_clock"][0])
+        shifts_by_pair.setdefault(pair, []).append(shift)
+    result = {"analysis": analysis, "counts": counts, "paths": len(aligned),
+              "mae_ps": None, "rmse_ps": None, "bias_ps": None,
+              "worst_abs_error_ps": None, "worst_idx": None, "worst_path_key": None,
+              "shift_by_clock_pair": []}
+    if aligned:
+        errors = [row["aligned_err_ps"] for row in aligned]
+        worst = max(aligned, key=lambda row: abs(row["aligned_err_ps"]))
+        result.update({
+            "mae_ps": sum(abs(e) for e in errors) / len(errors),
+            "rmse_ps": (sum(e * e for e in errors) / len(errors)) ** 0.5,
+            "bias_ps": sum(errors) / len(errors),
+            "worst_abs_error_ps": abs(worst["aligned_err_ps"]),
+            "worst_idx": worst["idx"], "worst_path_key": worst["path_key"]})
+    for pair in sorted(shifts_by_pair, key=lambda name: -len(shifts_by_pair[name])):
+        values = shifts_by_pair[pair]
+        result["shift_by_clock_pair"].append({
+            "clocks": pair, "paths": len(values), "mean_ps": sum(values) / len(values),
+            "min_ps": min(values), "max_ps": max(values)})
+    return result
+
+
+def period_alignment_lines(summary):
+    """Text block for --align-period; empty when the option was not used."""
+    detail = summary.get("period_alignment")
+    if detail is None:
+        return []
+    counts = detail["counts"]
+    lines = ["", "=== PERIOD-ALIGNED (--align-period) ===",
+             "slack error minus each path's own clock-edge difference (scaled SDC vs GT SDC);",
+             "this is the scaling-only error when the two corners differ only in clock period.",
+             f"aligned paths       : {counts['aligned']} (not aligned: clock_mismatch={counts['clock_mismatch']} "
+             f"multi_edge={counts['multi_edge']} edge_unavailable={counts['edge_unavailable']})"]
+    if detail["mae_ps"] is None:
+        lines.append("aligned MAE         : unavailable (no path could be aligned)")
+        return lines
+    lines.extend([
+        f"aligned MAE         : {detail['mae_ps']:.3f} ps",
+        f"aligned RMSE        : {detail['rmse_ps']:.3f} ps",
+        f"aligned bias        : {detail['bias_ps']:+.3f} ps",
+        f"aligned worst       : {detail['worst_abs_error_ps']:.3f} ps idx={detail['worst_idx']}",
+        "edge shift removed by clock pair (scaled - GT):"])
+    for item in detail["shift_by_clock_pair"][:10]:
+        lines.append(f"  {item['clocks']:<40} paths={item['paths']} mean={item['mean_ps']:+.3f} ps "
+                     f"range=[{item['min_ps']:+.3f},{item['max_ps']:+.3f}] ps")
+    if len(detail["shift_by_clock_pair"]) > 10:
+        lines.append(f"  ... {len(detail['shift_by_clock_pair']) - 10} more clock pair(s) in summary.json")
+    return lines
+
+
+def write_period_aligned(path, rows):
+    """Per-path raw error, removed edge shift and aligned error (|aligned| descending)."""
+    ordered = sorted(
+        [row for row in rows if row.get("alignment_status")],
+        key=lambda row: (row["aligned_err_ps"] is None, -abs(row["aligned_err_ps"] or 0.0), row["path_key"]))
+    with path.open("w") as output:
+        output.write("# All values: ps. aligned_err = slack_err - edge_shift (scaled - GT).\n")
+        output.write(f"{'idx':>7} {'slack_err':>13} {'edge_shift':>13} {'aligned_err':>13} "
+                     f"{'status':<17} path_key\n")
+        for row in ordered:
+            output.write(f"{row['idx']:>7} {format_number(row['pt_scaling_err_ps']):>13} "
+                         f"{format_number(row['period_shift_ps']):>13} "
+                         f"{format_number(row['aligned_err_ps']):>13} "
+                         f"{row['alignment_status']:<17} {row['path_key']}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="PrimeTime scaling slack\uc640 \uc2e4\uc81c target-corner slack\uc758 path\ubcc4 MAE\ub97c \uacc4\uc0b0\ud569\ub2c8\ub2e4.")
@@ -1216,6 +1328,9 @@ def main():
                         help="\ucf54\ub108\ubcc4 \uacb0\uacfc\ub97c \uc800\uc7a5\ud560 \uc0c1\uc704 \ud3f4\ub354 (\uae30\ubcf8\uac12: pt_scaling_comparison)")
     parser.add_argument("--analysis", choices=("setup", "hold"), default=None,
                         help="Setup/hold analysis and output subdirectory; infer from Path Type when omitted")
+    parser.add_argument("--align-period", action="store_true",
+                        help="Also report MAE after removing each path's clock-edge (period) difference "
+                             "between the scaled and ground-truth reports")
     args = parser.parse_args()
 
     for path in (args.scaled_rpt, args.ground_truth_rpt):
@@ -1247,6 +1362,8 @@ def main():
     else:
         summary["scaling_input_plan_path"] = None
         summary["scaling_input_plan"] = None
+    if args.align_period:
+        summary["period_alignment"] = period_alignment(rows, analysis_type)
 
     corner_name = safe_corner_name(args.ground_truth_rpt)
     # 출력 폴더 -> setup/hold -> 코너 순서로 저장하고 재실행은 해당 타입 안에서 _run2를 만든다.
@@ -1258,6 +1375,9 @@ def main():
     write_path_text(path_text_path, rows)
     write_path_diagnostics(diagnostics_path, rows)
     write_summary_text(summary_text_path, summary)
+    aligned_path = result_dir / "period_aligned.txt"
+    if args.align_period:
+        write_period_aligned(aligned_path, rows)
     with json_path.open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
 
@@ -1280,6 +1400,8 @@ def main():
         print(line)
     print("")
     for line in diagnostic_summary_lines(summary):
+        print(line)
+    for line in period_alignment_lines(summary):
         print(line)
     print("")
     print("=== CLOCK VALIDATION ===")
@@ -1311,6 +1433,8 @@ def main():
     print(f"diagnostics txt: {diagnostics_path}")
     print(f"summary text   : {summary_text_path}")
     print(f"summary JSON   : {json_path}")
+    if args.align_period:
+        print(f"period aligned : {aligned_path}")
     print("")
     print("=== COPY THIS RESULT ===")
     for line in share_lines(summary):

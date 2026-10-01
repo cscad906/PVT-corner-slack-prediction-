@@ -239,6 +239,58 @@ class ReportDiagnosticsTests(unittest.TestCase):
         self.assertTrue((self.root / "out" / "setup" / "ground_truth_run2" / "path_diagnostics.txt").exists())
         self.assertEqual(json.loads((directory / "summary.json").read_text()), summary)
 
+    def test_align_period_removes_only_the_edge_difference(self):
+        # Period-only difference: scaled SDC 2.0 ns, GT SDC 2.3 ns, same delays.
+        rows, _ = self.compare(timing_report(capture_edge=2.0), timing_report(capture_edge=2.3))
+        detail = COMPARISON.period_alignment(rows, "setup")
+        self.assertAlmostEqual(rows[0]["pt_scaling_err_ps"], -300)
+        self.assertAlmostEqual(rows[0]["period_shift_ps"], -300)
+        self.assertAlmostEqual(rows[0]["aligned_err_ps"], 0)
+        self.assertEqual(detail["counts"]["aligned"], 1)
+        self.assertEqual(detail["shift_by_clock_pair"][0]["clocks"], "CLK->CLK")
+        # Period plus real delay differences: only the 625 ps edge part is removed.
+        updates = {"launch_cell": 0.016, "cq": 0.044, "data_net1": 0.031,
+                   "capture_source": 0.023, "capture_cell": 0.016,
+                   "cppr": 0.008, "uncertainty": -0.015, "check": -0.025}
+        rows, _ = self.compare(timing_report(updates=updates, capture_edge=1.625), timing_report())
+        detail = COMPARISON.period_alignment(rows, "setup")
+        self.assertAlmostEqual(rows[0]["pt_scaling_err_ps"], 607)
+        self.assertAlmostEqual(rows[0]["aligned_err_ps"], -18)
+        self.assertAlmostEqual(detail["mae_ps"], 18)
+
+    def test_align_period_hold_and_clock_mismatch(self):
+        rows, _ = self.compare(timing_report("hold", updates={"data_net1": 0.031}), timing_report("hold"))
+        COMPARISON.period_alignment(rows, "hold")
+        self.assertAlmostEqual(rows[0]["period_shift_ps"], 0)
+        self.assertAlmostEqual(rows[0]["aligned_err_ps"], rows[0]["pt_scaling_err_ps"])
+        # A different capture clock is not a period difference: never aligned.
+        head, launch_part, capture_part = timing_report(capture_edge=2.0).split("clock CLK (rise edge)", 2)
+        scaled = head + "clock CLK (rise edge)" + launch_part + "clock CLK2 (rise edge)" + capture_part
+        self.assertEqual(scaled.count("clock CLK2 (rise edge)"), 1)
+        rows, _ = self.compare(scaled, timing_report(capture_edge=2.3))
+        detail = COMPARISON.period_alignment(rows, "setup")
+        self.assertIsNone(rows[0]["aligned_err_ps"])
+        self.assertEqual(detail["counts"]["clock_mismatch"], 1)
+        self.assertIsNone(detail["mae_ps"])
+
+    def test_cli_align_period_outputs(self):
+        self.compare(timing_report(capture_edge=2.0), timing_report(capture_edge=2.3))
+        cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
+               str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")]
+        plain = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertNotIn("PERIOD-ALIGNED", plain.stdout)
+        result = subprocess.run(cmd + ["--align-period"], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        directory = self.root / "out" / "setup" / "ground_truth_run2"
+        summary = json.loads((directory / "summary.json").read_text())
+        self.assertAlmostEqual(summary["mae_ps"], 300)
+        self.assertAlmostEqual(summary["period_alignment"]["mae_ps"], 0)
+        self.assertIn("aligned MAE         : 0.000 ps", (directory / "summary.txt").read_text())
+        self.assertIn("ALIGNED_SHARE mae=0.000ps", result.stdout)
+        self.assertIn("aligned", (directory / "period_aligned.txt").read_text())
+
     def test_cli_setup_hold_same_corner_are_separate(self):
         cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
                str(self.root / "ground_truth.rpt"), "--output-dir", str(self.root / "out")]
