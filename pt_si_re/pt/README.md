@@ -13,6 +13,7 @@ u_mem VDDPE target을 실제 그룹에서 제외해야 하는 경우에는 아�
 | 파일 | 용도 | 실행 환경 |
 |---|---|---|
 | `pt/run_scaling_after_restore.tcl` | restore session에서 PT scaling 및 fixed-path 측정 | `pt_shell` |
+| `pt/run_scaling_after_restore_net.tcl` | (실험) net 모드: `SCALING_POWER_NET` 전체에 목표 전압을 걸어 clock tree·경로 밖 셀까지 스케일링. 원본을 load-only로 불러 씀 | `pt_shell` |
 | `pt/check_loo_groups_after_restore.tcl` | 현재 full-group session에서 fixed-path 관련 그룹의 목표 코너 포함 여부를 읽기 전용으로 일괄 조회 | `pt_shell` |
 | `pt/prepare_umem_loo.tcl` | 기존 u_mem 그룹을 읽고 목표 VDDPE DB를 제외한 새 그룹 Tcl 생성(읽기 전용) | `pt_shell` |
 | `pt/run_umem_loo_after_restore.tcl` | 목표를 제외한 u_mem 그룹을 새로 정의하고 fixed-path 측정 | `pt_shell` |
