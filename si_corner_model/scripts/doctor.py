@@ -166,6 +166,50 @@ def main():
         return True, "%s%s" % (got, "" if has else "   (and it has no --save)")
     check("the copy that actually runs", _which_module)
 
+    def _flags_live():
+        """Every flag the SOURCE defines, asked of the RUNNING program.
+
+        This is the only check that compares the file with what executes. The
+        others read the file, and a file can be perfectly up to date while the
+        program that runs is not: Python reuses a cached .pyc whenever the
+        source's (mtime, size) are unchanged, so an edit that happens to land
+        in the same second at the same length is simply not seen. That is not a
+        hypothetical -- it cost half an hour in this project already, and it
+        looks exactly like an edit that did not take: the flag is in the file,
+        absent from the usage line, and every other check says OK.
+
+        Asked through `-m si_model.run`, the way run.sh asks, so a shadowed
+        copy fails here too.
+        """
+        import re as _re
+
+        src_fp = os.path.join(here, "si_model", "run.py")
+        src = open(src_fp, encoding="utf-8", errors="replace").read()
+        want = sorted(set(_re.findall(r'add_argument\(\s*"(--[a-z-]+)"', src)))
+        if not want:
+            return False, "no flags found in %s -- is it the right file?" % src_fp
+        rc, out, err = _run([sys.executable, "-m", "si_model.run", "--help"],
+                            cwd=here)
+        text = (out + err).decode(errors="replace")
+        if rc:
+            return False, ("`-m si_model.run --help` exited %d: %s" %
+                           (rc, text.strip().splitlines()[-1:] or "no output"))
+        missing = [f for f in want if f not in text]
+        if missing:
+            pyc = os.path.join(here, "si_model", "__pycache__")
+            return False, ("the source defines %s but the running program does "
+                           "NOT offer %s -- the file and what executes disagree."
+                           "  Delete the cached bytecode and try again:  "
+                           "find %s -name __pycache__ -prune -exec rm -rf {} +"
+                           % (", ".join(want[:6]) + ("..." if len(want) > 6 else ""),
+                              ", ".join(missing), here)
+                           + ("" if os.path.isdir(pyc) else
+                              "   (no %s here, so look for a shadowing copy "
+                              "instead -- see the check above)" % pyc))
+        return True, "all %d flags the source defines are offered, incl. %s" % (
+            len(want), "--save" if "--save" in want else want[-1])
+    check("the flags the program really offers", _flags_live)
+
     # ------------------------------------------------------------------- config
     def _config():
         import yaml
