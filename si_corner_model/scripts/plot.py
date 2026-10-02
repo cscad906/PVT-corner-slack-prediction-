@@ -125,10 +125,14 @@ def rank_movement(plt, keys, corners, truth, model, circuit, temp, out_dir,
                   n_track=5):
     """True and predicted rank trajectories, side by side.
 
-    The tracked paths are the ones whose TRUE rank moves most from the first
-    corner to the last: a path that holds its position says nothing about
-    whether the model follows the ordering, and with a few thousand paths the
-    ones that stay put are nearly all of them.
+    The tracked paths are the ones whose TRUE rank moves most, measured as the
+    TOTAL VARIATION along the trajectory -- the sum of the step-to-step
+    changes -- and not as the distance from the first corner to the last. The
+    interesting path is the one that climbs and falls and crosses the others on
+    the way; by endpoints alone that path scores zero, and what gets drawn is
+    five flat lines. A path that holds its position says nothing about whether
+    the model follows the ordering anyway, and with a few thousand paths those
+    are nearly all of them.
 
     The two panels share a y axis so a difference in shape is the difference
     between the model and the measurement, not between two scalings.
@@ -140,9 +144,14 @@ def rank_movement(plt, keys, corners, truth, model, circuit, temp, out_dir,
     cn = [corners[ci] for ci in ok_cols]
     rt = _ranks(truth[:, ok_cols])
     rp = _ranks(model[:, ok_cols])
-    move = np.abs(rt[:, -1] - rt[:, 0])
-    move[~np.isfinite(move)] = -1
-    track = list(np.argsort(-move)[:min(n_track, len(keys))])
+    step = np.abs(np.diff(rt, axis=1))
+    move = np.nansum(step, axis=1)
+    move[~np.isfinite(rt).all(axis=1)] = -1.0     # a path missing at a corner
+    span = np.nanmax(rt, axis=1) - np.nanmin(rt, axis=1)   # ties: the wider one
+    order = np.lexsort((-span, -move))
+    track = [int(i) for i in order[:min(n_track, len(keys))] if move[i] > 0]
+    if not track:                      # a grid where nothing reorders at all
+        track = [int(i) for i in order[:min(n_track, len(keys))]]
 
     fig, axes = plt.subplots(1, 2, figsize=(12.5, 5.6), sharey=True)
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
