@@ -1919,11 +1919,15 @@ def stage_base(m: dict, save: bool = False) -> None:
     # measurement. The difference is the same either way -- the offset cancels
     # -- so this only decides which numbers the message prints.
     loo_native = loo if off is None else loo + off
+    # --save before the quiet gate below. It is an explicit request for files,
+    # not a diagnostic, and it used to sit after the gate: under `all` the
+    # stage returned early and `all --save` wrote nothing at all, in silence.
+    if save:
+        _save_base_predictions(m, ds, split, native, loo_native, measured)
     if not _base_loud():
-        # This stage is diagnostic only: it writes nothing, and train fits its
-        # own base. Under `all` it still runs (asked for: compute unchanged)
-        # but stays silent, so build is followed straight by epochs.
-        # `run.sh base` is where these numbers are meant to be read.
+        # The DIAGNOSTICS are what this gate is for: the stage still runs under
+        # `all` (the fit is unchanged) but stays quiet, so build is followed
+        # straight by epochs. `run.sh base` is where these numbers are read.
         return
     # State the level axis actually in force, always. `level_coords: measured`
     # not taking effect looks exactly like it taking effect and changing
@@ -1993,8 +1997,6 @@ def stage_base(m: dict, save: bool = False) -> None:
     sv = np.array([err(int(c)) for c in split.seen_idx])
     print(f"    [seen-LOO   ] {sv.mean():8.3f} {unit}  (worst {sv.max():.3f})")
     _print_seen_fit(y, phi, split, field, unit)
-    if save:
-        _save_base_predictions(m, ds, split, native, loo_native, measured)
     _print_slack_vs_voltage(native, split, measured, field,
                             ds.get("cycle_gap"), cfg, off)
     _print_level_spacing(y, split, cfg)

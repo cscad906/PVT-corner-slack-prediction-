@@ -1553,6 +1553,46 @@ def test_base_save_gives_the_report_and_the_arrays_without_training(
     assert abs(float(summ["mean absolute error (ps)"][i]) - want) < 0.05
 
 
+def test_save_survives_the_quiet_gate_under_all(real_tree, tmp_path, monkeypatch,
+                                               capsys):
+    """`all --save` must write the files too.
+
+    base prints its diagnostics only when it was named, so that `all` goes from
+    build straight to epochs. That gate used to return BEFORE the writing, so
+    `--save` under `all` wrote nothing and said nothing -- the one combination
+    where a silent no-op is indistinguishable from the stage having run. --save
+    is an explicit request for files, not a diagnostic, and is now honoured
+    whatever the stage is called.
+    """
+    import si_model.run as run
+    from si_model.parsing.build_dataset import build
+    from si_model.run import expand, select, stage_base
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+    p = _base_project(real_tree)
+    models = select(expand(p), design="boomcore", temp="125")
+    for m in models:
+        build(m["cfg"])
+
+    monkeypatch.delenv("SI_VERBOSE", raising=False)
+    monkeypatch.setenv("SI_STAGE", "all")
+    assert not run._base_loud(), "the diagnostics are off under `all`"
+    stage_base(models[0], save=True)
+
+    out = capsys.readouterr().out
+    assert "[per corner]" not in out, "diagnostics stay off"
+    assert "[SAVE]" in out, "but the file it was asked for is reported"
+    fp_npz = os.path.join("runs", "setup", "boomcore", "125",
+                          "predictions_base.npz")
+    assert os.path.exists(fp_npz), out
+
+    # and without --save it still writes nothing, under `all` as anywhere else
+    os.remove(fp_npz)
+    stage_base(models[0])
+    assert not os.path.exists(fp_npz)
+
+
 def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch,
                                              capsys):
     """runs/<mode>/_all/runtime.rpt: one line per stage, appended.
