@@ -1152,7 +1152,13 @@ def _scale_of(m: dict) -> "tuple":
 
 def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
                   cpu: float, extra: str = "", temps: int = 1) -> None:
-    """Append one line per (stage, circuit) to runs/<tag>/<mode>/_all/runtime.rpt.
+    """Append one line to runs/<tag>/<mode>/_all/runtime.rpt.
+
+    Three stages are recorded and no others: `build`, `train` and `inference`
+    (everything after training that produces the deliverable -- predict, the
+    report, bundle, merge -- summed, because each is seconds and which of them
+    wrote which file is a question about this program rather than about the
+    work). `base` and `sweep` are diagnostics and are not recorded.
 
     One line per CIRCUIT, not per temperature: the question asked of it is "how
     long did setup take for this circuit, and how long hold", and a temperature
@@ -1183,10 +1189,10 @@ def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
             if new:
                 f.write("# si_corner_model runtime -- one line per stage, "
                         "appended. wall/cpu: cpu > wall means threads.\n")
-                f.write("%-16s %-8s %-24s %-6s %5s %6s %7s %9s %9s %4s %s\n"
+                f.write("%-16s %-9s %-24s %-6s %5s %6s %7s %9s %9s %4s %s\n"
                         % ("date", "stage", "circuit", "mode", "temps",
                            "paths", "corners", "wall", "cpu", "thr", "host"))
-            f.write("%-16s %-8s %-24s %-6s %5s %6s %7s %9s %9s %4s %s%s\n"
+            f.write("%-16s %-9s %-24s %-6s %5s %6s %7s %9s %9s %4s %s%s\n"
                     % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                        stage,
                        (m["design"] if m else "-")[:24],
@@ -3489,13 +3495,28 @@ def main(argv=None):
     # than at the end: a build that is killed after four hours is exactly the
     # case the number is wanted for, and a summary written on the way out would
     # not exist. See _runtime_note.
-    def timed(stage, m, fn, extra=""):
+    # Three names in the log and no more: build, train, inference. Which
+    # internal stage wrote which file is a question about this program, not
+    # about how long the work takes, and a line per stage buried the two that
+    # are measured in hours among four that are measured in seconds.
+    inf = {"wall": 0.0, "cpu": 0.0, "what": []}
+
+    def timed_inference(fn, what):
         t0, c0 = time.time(), memlog.cpu_seconds()
         try:
             return fn()
         finally:
-            _runtime_note(p, stage, m, time.time() - t0,
-                          memlog.cpu_seconds() - c0, extra)
+            inf["wall"] += time.time() - t0
+            inf["cpu"] += memlog.cpu_seconds() - c0
+            if what not in inf["what"]:
+                inf["what"].append(what)
+
+    def flush_inference():
+        if inf["wall"] <= 0:
+            return
+        _runtime_note(p, "inference", None, inf["wall"], inf["cpu"],
+                      " ".join(inf["what"]))
+        inf["wall"], inf["cpu"], inf["what"] = 0.0, 0.0, []
 
     # Per-circuit accumulator for the stages that run per model. The line is
     # written when that circuit's last temperature finishes, not at the end of
@@ -3532,16 +3553,15 @@ def main(argv=None):
         if stage == "bundle":
             print(f"\n===== bundle: one weight file per circuit =====", flush=True)
             try:
-                timed("bundle", None, lambda: stage_bundle(models))
+                timed_inference(lambda: stage_bundle(models), "bundle")
             except Exception as e:
                 failed.append(("bundle", repr(e)))
                 traceback.print_exc()
             continue
         if stage == "merge":
             try:
-                timed("merge", None,
-                      lambda: stage_merge(models, p, args.corners),
-                      "corners=%s" % args.corners)
+                timed_inference(lambda: stage_merge(models, p, args.corners),
+                                "merge")
             except Exception as e:
                 failed.append(("merge", repr(e)))
                 traceback.print_exc()
@@ -3562,24 +3582,21 @@ def main(argv=None):
                     # they carry the per-path truth and error the report sums up
                     for i, m in enumerate(models):
                         try:
-                            timed_model("predict", m,
-                                        lambda m=m: stage_predict(
-                                            m, args.corners, args.weights),
-                                        _timing_note(args))
+                            timed_inference(
+                                lambda m=m: stage_predict(
+                                    m, args.corners, args.weights),
+                                _timing_note(args))
                         except Exception as e:
                             failed.append((f"predict:{m['name']}", repr(e)))
                             traceback.print_exc()
                             print(f"!!!!! FAILED predict: {m['name']} -- "
                                   f"continuing", flush=True)
-                        if (i + 1 == len(models)
-                                or models[i + 1]["design"] != m["design"]):
-                            flush_models("predict", m["design"])
+
                 name = args.name or _default_predict_name(
                     args.design, args.temp, args.at, args.sweep, args.level, req,
                     args.weights, args.period, args.freq,
                     corners=None if (args.at or args.sweep) else args.corners)
-                _, fails = timed(
-                    "report", None,
+                _, fails = timed_inference(
                     lambda: stage_predict_at(models, p, req, name, args.weights,
                                              args.period, only),
                     _timing_note(args))
@@ -3594,12 +3611,12 @@ def main(argv=None):
                 if stage == "build":
                     timed_model("build", m, lambda: stage_build(m))
                 elif stage == "base":
-                    timed_model("base", m, lambda: stage_base(m))
+                    stage_base(m)          # a diagnostic, measured in seconds
                 elif stage == "train":
                     timed_model("train", m, lambda: stage_train(m),
                                 "epochs=%s" % m["cfg"]["train"].get("epochs"))
                 elif stage == "sweep":
-                    timed_model("sweep", m, lambda: stage_sweep(m))
+                    stage_sweep(m)
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()
@@ -3608,6 +3625,7 @@ def main(argv=None):
             if i + 1 == len(models) or models[i + 1]["design"] != m["design"]:
                 flush_models(stage, m["design"])
 
+    flush_inference()
     print("\n" + "=" * 60)
     if failed:
         print(f"done, but {len(failed)} failed:")

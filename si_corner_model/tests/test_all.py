@@ -1528,7 +1528,7 @@ def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     monkeypatch.setenv("SI_STAGE", "")
     monkeypatch.setattr(run, "REPO_ROOT", str(tmp_path))
     monkeypatch.setattr(run, "load_project", lambda *a, **k: project())
-    assert run.main(["base", "--design", "boomcore"]) == 0
+    assert run.main(["build", "--design", "boomcore"]) == 0
 
     fp = os.path.join("runs", "setup", "_all", "runtime.rpt")
     first = open(fp).read().splitlines()
@@ -1537,7 +1537,7 @@ def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     row = first[2].split()
     # ONE line for the circuit, both temperatures summed into it -- a
     # temperature is an internal split, and the question is how long setup took
-    assert row[2] == "base" and row[3] == "boomcore" and row[4] == "setup"
+    assert row[2] == "build" and row[3] == "boomcore" and row[4] == "setup"
     assert int(row[5]) == 2                                     # temperatures
     # the scale, so the duration can be compared with another drop's
     assert int(row[6]) == 12 and int(row[7]) == 8 + 12          # paths, corners
@@ -1546,11 +1546,17 @@ def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     assert len(first) == 3, first
 
     # a second run APPENDS -- the previous timing is the thing being compared
-    assert run.main(["base", "--design", "boomcore", "--temp", "125"]) == 0
+    assert run.main(["build", "--design", "boomcore", "--temp", "125"]) == 0
     again = open(fp).read().splitlines()
     assert again[:3] == first
-    assert len(again) == 4 and again[3].split()[2] == "base"
+    assert len(again) == 4 and again[3].split()[2] == "build"
     assert int(again[3].split()[5]) == 1                        # just the one
+
+    # only build, train and inference are recorded. `base` is a diagnostic
+    # measured in seconds, and a line per internal stage buried the two that
+    # are measured in hours among four that are not.
+    assert run.main(["base", "--design", "boomcore"]) == 0
+    assert open(fp).read().splitlines() == again
 
 
 def test_blind_hidden_keeps_every_choice_off_the_held_out_corners(
