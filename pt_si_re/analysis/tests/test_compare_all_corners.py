@@ -105,6 +105,36 @@ class BatchTests(unittest.TestCase):
         text = (self.out / "summary_all.txt").read_text()
         self.assertEqual(text.count("SSPG 0.6V 125C RCMAX"), 6)  # setup + hold in three tables
 
+    def test_end_corner_spec(self):
+        corner = BATCH.parse_end_corner("0p5:m40:RC_MAX")
+        self.assertEqual((corner["process"], corner["v"], corner["t"], corner["beol"]), (None, 0.5, -40.0, "RCMAX"))
+        corner = BATCH.parse_end_corner("SSPG:0.95V:125C:rcmax")
+        self.assertEqual((corner["process"], corner["v"], corner["t"]), ("SSPG", 0.95, 125.0))
+        with self.assertRaises(ValueError):
+            BATCH.parse_end_corner("0.5:125")
+
+    def test_end_corners_gt_only_without_scaled_dir(self):
+        code = BATCH.main(["--gt-dir", str(self.gt), "--output-dir", str(self.out),
+                           "--end-corner", "0.6:125:rcmax", "--end-corner", "0.5:125:rcmax"])
+        self.assertEqual(code, 0)
+        text = (self.out / "end_corners.txt").read_text()
+        self.assertFalse((self.out / "summary_all.txt").exists())
+        lines = [line for line in text.splitlines() if "0.6V 125C RCMAX" in line]
+        self.assertEqual(len(lines), 2)  # setup and hold
+        setup = lines[0].split()
+        self.assertEqual(setup[0], "setup")
+        self.assertEqual(setup[-1], "SSPG_0p60v_125c_rcmax.rpt")  # the cmax file is not taken
+        self.assertEqual(setup[-2], "0")  # no violation in the fixture
+        self.assertTrue(any("0.5V 125C RCMAX" in line and line.endswith("NO_GT") for line in text.splitlines()))
+        with self.assertRaises(SystemExit):
+            BATCH.main(["--gt-dir", str(self.gt)])
+
+    def test_end_corners_added_to_full_run(self):
+        code, text = self.run_batch("--end-corner", "0.6:125:rcmax")
+        self.assertEqual(code, 0)
+        self.assertIn("END CORNERS (GT only", text)
+        self.assertIn("SSPG 0.6V 125C RCMAX", text.split("END CORNERS")[1])  # process taken from the runs
+
     def test_name_tokens(self):
         self.assertEqual(BATCH.gt_tokens("SSPG_0p60v_m40c_rcmax.rpt")[:2], (0.6, -40.0))
         self.assertEqual(BATCH.gt_tokens("SSPG_0p675v_125c_cworst.rpt")[:2], (0.675, 125.0))

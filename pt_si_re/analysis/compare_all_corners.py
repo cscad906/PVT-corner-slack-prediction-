@@ -6,6 +6,13 @@ Usage
     python3 analysis/compare_all_corners.py --scaled-dir <RESULT_FOLDER> --gt-dir <DESIGN_GT_DIR>
     python3 analysis/compare_all_corners.py --scaled-dir ... --gt-dir ... --analysis setup
 
+    End corners (PT scaling cannot extrapolate there): GT-only statistics
+    python3 analysis/compare_all_corners.py --gt-dir <DESIGN_GT_DIR> \
+        --end-corner 0.5:125:rcmax --end-corner 0.95:125:rcmax
+    Spec is V:T:BEOL or PROCESS:V:T:BEOL (0.5 or 0p5, m40 or -40). Without
+    --scaled-dir only the END CORNERS table is made (end_corners.txt); with it
+    the table is added below the comparison tables in summary_all.txt.
+
 Inputs (read-only)
     <RESULT_FOLDER>/restored_scaled_<PROC>_<V>V_<T>C_<BEOL>_<AXIS>_<setup|hold>[_net].rpt
         (also <RESULT_FOLDER>/setup/ and <RESULT_FOLDER>/hold/ when they exist, so a
@@ -305,26 +312,112 @@ def render(args, results, problems):
     return out
 
 
-def summary_path(output_dir):
+def parse_end_corner(spec):
+    """'0.5:125:rcmax' or 'SSPG:0p5:m40:rcmax' -> dict; ValueError when malformed."""
+    parts = [part.strip() for part in spec.split(":")]
+    if len(parts) not in (3, 4) or not all(parts):
+        raise ValueError("--end-corner needs V:T:BEOL or PROCESS:V:T:BEOL, got '{}'".format(spec))
+    process = parts[0] if len(parts) == 4 else None
+    v_text, t_text, beol = parts[-3:]
+    v = float(re.sub(r"v$", "", v_text, flags=re.IGNORECASE).replace("p", "."))
+    t_text = re.sub(r"c$", "", t_text, flags=re.IGNORECASE)
+    t = -float(t_text[1:]) if t_text[:1] in ("m", "M") else float(t_text)
+    return {"spec": spec, "process": process, "v": v, "t": t, "beol": canonical_beol(beol)}
+
+
+def find_gt_corner(corner, analysis, gt_dir):
+    """Return (path or None, reason, candidates) for one end corner."""
+    folder = Path(gt_dir) / analysis
+    if not folder.is_dir():
+        return None, "no folder {}".format(folder), []
+    matches = []
+    for entry in sorted(os.listdir(str(folder))):
+        if not entry.endswith(".rpt") or not (folder / entry).is_file():
+            continue
+        v, t, words = gt_tokens(entry)
+        if v is None or t is None or abs(v - corner["v"]) > TOL or abs(t - corner["t"]) > TOL:
+            continue
+        if not gt_beol_matches(entry, corner["beol"]):
+            continue
+        if corner["process"] and corner["process"].lower() not in words:
+            continue
+        matches.append(folder / entry)
+    if len(matches) == 1:
+        return matches[0], "", []
+    if matches:
+        return None, "AMBIGUOUS (give PROCESS:V:T:BEOL)", [path.name for path in matches]
+    return None, "NO_GT", []
+
+
+def gt_only_stats(gt_path):
+    """Paths, mean slack, WNS and violation count (ps) from one GT report."""
+    slacks = [item.slack * CMP.NS_TO_PS for item in CMP.parse_report(gt_path).values()
+              if item.slack is not None]
+    return {"paths": len(slacks), "gt_mean": mean(slacks),
+            "gt_wns": min(slacks) if slacks else None,
+            "gt_viol": sum(1 for value in slacks if value < 0)}
+
+
+def end_corner_lines(corners, gt_dir, analyses):
+    head = "{:<6} {:<24} {:>6} {:>10} {:>10} {:>8}  {}".format(
+        "type", "corner", "paths", "GT_mean", "GT_WNS", "GT_viol", "GT_file")
+    out = ["END CORNERS (GT only; PT scaling cannot extrapolate here)", head, "-" * len(head)]
+    for analysis in analyses:
+        for corner in corners:
+            label = "{}{}V {}C {}".format(corner["process"] + " " if corner["process"] else "",
+                                          fmt(corner["v"]), fmt(corner["t"]), corner["beol"])
+            path, reason, candidates = find_gt_corner(corner, analysis, gt_dir)
+            if path is None:
+                out.append("{:<6} {:<24} {}".format(analysis, label, reason))
+                for name in candidates[:5]:
+                    out.append("       candidate: {}".format(name))
+                continue
+            stats = gt_only_stats(path)
+            out.append("{:<6} {:<24} {:>6} {} {} {:>8}  {}".format(
+                analysis, label, stats["paths"], num(stats["gt_mean"], 10, True),
+                num(stats["gt_wns"], 10, True), stats["gt_viol"], path.name))
+    out.append("GT_mean = mean GT slack (ps, signed); GT_WNS = minimum GT slack; GT_viol = paths with slack < 0.")
+    return out
+
+
+def summary_path(output_dir, stem="summary_all"):
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "summary_all.txt"
+    path = output_dir / "{}.txt".format(stem)
     run = 2
     while path.exists():
-        path = output_dir / "summary_all_run{}.txt".format(run)
+        path = output_dir / "{}_run{}.txt".format(stem, run)
         run += 1
     return path
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Compare all scaling corners of one design with ground truth.")
-    parser.add_argument("--scaled-dir", required=True, help="RESULT_FOLDER holding restored_scaled_*.rpt")
+    parser.add_argument("--scaled-dir", default=None, help="RESULT_FOLDER holding restored_scaled_*.rpt")
     parser.add_argument("--gt-dir", required=True, help="design GT folder holding setup/ and hold/")
     parser.add_argument("--analysis", choices=("setup", "hold"), default=None, help="default: both")
     parser.add_argument("--output-dir", default="pt_scaling_comparison", help="default: pt_scaling_comparison")
+    parser.add_argument("--end-corner", action="append", default=[],
+                        help="V:T:BEOL or PROCESS:V:T:BEOL of a corner PT cannot scale; repeatable")
     args = parser.parse_args(argv)
+    if args.scaled_dir is None and not args.end_corner:
+        parser.error("give --scaled-dir, or --end-corner for GT-only end-corner statistics")
     for label, folder in (("--scaled-dir", args.scaled_dir), ("--gt-dir", args.gt_dir)):
-        if not os.path.isdir(folder):
+        if folder is not None and not os.path.isdir(folder):
             parser.error("{} is not a folder: {}".format(label, folder))
+    try:
+        corners = [parse_end_corner(spec) for spec in args.end_corner]
+    except ValueError as error:
+        parser.error(str(error))
+    analyses = [args.analysis] if args.analysis else ["setup", "hold"]
+    if args.scaled_dir is None:
+        text = end_corner_lines(corners, args.gt_dir, analyses)
+        path = summary_path(Path(args.output_dir), "end_corners")
+        path.write_text("\n".join(text) + "\n")
+        for line in text:
+            print(line)
+        print("")
+        print("END CORNER FILE: {}".format(path.resolve()))
+        return 0
 
     runs = find_runs(args.scaled_dir, args.analysis)
     if not runs:
@@ -346,6 +439,11 @@ def main(argv=None):
             problems.append((run, "ERROR {}".format(error), [gt_path.name]))
 
     text = render(args, results, problems)
+    if corners:
+        if len({run["process"] for run in runs}) == 1:
+            for corner in corners:
+                corner["process"] = corner["process"] or runs[0]["process"]
+        text += [""] + end_corner_lines(corners, args.gt_dir, analyses)
     path = summary_path(Path(args.output_dir))
     path.write_text("\n".join(text) + "\n")
     print("")

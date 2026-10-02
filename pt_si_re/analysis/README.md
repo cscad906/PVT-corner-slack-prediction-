@@ -76,6 +76,19 @@ python3 analysis/compare_all_corners.py --scaled-dir <RESULT_FOLDER> --gt-dir <.
 `p90`, `p99` = 경로의 90% / 99% 가 |오차| 이 값 이하(nearest-rank). `compare_scaling_mae.py` 결과에도
 `p50/p90/p95/p99` 줄로 나옵니다.
 
+### 끝 코너 (PT 스케일링이 외삽이라 못 하는 코너)
+
+```bash
+python3 analysis/compare_all_corners.py --gt-dir <.../PERIC0> \
+    --end-corner 0.5:125:rcmax --end-corner 0.95:125:rcmax
+```
+
+`--end-corner 전압:온도:BEOL` (공정까지 지정하려면 `SSPG:0.5:125:rcmax`). 전압은 `0.5`/`0p5`,
+온도 `-40` 은 `m40`. `--scaled-dir` 없이 주면 비교는 하지 않고 GT 리포트만 읽어
+`END CORNERS` 표(경로 수, GT slack 평균, GT WNS, GT 위반 개수)를 `end_corners.txt` 에 만듭니다.
+`--scaled-dir` 와 같이 주면 같은 표가 `summary_all.txt` 맨 아래에 붙습니다. 짝이 없거나
+여럿이면 `NO_GT` / `AMBIGUOUS` 로 적습니다.
+
 ### 위반 경로 / 경로별 오차 원인
 
 `compare_scaling_mae.py` 와 `compare_all_corners.py` 결과에 다음이 같이 나옵니다.
