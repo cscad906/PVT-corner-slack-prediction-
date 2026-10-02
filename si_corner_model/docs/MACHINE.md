@@ -389,6 +389,7 @@ si_corner_model/
     ├── <회로>/<온도>/predictions_hidden.npz   경로별 예측 (merge 입력)
     ├── <회로>/model.pt                        회로당 한 파일 (bundle)
     ├── _all/predict_<온도>_hidden.rpt         홀드아웃 코너 리포트 (predict)
+    ├── _all/runtime.rpt                      단계별 소요시간 (실행마다 한 줄 추가)
     └── _all/predictions_hidden.npz            전 회로·온도 합본 (merge, 기계용)
     └── _all/summary.json                      코너별 성적표
 ```
@@ -567,6 +568,34 @@ designs:
 전압 범위가 넓은 회로로 학습해서 좁은 회로에 쓰는 방향이 맞다. 반대면 학습 때 못 본
 좌표를 묻게 되고, 그럴 때 보정을 줄이도록 만들어져 있다 (MIF 0.475~0.95 가 나머지
 둘을 덮는다).
+
+---
+
+## 8.6 단계별 소요시간 — `_all/runtime.rpt`
+
+실행할 때마다 **단계마다 한 줄**이 덧붙는다. 덮어쓰지 않으므로 이전 기록이 남는다.
+
+```
+# si_corner_model runtime -- one line per stage, appended. wall/cpu: cpu > wall means threads.
+date             stage    circuit                  temp   paths corners      wall       cpu  thr host
+2026-10-02 12:43 build    MFC_Timing_Report        125      12       8     3h12m    41h02m   16 knuee-srv5
+2026-10-02 15:55 train    MFC_Timing_Report        125      12       8    28m04s   3h40m    16 knuee-srv5  epochs=40
+2026-10-02 16:23 predict  MFC_Timing_Report        125      12       8      4.1s     9.2s    16 knuee-srv5  corners=hidden
+2026-10-02 16:23 report   -                        -         -       -      8.3s    12.1s    16 knuee-srv5  corners=hidden
+2026-10-02 16:23 merge    -                        -         -       -      1.2s     1.4s    16 knuee-srv5  corners=hidden
+```
+
+- **`wall`** 은 실제 경과, **`cpu`** 는 쓴 CPU 시간 합. `cpu > wall` 이면 스레드를
+  쓰고 있다는 뜻이고, `cpu ≈ wall` 이면 한 코어로 기다리고 있다는 뜻이다
+- **`paths` / `corners`** 가 같이 적힌다. 이게 없으면 "3시간"이 빠른지 느린지 알 수
+  없다 — 경로 12개의 3시간과 4000개의 3시간은 다른 측정이다
+- **`thr` / `host`** 도 적힌다. 같은 build 가 16스레드에 3시간, 4스레드에 하루다
+- 마지막 칸에 그 실행의 스위치 (`epochs=40`, `corners=hidden`, `from=MIF_...`,
+  `freq=950`) 가 붙어서, 조건이 다른 실행끼리 비교할 수 있다
+- 단계가 **끝날 때마다** 쓴다. 네 시간 돌다 죽은 build 도 그때까지의 줄이 남는다
+
+`merge` 는 `-` 로 나온다 (회로 하나가 아니라 전부를 묶는 단계라서), `report` 는
+`.rpt` 를 쓰는 단계다.
 
 ---
 

@@ -33,6 +33,7 @@ import csv
 import json
 import os
 import sys
+import time
 import traceback
 
 import yaml
@@ -1098,6 +1099,101 @@ def _period_norm(v) -> str:
     if isinstance(v, bool):
         return "auto" if v else "off"
     return str(v).strip().lower()
+
+
+def _timing_note(args) -> str:
+    """The switches that change how long a predict takes, for the timing line.
+
+    A borrowed model, a requested period or a named corner set all change the
+    work, so a duration without them cannot be compared with the next one.
+    """
+    bits = []
+    if getattr(args, "weights", None):
+        bits.append("from=" + os.path.basename(
+            os.path.dirname(os.path.abspath(args.weights))))
+    if getattr(args, "at", None):
+        bits.append("at")
+    if getattr(args, "sweep", None):
+        bits.append("sweep")
+    if getattr(args, "freq", None):
+        bits.append("freq=%g" % args.freq)
+    elif getattr(args, "period", None):
+        bits.append("period=%g" % args.period)
+    if getattr(args, "corners", None) and not (args.at or args.sweep):
+        bits.append("corners=%s" % args.corners)
+    return " ".join(bits)
+
+
+def _hms(sec: float) -> str:
+    """A duration a person can read at a glance: 12.3s, 4m05s, 3h12m."""
+    if sec < 60:
+        return "%.1fs" % sec
+    if sec < 3600:
+        return "%dm%02ds" % (sec // 60, sec % 60)
+    return "%dh%02dm" % (sec // 3600, (sec % 3600) // 60)
+
+
+def _scale_of(m: dict) -> "tuple":
+    """(paths, corners) of a model's cache, or (None, None).
+
+    Read from the two small members, so this costs nothing even where the
+    slack and SI arrays are gigabytes. Without it a duration cannot be
+    compared with the next drop's: three hours for 12 paths and three hours
+    for 4000 are not the same measurement.
+    """
+    import numpy as np
+
+    try:
+        z = np.load(m["cfg"]["data"]["cache"], allow_pickle=False)
+        return int(len(z["path_keys"])), int(len(z["corners"]))
+    except Exception:
+        return None, None
+
+
+def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
+                  cpu: float, extra: str = "") -> None:
+    """Append one line per stage to runs/<tag>/<mode>/_all/runtime.rpt.
+
+    Appended, never rewritten, because the question it answers is "how long
+    does this pipeline take" and that only has an answer across runs. One file
+    for the whole tree rather than a field in summary.json: `predict`, `base`
+    and `build` write no summary.json, so a field there would record the two
+    stages nobody asks about and miss the one that takes hours.
+
+    The scale and the machine are on the line with the duration. A wall time
+    without the thread count, the host and the path count is not a measurement
+    of anything -- the same build is three hours on 16 threads and most of a
+    day on four, and nothing else in the file would say which this was.
+    """
+    import datetime
+    import socket
+
+    try:
+        d = os.path.join(_runs_root(p), "_all")
+        os.makedirs(d, exist_ok=True)
+        fp = os.path.join(d, "runtime.rpt")
+        new = not os.path.exists(fp)
+        n_paths, n_corners = _scale_of(m) if m else (None, None)
+        with open(fp, "a", encoding="utf-8") as f:
+            if new:
+                f.write("# si_corner_model runtime -- one line per stage, "
+                        "appended. wall/cpu: cpu > wall means threads.\n")
+                f.write("%-16s %-8s %-24s %-5s %6s %7s %9s %9s %4s %s\n"
+                        % ("date", "stage", "circuit", "temp", "paths",
+                           "corners", "wall", "cpu", "thr", "host"))
+            f.write("%-16s %-8s %-24s %-5s %6s %7s %9s %9s %4s %s%s\n"
+                    % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                       stage,
+                       (m["design"] if m else "-")[:24],
+                       str(m["temp"]) if m else "-",
+                       "-" if n_paths is None else n_paths,
+                       "-" if n_corners is None else n_corners,
+                       _hms(wall), _hms(cpu),
+                       os.environ.get("OMP_NUM_THREADS", "-"),
+                       socket.gethostname(),
+                       ("  " + extra) if extra else ""))
+    except OSError:
+        pass          # a timing note is never worth failing a run over
 
 
 def _runs_root(p: dict) -> str:
@@ -3368,18 +3464,32 @@ def main(argv=None):
 
     stages = _ALL_STAGES if args.stage == "all" else (args.stage,)
     failed = []
+    # How long each stage took, appended to _all/runtime.rpt as it goes rather
+    # than at the end: a build that is killed after four hours is exactly the
+    # case the number is wanted for, and a summary written on the way out would
+    # not exist. See _runtime_note.
+    def timed(stage, m, fn, extra=""):
+        t0, c0 = time.time(), memlog.cpu_seconds()
+        try:
+            return fn()
+        finally:
+            _runtime_note(p, stage, m, time.time() - t0,
+                          memlog.cpu_seconds() - c0, extra)
+
     for stage in stages:
         if stage == "bundle":
             print(f"\n===== bundle: one weight file per circuit =====", flush=True)
             try:
-                stage_bundle(models)
+                timed("bundle", None, lambda: stage_bundle(models))
             except Exception as e:
                 failed.append(("bundle", repr(e)))
                 traceback.print_exc()
             continue
         if stage == "merge":
             try:
-                stage_merge(models, p, args.corners)
+                timed("merge", None,
+                      lambda: stage_merge(models, p, args.corners),
+                      "corners=%s" % args.corners)
             except Exception as e:
                 failed.append(("merge", repr(e)))
                 traceback.print_exc()
@@ -3400,7 +3510,10 @@ def main(argv=None):
                     # they carry the per-path truth and error the report sums up
                     for m in models:
                         try:
-                            stage_predict(m, args.corners, args.weights)
+                            timed("predict", m,
+                                  lambda m=m: stage_predict(m, args.corners,
+                                                            args.weights),
+                                  _timing_note(args))
                         except Exception as e:
                             failed.append((f"predict:{m['name']}", repr(e)))
                             traceback.print_exc()
@@ -3410,8 +3523,11 @@ def main(argv=None):
                     args.design, args.temp, args.at, args.sweep, args.level, req,
                     args.weights, args.period, args.freq,
                     corners=None if (args.at or args.sweep) else args.corners)
-                _, fails = stage_predict_at(models, p, req, name, args.weights,
-                                            args.period, only)
+                _, fails = timed(
+                    "report", None,
+                    lambda: stage_predict_at(models, p, req, name, args.weights,
+                                             args.period, only),
+                    _timing_note(args))
                 failed += fails
             except Exception as e:
                 failed.append(("predict", repr(e)))
@@ -3421,13 +3537,14 @@ def main(argv=None):
             print(f"\n===== {stage}: {m['name']} =====", flush=True)
             try:
                 if stage == "build":
-                    stage_build(m)
+                    timed("build", m, lambda: stage_build(m))
                 elif stage == "base":
-                    stage_base(m)
+                    timed("base", m, lambda: stage_base(m))
                 elif stage == "train":
-                    stage_train(m)
+                    timed("train", m, lambda: stage_train(m),
+                          "epochs=%s" % m["cfg"]["train"].get("epochs"))
                 elif stage == "sweep":
-                    stage_sweep(m)
+                    timed("sweep", m, lambda: stage_sweep(m))
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()

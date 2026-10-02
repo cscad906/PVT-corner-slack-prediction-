@@ -1497,6 +1497,58 @@ def test_transformed_axis_survives_predict_and_the_checkpoint(real_tree, tmp_pat
     # is test_v_transform_auto_recovers_the_generating_variable above)
 
 
+def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
+    """runs/<mode>/_all/runtime.rpt: one line per stage, appended.
+
+    The question is "how long does this pipeline take on this drop", and it
+    only has an answer across runs -- a build killed after four hours is
+    exactly the case the number is wanted for, so the line is written as each
+    stage ends rather than collected at the end. Hence: appended, never
+    rewritten, and present even for the stages that write no summary.json
+    (build, base, predict), which are most of them.
+
+    A duration alone is not a measurement, so the line carries the scale (paths
+    and corners) and the machine (threads, host) beside it: the same build is
+    three hours on sixteen threads and most of a day on four.
+    """
+    import si_model.run as run
+    from si_model.parsing.build_dataset import build
+    from si_model.run import expand, select
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.setenv("OMP_NUM_THREADS", "3")
+    monkeypatch.chdir(tmp_path)
+
+    def project():
+        return _base_project(real_tree)
+
+    for m in select(expand(project()), design="boomcore"):
+        build(m["cfg"])
+
+    monkeypatch.setenv("SI_STAGE", "")
+    monkeypatch.setattr(run, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(run, "load_project", lambda *a, **k: project())
+    assert run.main(["base", "--design", "boomcore", "--temp", "m25"]) == 0
+
+    fp = os.path.join("runs", "setup", "_all", "runtime.rpt")
+    first = open(fp).read().splitlines()
+    assert first[0].startswith("#")
+    assert first[1].split()[:3] == ["date", "stage", "circuit"]
+    row = first[2].split()
+    assert row[2] == "base" and row[3] == "boomcore" and row[4] == "m25"
+    # the scale, so the duration can be compared with another drop's
+    assert int(row[5]) == 12 and int(row[6]) == 12
+    assert row[7].endswith("s") and row[8].endswith("s")        # wall, cpu
+    assert row[9] == "3", row                                   # threads
+    assert len(first) == 3
+
+    # a second run APPENDS -- the previous timing is the thing being compared
+    assert run.main(["base", "--design", "boomcore", "--temp", "125"]) == 0
+    again = open(fp).read().splitlines()
+    assert again[:3] == first
+    assert len(again) == 4 and again[3].split()[2] == "base"
+
+
 def test_blind_hidden_keeps_every_choice_off_the_held_out_corners(
         real_tree, tmp_path, monkeypatch):
     """split.blind_hidden: the held-out corners are measured and reported, but

@@ -205,6 +205,22 @@ def line(tag: str) -> str:
     return txt
 
 
+def cpu_seconds() -> float:
+    """CPU seconds this process and its children have used, user + system.
+
+    The [MEM] line reports ru_utime alone, which is the right thing there -- it
+    is a progress marker. For timing a stage it is not: system time is where a
+    parse spends its waiting, and a build that shells out would otherwise look
+    free. With 16 threads this runs well ahead of wall time, and the pair is
+    what says whether a stage is compute-bound or waiting.
+    """
+    t = 0.0
+    for who in (resource.RUSAGE_SELF, resource.RUSAGE_CHILDREN):
+        r = resource.getrusage(who)
+        t += r.ru_utime + r.ru_stime
+    return t
+
+
 def log(tag: str) -> None:
     print(line(tag), flush=True)
 
