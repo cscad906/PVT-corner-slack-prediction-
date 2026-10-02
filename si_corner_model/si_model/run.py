@@ -19,9 +19,9 @@ Stages
   train    cache          -> runs/<design>/<temp>/best.pt + summary.json
   bundle   per-temp best.pt -> runs/<design>/model.pt  (ONE file per circuit)
   predict  model.pt       -> runs/<mode>/_all/predict_<temp>_hidden.rpt (the
-                            report) + runs/<design>/<temp>/predictions_<corners>.csv
+                            report) + runs/<design>/<temp>/predictions_<corners>.npz
   sweep    lambda_si in {0, 0.1, 1, 10} -> runs/_sweep/... (slack only, for comparison)
-  merge    all members    -> runs/_all/predictions_<corners>.csv + summary.json
+  merge    all members    -> runs/_all/predictions_<corners>.npz + summary.json
   all      build, base, train, bundle, predict, merge  (sweep only when named explicitly)
 
 A failing member does not silently vanish: it is recorded, reported at the end,
@@ -2452,7 +2452,7 @@ def stage_predict(m: dict, corners: str, weights: "str | None" = None) -> None:
               f"Name the corners you want instead: predict --at / --sweep.",
               flush=True)
         return
-    # Borrowed weights write to their OWN file. predictions_<corners>.csv is
+    # Borrowed weights write to their OWN file. predictions_<corners>.npz is
     # this circuit's own trained result and is what `merge` reads, so a transfer
     # run tagged the same way would overwrite it and the merged table would
     # report another circuit's correction as this one's. Both files coexist now,
@@ -3089,96 +3089,76 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
 
 
 def stage_merge(models: list, p: dict, corners: str) -> str:
-    """Every member's predictions into ONE file, with design/temp columns.
+    """Every member's predictions into ONE place, and the per-corner score.
 
-    The corner label carries voltage and BEOL level but NOT the temperature or
-    the circuit -- those are the split dimensions -- so they become columns.
+    Writes ``_all/predictions_<corners>.npz`` (long format: one row per path x
+    corner, with design and temp columns, so the circuits and temperatures that
+    were trained separately can be read as one table) and
+    ``_all/summary.json``, the per-corner table that is what the numbers are
+    about. Both are machine-readable; the file a person opens is the report the
+    predict stage writes.
+
+    A corner is a corner regardless of which circuit or temperature produced
+    it, which is why the summary is per corner and not per model. Each model
+    still writes its own summary.json when it trains.
     """
+    import numpy as np
+
     out_dir = os.path.join(_runs_root(p), "_all")
     os.makedirs(out_dir, exist_ok=True)
-    out_fp = os.path.join(out_dir, f"predictions_{corners}.csv")
-    header = None
-    rows = 0
-    missing = []
-    # per (design, temp, corner): n, sum truth, sum model, sum |err|, worst |err|
-    agg, order = {}, []
-    with open(out_fp, "w", newline="", encoding="utf-8") as out:
-        w = csv.writer(out)
-        for m in models:
-            fp = os.path.join(m["cfg"]["train"]["out_dir"], f"predictions_{corners}.csv")
-            if not os.path.exists(fp):
-                missing.append(m["name"])
-                continue
-            with open(fp, newline="", encoding="utf-8") as f:
-                r = csv.reader(f)
-                head = next(r)
-                if header is None:
-                    header = ["design", "temp"] + head
-                    w.writerow(header)
-                assert ["design", "temp"] + head == header, f"{fp}: column mismatch"
-                for row in r:
-                    # each per-model file carries its own per-corner block after
-                    # a blank line. Copying those as data rows would put summary
-                    # lines in among the paths, so they are recomputed here over
-                    # every model instead.
-                    if not row or row[0] == "summary":
-                        continue
-                    w.writerow([m["design"], m["temp"]] + row)
-                    rows += 1
-                    key = (m["design"], str(m["temp"]), row[1])
-                    if key not in agg:
-                        agg[key] = [0, 0.0, 0.0, 0.0, 0.0]
-                        order.append(key)
-                    a = agg[key]
-                    a[0] += 1
-                    a[2] += float(row[3])
-                    if row[2]:
-                        a[1] += float(row[2])
-                        e = abs(float(row[3]) - float(row[2]))
-                        a[3] += e
-                        a[4] = max(a[4], e)
-        if order:
-            w.writerow([])
-            w.writerow(["design", "temp", "summary", "corner", "mean_truth_ps",
-                        "mean_model_ps", "mean_abs_err_ps", "worst_abs_err_ps"])
-            for d, t, cn in order:
-                n, st, sm, se, wo = agg[(d, t, cn)]
-                has_truth = st != 0.0 or se != 0.0
-                w.writerow([d, t, "summary", cn,
-                            "%.3f" % (st / n) if has_truth else "",
-                            "%.3f" % (sm / n),
-                            "%.3f" % (se / n) if has_truth else "",
-                            "%.3f" % wo if has_truth else ""])
-    assert header is not None, \
-        f"nothing to merge (predictions_{corners}.csv). Run predict first."
-    if missing:
-        print(f"  (!) missing models: {missing}")
-    print(f"  wrote {out_fp}: {rows} rows, {len(models) - len(missing)}/{len(models)} models")
+    out_fp = os.path.join(out_dir, f"predictions_{corners}.npz")
 
-    # Corners only. A model per (circuit, temperature) is how this is trained,
-    # not how it is delivered -- the deliverable is one predictor, and splitting
-    # the summary by model invited reading the split as a result. Each model
-    # still writes its own summary.json in its own directory; what is merged
-    # here is the corner table, which is what the numbers are about. The
-    # by_model copy also went stale silently when a training was interrupted,
-    # since a checkpoint updates and its summary does not.
-    # The merged numbers come from the prediction files. If a model was
-    # retrained and predict was not re-run, they describe the PREVIOUS weights
-    # -- the same silent mixing the old by_model check guarded against, moved
-    # to where the numbers now actually come from.
-    stale = []
+    cols = {k: [] for k in ("design", "temp", "corner", "path_key")}
+    num = {k: [] for k in ("truth_ps", "model_ps")}
+    entries, missing, stale = [], [], []
     for m in models:
         d = m["cfg"]["train"]["out_dir"]
-        pred = os.path.join(d, f"predictions_{corners}.csv")
+        fp = os.path.join(d, f"predictions_{corners}.npz")
+        if not os.path.exists(fp):
+            missing.append(m["name"])
+            continue
+        # Predictions older than the weights describe the PREVIOUS model: a
+        # training that ran after a predict leaves both files in place, and
+        # nothing in the merged numbers would say which weights they came from.
         ckpt = os.path.join(d, "best.pt")
-        if (os.path.exists(pred) and os.path.exists(ckpt)
-                and os.path.getmtime(pred) < os.path.getmtime(ckpt)):
+        if (os.path.exists(ckpt)
+                and os.path.getmtime(fp) < os.path.getmtime(ckpt)):
             stale.append(m["name"])
+        z = np.load(fp, allow_pickle=False)
+        keys = [str(x) for x in z["path_keys"]]
+        cn = [str(x) for x in z["corners"]]
+        # The slack task stores ps, the slew task ns. The merged table is in ps
+        # throughout, so a slew file is converted rather than mixed in under a
+        # column named _ps -- a slew of 0.05 ns is 50 ps and says the same thing.
+        if "truth_ps" in z:
+            truth = np.asarray(z["truth_ps"], float)
+            model = np.asarray(z["model_ps"], float)
+        else:
+            truth = np.asarray(z["truth_ns"], float) * 1000.0
+            model = np.asarray(z["model_ns"], float) * 1000.0
+        entries.append((m["design"], str(m["temp"]), cn, truth, model))
+        for ci, c in enumerate(cn):
+            for pi, key in enumerate(keys):
+                cols["design"].append(m["design"])
+                cols["temp"].append(str(m["temp"]))
+                cols["corner"].append(c)
+                cols["path_key"].append(key)
+                num["truth_ps"].append(truth[pi, ci])
+                num["model_ps"].append(model[pi, ci])
+    assert entries, (
+        f"nothing to merge (predictions_{corners}.npz). Run predict first.")
+    np.savez_compressed(out_fp,
+                        **{k: np.asarray(v) for k, v in cols.items()},
+                        **{k: np.asarray(v, float) for k, v in num.items()})
+    if missing:
+        print(f"  (!) missing models: {missing}")
+    print(f"  wrote {out_fp}: {len(num['truth_ps'])} rows, "
+          f"{len(models) - len(missing)}/{len(models)} models")
     if stale:
         print(f"  (!) predictions older than the weights for: {stale}\n"
               f"      these were trained again after predicting, so the numbers "
               f"below are the previous model's. Re-run predict.", flush=True)
-    summ = {"by_corner": _corner_table(out_fp)}
+    summ = {"by_corner": _corner_table(entries)}
     with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summ, f, indent=2)
     print(f"  wrote {out_dir}/summary.json ({len(summ['by_corner'])} corners)")
@@ -3186,67 +3166,47 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
     return out_fp
 
 
-def _corner_table(csv_fp: str) -> list:
-    """One row per CORNER, read back from the merged predictions.
+def _corner_table(entries: list) -> list:
+    """One row per CORNER, from the per-model prediction arrays.
 
     The per-model summaries answer "how did model X do"; this answers "how well
-    is each corner predicted", which is the question the deliverable is actually
-    about -- a corner is a corner regardless of which circuit/temperature model
-    happened to produce it. Rows with no truth (query corners) are counted but
-    carry no error.
+    is each corner predicted", which is the question the deliverable is about.
+    Corners with no measurement (query coordinates) are counted but carry no
+    error.
     """
-    acc = {}
-    with open(csv_fp, newline="", encoding="utf-8") as f:
-        r = csv.DictReader(f)
-        for row in r:
-            # the file ends with a per-corner block after a blank line; those
-            # rows are a summary OF these, not more of them
-            if not row.get("design") or row.get("path_key") == "summary":
+    import numpy as np
+
+    out = []
+    for design, temp, corners, truth, model in entries:
+        for ci, cn in enumerate(corners):
+            t, md = truth[:, ci], model[:, ci]
+            ok = np.isfinite(t)
+            row = {"design": design, "temp": temp, "corner": cn,
+                   "n_paths": int(len(t))}
+            if not ok.any():
+                row.update(mean_truth_ps=None, mae_ps=None, wns_truth_ps=None,
+                           wns_model_ps=None, wns_err_ps=None, wns_err_pct=None)
+                out.append(row)
                 continue
-            key = (row["design"], row["temp"], row["corner"])
-            a = acc.setdefault(key, {"n": 0, "n_truth": 0, "sum": 0.0, "worst": 0.0,
-                                     "sum_t": 0.0, "sum_abst": 0.0, "sum_m": 0.0,
-                                     "wns_t": None, "wns_m": None})
-            a["n"] += 1
-            if row.get("truth_ps") in (None, ""):
-                continue
-            t, md = float(row["truth_ps"]), float(row["model_ps"])
-            e = abs(float(row["model_err_ps"]))
-            a["n_truth"] += 1
-            a["sum"] += e
-            a["worst"] = max(a["worst"], e)
-            a["sum_t"] += t
-            a["sum_abst"] += abs(t)
-            a["sum_m"] += md
-            # WNS is the worst path, and the pair to compare is that path's
+            e = np.abs(md[ok] - t[ok])
+            # WNS is the worst path, and the pair to compare is THAT path's
             # measured and predicted slack -- not the two minima taken apart,
             # which can come from different paths and would not be an error.
-            if a["wns_t"] is None or t < a["wns_t"]:
-                a["wns_t"], a["wns_m"] = t, md
-    out = []
-    for (design, temp, corner), a in sorted(acc.items()):
-        n = a["n_truth"]
-        # Percentages are against the MEAN ABSOLUTE measured slack at that
-        # corner, stated in the row so the denominator is never a guess. Per
-        # path it would divide by a slack that can sit at zero, which turns a
-        # 1 ps error into thousands of percent and makes the average useless.
-        we = (a["wns_m"] - a["wns_t"]) if n else None
-        # The WNS error in percent is against that path's own measured slack --
-        # WNS is one path, so its own value is the only denominator that means
-        # anything. Near zero it does not, and then there is no percentage.
-        wp = (round(100.0 * we / abs(a["wns_t"]), 3)
-              if n and abs(a["wns_t"]) > 1e-9 else None)
-        out.append({
-            "design": design, "temp": temp, "corner": corner,
-            "n_paths": a["n"],
-            "mean_truth_ps": round(a["sum_t"] / n, 3) if n else None,
-            "mae_ps": round(a["sum"] / n, 3) if n else None,
-            "wns_truth_ps": round(a["wns_t"], 3) if n else None,
-            "wns_model_ps": round(a["wns_m"], 3) if n else None,
-            "wns_err_ps": round(we, 3) if n else None,
-            "wns_err_pct": wp,
-        })
-    return out
+            i = int(np.where(ok)[0][int(np.argmin(t[ok]))])
+            we = float(md[i] - t[i])
+            row.update(
+                mean_truth_ps=round(float(t[ok].mean()), 3),
+                mae_ps=round(float(e.mean()), 3),
+                wns_truth_ps=round(float(t[i]), 3),
+                wns_model_ps=round(float(md[i]), 3),
+                wns_err_ps=round(we, 3),
+                # against that path's own measured slack -- WNS is one path, so
+                # its own value is the only denominator that means anything.
+                # Near zero it does not, and then there is no percentage.
+                wns_err_pct=(round(100.0 * we / abs(float(t[i])), 3)
+                             if abs(float(t[i])) > 1e-9 else None))
+            out.append(row)
+    return sorted(out, key=lambda r: (r["design"], r["temp"], r["corner"]))
 
 
 def _print_corner_table(rows: list) -> None:

@@ -81,7 +81,7 @@ def _verbose() -> bool:
 
     The default is quiet: an epoch line without the metrics, and one combined
     figure at the end. Nothing is lost by that -- every number that stops being
-    printed is written to summary.json and predictions_hidden.csv -- and the
+    printed is written to summary.json and predictions_hidden.npz -- and the
     screen stays readable across the six models a full run trains.
     """
     return os.environ.get("SI_VERBOSE", "0") != "0"
@@ -931,64 +931,36 @@ class Trainer:
 
     def export_predictions(self, out_dir: str, corner_idx=None, bs: int = 512,
                            tag: str = "hidden") -> np.ndarray:
-        """Dump per-(path, corner) MODEL predictions in ps (+ truth comparison
-        when a measurement exists; pure-inference corners get predictions only).
+        """Dump per-(path, corner) MODEL predictions in ps, as ``.npz``.
 
-        Writes ``predictions_<tag>.csv`` and ``.npz`` (path_keys, corners,
-        truth_ps, model_ps). The OLS base is never reported anywhere -- to
-        inspect base-only quality use the standalone
-        ``bash scripts/run.sh base``. Default corners = hidden;
-        at SEEN corners the target's own token is masked (LOO-style).
+        ``predictions_<tag>.npz`` carries path_keys, corners, truth_ps and
+        model_ps. It is the machine-readable hand-off that ``merge`` reads, and
+        nothing else: the file a person opens is the report
+        (``_all/predict_<temp>_<request>.rpt``), which has the same numbers
+        laid out in columns plus the per-corner summary. There used to be a CSV
+        of identical content beside this, written for merge to parse and never
+        read by anyone -- two files, one of them redundant, in a directory
+        people already found crowded.
+
+        The OLS base is not reported here -- to inspect base-only quality use
+        the standalone ``bash scripts/run.sh base``. Default corners = hidden;
+        at SEEN corners the target's own token is masked (LOO-style). A corner
+        with no measurement gets NaN truth, not a dropped row.
         """
         idx = self.split.hidden_idx if corner_idx is None else np.asarray(corner_idx)
         pred = self.predict_corners(idx, bs)
-
         truth = self.slack_ps.cpu().numpy()[:, idx]
         keys = [str(x) for x in self.ds["path_keys"]]
         corners = [self.split.corners[int(i)] for i in idx]
-        np.savez_compressed(
-            f"{out_dir}/predictions_{tag}.npz",
-            path_keys=np.asarray(keys), corners=np.asarray(corners),
-            truth_ps=truth, model_ps=pred)
-        with open(f"{out_dir}/predictions_{tag}.csv", "w") as f:
-            f.write("path_key,corner,truth_ps,model_ps,model_err_ps\n")
-            for k, cn in enumerate(corners):
-                for p in range(self.N):
-                    t, md = truth[p, k], pred[p, k]
-                    if np.isfinite(t):        # truth available -> comparison too
-                        f.write(f"{keys[p]},{cn},{t:.3f},{md:.3f},{md - t:.3f}\n")
-                    else:                     # pure inference -> prediction only
-                        f.write(f"{keys[p]},{cn},,{md:.3f},\n")
-            self._write_pred_summary(f, corners, truth, pred)
-        print(f"[PRED] wrote {out_dir}/predictions_{tag}.csv (+.npz): "
-              f"{self.N} paths x {len(idx)} corners", flush=True)
+        fp = "%s/predictions_%s.npz" % (out_dir, tag)
+        np.savez_compressed(fp, path_keys=np.asarray(keys),
+                            corners=np.asarray(corners),
+                            truth_ps=truth, model_ps=pred)
+        # Always: this is the only line that says where the numbers went, and
+        # the quiet default is about per-model result blocks, not about files.
+        print("[PRED] wrote %s: %d paths x %d corners"
+              % (fp, len(keys), len(corners)), flush=True)
         return pred
-
-    @staticmethod
-    def _write_pred_summary(f, corners, truth, pred) -> None:
-        """Per-corner block under the path rows, after one blank line.
-
-        The rows above are per path; this is the same thing per corner, so the
-        answer to 'how good is this corner' does not need a spreadsheet. Its
-        own header, because its columns are not the path rows' columns -- the
-        predict files are laid out the same way, and stage_merge knows to skip
-        rows marked `summary` rather than copy them as data.
-
-        Comparing the two means would hide the error (a path 20 ps high and one
-        20 ps low cancel), so the absolute error is computed per path first.
-        """
-        f.write("\n")
-        f.write("summary,corner,mean_truth_ps,mean_model_ps,"
-                "mean_abs_err_ps,worst_abs_err_ps\n")
-        for k, cn in enumerate(corners):
-            t, md = truth[:, k], pred[:, k]
-            ok = np.isfinite(t)
-            if ok.any():
-                e = np.abs(md[ok] - t[ok])
-                f.write("summary,%s,%.3f,%.3f,%.3f,%.3f\n"
-                        % (cn, t[ok].mean(), md.mean(), e.mean(), e.max()))
-            else:                      # a pure-inference corner: no truth
-                f.write("summary,%s,,%.3f,,\n" % (cn, md.mean()))
 
     def report(self, out_dir: str, best_ep: int) -> dict:
         rows = {}

@@ -207,15 +207,15 @@ def test_corner_table_is_keyed_by_corner_not_by_model(tmp_path):
     their paths are counted and their error left empty."""
     from si_model.run import _corner_table
 
-    fp = tmp_path / "predictions_hidden.csv"
-    fp.write_text(
-        "design,temp,path_key,corner,truth_ps,model_ps,model_err_ps\n"
-        "cpu,125,A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n"
-        "cpu,125,B,SSPG_0p54V_rcmax,10.0,6.0,-4.0\n"
-        "cpu,m25,A,SSPG_0p5V_cmax,10.0,11.0,1.0\n"
-        "cpu,m25,A,SSPG_0p57V_cmax,,11.0,\n")          # query corner (no ground truth)
-
-    rows = {(r["temp"], r["corner"]): r for r in _corner_table(str(fp))}
+    nan = float("nan")
+    entries = [
+        ("cpu", "125", ["SSPG_0p54V_rcmax"],
+         np.array([[10.0], [10.0]]), np.array([[12.0], [6.0]])),
+        # a query corner alongside a measured one, in one model
+        ("cpu", "m25", ["SSPG_0p5V_cmax", "SSPG_0p57V_cmax"],
+         np.array([[10.0, nan]]), np.array([[11.0, 11.0]])),
+    ]
+    rows = {(r["temp"], r["corner"]): r for r in _corner_table(entries)}
     assert len(rows) == 3
     assert rows[("125", "SSPG_0p54V_rcmax")]["mae_ps"] == 3.0      # (2+4)/2
     assert rows[("125", "SSPG_0p54V_rcmax")]["wns_err_ps"] is not None
@@ -237,13 +237,14 @@ def test_merge_flags_predictions_older_than_the_weights(project, tmp_path, capsy
     models = expand(project)[:1]
     d = models[0]["cfg"]["train"]["out_dir"] = str(tmp_path / "m")
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "predictions_hidden.csv"), "w") as f:
-        f.write("path_key,corner,truth_ps,model_ps,model_err_ps\n"
-                "A,SSPG_0p54V_rcmax,10.0,12.0,2.0\n")
+    pred_fp = os.path.join(d, "predictions_hidden.npz")
+    np.savez_compressed(pred_fp, path_keys=np.asarray(["A"]),
+                        corners=np.asarray(["SSPG_0p54V_rcmax"]),
+                        truth_ps=np.array([[10.0]]), model_ps=np.array([[12.0]]))
     with open(os.path.join(d, "summary.json"), "w") as f:
         _json.dump({"all": {"hidden_mae_ps": 1.0}}, f)
     open(os.path.join(d, "best.pt"), "w").close()          # weights are newer
-    os.utime(os.path.join(d, "predictions_hidden.csv"), (1, 1))
+    os.utime(pred_fp, (1, 1))
 
     project["out"] = {"runs": str(tmp_path / "out"), "cache": str(tmp_path / "c")}
     stage_merge(models, project, "hidden")
@@ -1025,11 +1026,10 @@ def test_predict_replays_the_training_base(real_tree, tmp_path, monkeypatch):
     m = model()
     build(m["cfg"])
     stage_train(m)
-    fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
+    fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.npz")
+
     def _preds(path):
-        # the file ends with a per-corner summary block after a blank line
-        return [float(r["model_ps"]) for r in _csv.DictReader(open(path))
-                if r.get("path_key") not in (None, "", "summary")]
+        return np.load(path, allow_pickle=False)["model_ps"].ravel().tolist()
 
     trained = _preds(fp)
 
@@ -1243,14 +1243,14 @@ def test_predict_writes_the_report_for_the_declared_hidden_corners(
         assert labels == want, (labels, want)
         assert len(paths) == 12
 
-        # (2) the same numbers as the csv the trainer wrote
-        csv_fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
+        # (2) the same numbers as the file the trainer wrote
+        npz_fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.npz")
+        z = np.load(npz_fp, allow_pickle=False)
         want_ps = {}
-        with open(csv_fp, newline="", encoding="utf-8") as f:
-            for row in _csv.DictReader(f):
-                if row.get("path_key") and row["path_key"] != "summary":
-                    want_ps[(row["path_key"], row["corner"])] = float(row["model_ps"])
-        assert want_ps, csv_fp
+        for ci, corner in enumerate([str(x) for x in z["corners"]]):
+            for pi, key in enumerate([str(x) for x in z["path_keys"]]):
+                want_ps[(key, corner)] = float(z["model_ps"][pi, ci])
+        assert want_ps, npz_fp
         by_v = {}
         for (key, corner), ps in want_ps.items():
             by_v.setdefault(corner, {})[key] = ps
@@ -1878,13 +1878,13 @@ def test_model_carries_to_another_circuit(real_tree, tmp_path, monkeypatch):
     from si_model.run import stage_predict
 
     out = m["cfg"]["train"]["out_dir"]
-    own_fp = os.path.join(out, "predictions_hidden.csv")
+    own_fp = os.path.join(out, "predictions_hidden.npz")
     stage_predict(model(), "hidden")
-    before = open(own_fp).read()
+    before = open(own_fp, "rb").read()
     stage_predict(model(), "hidden", weights=ckpt)
-    assert open(own_fp).read() == before, "the transfer overwrote the own-model file"
+    assert open(own_fp, "rb").read() == before, "the transfer overwrote the own-model file"
     src = os.path.basename(os.path.dirname(os.path.abspath(ckpt)))
-    assert os.path.exists(os.path.join(out, "predictions_hidden_from_%s.csv" % src)), \
+    assert os.path.exists(os.path.join(out, "predictions_hidden_from_%s.npz" % src)), \
         sorted(os.listdir(out))
 
     # a second circuit that numbers its cells differently
@@ -2218,16 +2218,22 @@ def test_clock_edge_row_column_layouts():
                                                               q.capture_edge)
 
 
-def test_predictions_file_carries_a_per_corner_summary(real_tree, tmp_path, monkeypatch):
-    """predictions_<tag>.csv ends with a per-corner block, and merge rebuilds
-    it rather than copying it in among the paths.
+def test_merge_summary_agrees_with_the_per_model_arrays(real_tree, tmp_path,
+                                                         monkeypatch):
+    """What merge reports per corner must be what the per-model files contain.
 
-    The per-model file is what merge concatenates, so summary rows appended to
-    it would have landed in the middle of the merged path rows and been read
-    back as data by anything that parses it -- _corner_table included.
+    The prediction hand-off is `.npz` only -- path_keys, corners, truth_ps,
+    model_ps -- and the summary is DERIVED from it rather than written beside
+    it. There used to be a CSV of the same numbers with a per-corner block
+    appended under a blank line, which merge had to know to skip: two files and
+    a parsing rule where an array and a derivation do.
+
+    So this recomputes the summary by hand from the arrays and demands the same
+    answer, which is the property that matters -- nobody reads the npz, and a
+    derived table that drifts from it drifts invisibly.
     """
     pytest.importorskip("torch")
-    import csv as _csv
+    import json as _json
 
     from si_model.parsing.build_dataset import build
     from si_model.run import (expand, load_project, select, stage_merge,
@@ -2244,29 +2250,36 @@ def test_predictions_file_carries_a_per_corner_summary(real_tree, tmp_path, monk
     build(m["cfg"])
     stage_train(m)
 
-    fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_hidden.csv")
-    rows = list(_csv.reader(open(fp, encoding="utf-8")))
-    b = rows.index([])
-    paths, summ = rows[1:b], rows[b + 1:]
-    assert summ[0] == ["summary", "corner", "mean_truth_ps", "mean_model_ps",
-                       "mean_abs_err_ps", "worst_abs_err_ps"]
-    assert len(summ) - 1 == len({r[1] for r in paths}), "one row per corner"
-    for r in summ[1:]:
-        want = [(float(x[2]), float(x[3])) for x in paths if x[1] == r[1]]
-        assert abs(float(r[2]) - sum(t for t, _ in want) / len(want)) < 1e-3
-        assert abs(float(r[3]) - sum(md for _, md in want) / len(want)) < 1e-3
-        err = [abs(md - t) for t, md in want]
-        assert abs(float(r[4]) - sum(err) / len(err)) < 1e-3
-        assert abs(float(r[5]) - max(err)) < 1e-3
+    out = m["cfg"]["train"]["out_dir"]
+    assert not [f for f in os.listdir(out) if f.endswith(".csv")], \
+        sorted(os.listdir(out))
+    z = np.load(os.path.join(out, "predictions_hidden.npz"), allow_pickle=False)
+    corners = [str(x) for x in z["corners"]]
+    truth, model = z["truth_ps"], z["model_ps"]
+    assert truth.shape == model.shape == (len(z["path_keys"]), len(corners))
 
     stage_merge([m], p, "hidden")
-    mg = list(_csv.reader(open("runs/setup/_all/predictions_hidden.csv",
-                               encoding="utf-8")))
-    mb = mg.index([])
-    assert all(r[2] != "summary" for r in mg[1:mb]), "no summary row among the paths"
-    assert len(mg[1:mb]) == len(paths)
-    assert mg[mb + 1] == ["design", "temp", "summary", "corner", "mean_truth_ps",
-                          "mean_model_ps", "mean_abs_err_ps", "worst_abs_err_ps"]
-    by = {r[3]: r for r in mg[mb + 2:]}
-    for r in summ[1:]:
-        assert by[r[1]][4:] == r[2:], "merged summary must agree with the model's"
+    with open("runs/setup/_all/summary.json") as f:
+        by = {r["corner"]: r for r in _json.load(f)["by_corner"]}
+    assert sorted(by) == sorted(corners)
+    for ci, cn in enumerate(corners):
+        t, md = truth[:, ci], model[:, ci]
+        r = by[cn]
+        assert r["n_paths"] == len(t)
+        assert abs(r["mean_truth_ps"] - float(t.mean())) < 1e-3
+        assert abs(r["mae_ps"] - float(np.abs(md - t).mean())) < 1e-3
+        # WNS is the worst MEASURED path against its OWN prediction -- not the
+        # two minima taken apart, which can be different paths
+        w = int(np.argmin(t))
+        assert abs(r["wns_truth_ps"] - float(t[w])) < 1e-3
+        assert abs(r["wns_model_ps"] - float(md[w])) < 1e-3
+        assert abs(r["wns_err_ps"] - float(md[w] - t[w])) < 1e-3
+
+    # the merged file is one long table, design and temp as columns, so
+    # circuits and temperatures trained separately read as one thing
+    g = np.load("runs/setup/_all/predictions_hidden.npz", allow_pickle=False)
+    assert len(g["truth_ps"]) == truth.size
+    assert set(str(x) for x in g["design"]) == {"boomcore"}
+    assert set(str(x) for x in g["temp"]) == {"m25"}
+    assert sorted(set(str(x) for x in g["corner"])) == sorted(corners)
+    assert not os.path.exists("runs/setup/_all/predictions_hidden.csv")

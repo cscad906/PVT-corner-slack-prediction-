@@ -313,18 +313,10 @@ class Trainer:
             f"{out_dir}/predictions_{tag}.npz",
             path_keys=np.asarray(keys), corners=np.asarray(corners),
             truth_ns=truth, model_ns=pred)
-        denom = np.clip(np.abs(truth), 1e-9, None)
-        with open(f"{out_dir}/predictions_{tag}.csv", "w") as f:
-            f.write("path_key,corner,truth_ns,model_ns,model_ape_pct\n")
-            for k, cn in enumerate(corners):
-                for p in range(self.N):
-                    t, md = truth[p, k], pred[p, k]
-                    if np.isfinite(t):        # truth available -> comparison too
-                        f.write(f"{keys[p]},{cn},{t:.6f},{md:.6f},"
-                                f"{abs(md - t) / denom[p, k] * 100:.3f}\n")
-                    else:                     # pure inference -> prediction only
-                        f.write(f"{keys[p]},{cn},,{md:.6f},\n")
-        print(f"[PRED] wrote {out_dir}/predictions_{tag}.csv (+.npz): "
+        # npz only, like the slack task: the CSV beside it held the same
+        # numbers for merge to parse and nobody else read it. The file a person
+        # opens is the report.
+        print(f"[PRED] wrote {out_dir}/predictions_{tag}.npz: "
               f"{self.N} paths x {len(idx)} corners", flush=True)
         return pred
 

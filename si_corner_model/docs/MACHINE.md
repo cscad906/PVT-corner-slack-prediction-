@@ -222,7 +222,7 @@ E  2/40 loss=  218.36  lr=2.0e-03
 | 코너별 모델 오차 · SI 오차 | `runs/<mode>/<회로>/<온도>/summary.json` 의 `by_corner` |
 | 전체 통합 코너 표 | `runs/<mode>/_all/summary.json` (코너 단위. 모델별 분할은 없다) |
 | train/val/test 별 요약, best epoch | 같은 파일 |
-| 경로별 예측 (truth · base · model) | `predictions_hidden.csv` |
+| 경로별 예측 (사람이 읽는 것) | `runs/<mode>/_all/predict_<온도>_hidden.rpt` |
 | 홀드아웃 코너 리포트 (사람이 읽는 것) | `runs/<mode>/_all/predict_<온도>_hidden.rpt` |
 
 ### 설정은 `config.yaml` 의 `run:` 에 있다
@@ -386,10 +386,10 @@ si_corner_model/
 └── runs/<mode>/
     ├── <회로>/<온도>/best.pt                  학습된 가중치
     ├── <회로>/<온도>/summary.json             성적
-    ├── <회로>/<온도>/predictions_hidden.csv   경로별 예측
+    ├── <회로>/<온도>/predictions_hidden.npz   경로별 예측 (merge 입력)
     ├── <회로>/model.pt                        회로당 한 파일 (bundle)
     ├── _all/predict_<온도>_hidden.rpt         홀드아웃 코너 리포트 (predict)
-    └── _all/predictions_hidden.csv            전 회로·온도 합본 (merge)
+    └── _all/predictions_hidden.npz            전 회로·온도 합본 (merge, 기계용)
     └── _all/summary.json                      코너별 성적표
 ```
 
@@ -410,7 +410,7 @@ bash scripts/run.sh predict --temp m25      # 그 온도만
 전부 채워진다. 회로마다 홀드아웃이 다르면 각 회로는 **자기 홀드아웃 열만** 채우고
 나머지는 빈칸이다 (남의 홀드아웃은 이 회로엔 학습에 쓴 코너라 같은 숫자가 아니다).
 
-`merge` 가 읽는 회로별 `predictions_hidden.csv` 도 같이 갱신된다.
+`merge` 가 읽는 회로별 `predictions_hidden.npz` 도 같이 갱신된다.
 
 ### 측정 안 한 코너까지 예측하기 (`predict --at` / `--sweep`)
 

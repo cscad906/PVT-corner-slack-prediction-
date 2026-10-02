@@ -282,7 +282,7 @@ files:
 cache/<mode>/<회로>/<온도>/dataset.npz    ← 데이터도 따로
 runs/<mode>/<회로>/<온도>/best.pt         ← 학습도 따로 (학습 중 체크포인트)
 runs/<mode>/<회로>/model.pt               ← ★ 그 회로의 온도 전부가 이 한 파일에
-runs/<mode>/_all/predictions_hidden.csv   ← 결과는 design,temp 열이 붙어 한 파일로
+runs/<mode>/_all/predict_<온도>_hidden.rpt ← 사람이 읽는 결과 (경로별 + 코너별 요약)
 ```
 
 **밖에서는 회로 하나 = 모델 하나로 보인다.** 온도를 나누는 건 물리적 이유가 있다 —
@@ -476,10 +476,10 @@ bash scripts/run.sh predict --corners all              # seen 코너까지 다 �
 
 ```
 runs/<mode>/_all/predict_<온도>_hidden.rpt ★ 홀드아웃 코너 리포트 (vim 으로 읽는 것)
-runs/<mode>/_all/predictions_hidden.csv   ★ 전 회로·전 온도 통합본
+runs/<mode>/_all/predictions_hidden.npz   전 회로·전 온도 통합본 (기계용)
 runs/<mode>/_all/summary.json             ★ 모델별 지표
 runs/<mode>/<회로>/model.pt               ★ 넘길 가중치 (온도 전부 포함, 회로당 하나)
-runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summary.json, predictions_*.csv)
+runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summary.json, predictions_*.npz)
 ```
 
 ```
@@ -531,7 +531,7 @@ bash scripts/run.sh predict      # 예측 다시 뽑기  ★ 반드시 다시 �
 bash scripts/run.sh merge        # 코너별 성적표
 ```
 
-**`predict` 를 꼭 다시 돌려야 한다.** `predictions_*.csv` 는 학습이 끝까지
+**`predict` 를 꼭 다시 돌려야 한다.** `predictions_*.npz` 는 학습이 끝까지
 갔을 때만 자동으로 쓰인다. 안 돌리면 이전 실행의 예측이 그대로 남아 있고,
 새 체크포인트와 아귀가 안 맞는다.
 
@@ -644,7 +644,7 @@ bash scripts/run.sh sweep      # lambda_si {0,0.1,1,10} 비교
 [ ]         + 온도별 홀드아웃 (temps[].hidden_corners)  -> docs/HOLDOUT.md
 [ ] STEP 4  bash scripts/run.sh list    -> models 6개 / corners / hidden 2개 / [SI:on]
 [ ] STEP 5  build -> C 확인, base -> 수치 상식적인지
-[ ] STEP 6  bash scripts/run.sh all     -> runs/<mode>/_all/predictions_hidden.csv
+[ ] STEP 6  bash scripts/run.sh all     -> runs/<mode>/_all/predict_<온도>_hidden.rpt
 [ ]                                        + runs/<mode>/<회로>/model.pt
 [ ] STEP 7  파싱 0개면: 코너 간 경로 집합 동일한지 확인
 [ ] STEP 8  SI: crosstalk_subdir 채우고 재빌드 -> S=... 확인

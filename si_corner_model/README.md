@@ -66,10 +66,10 @@ setup/hold 를 그 실행만: `bash scripts/run.sh all --mode hold` (또는 `env
 
 ```
 runs/<mode>/_all/predict_<온도>_hidden.rpt ★ 홀드아웃 코너 리포트 (vim 으로 읽는 것)
-runs/<mode>/_all/predictions_hidden.csv   ★ 전 회로·전 온도 통합본
+runs/<mode>/_all/predictions_hidden.npz   전 회로·전 온도 통합본 (기계용)
 runs/<mode>/_all/summary.json             ★ 모델별 지표
 runs/<mode>/<회로>/model.pt               ★ 그 회로의 가중치 — 온도 전부가 이 한 파일에
-runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summary.json, predictions_*.csv)
+runs/<mode>/<회로>/<온도>/                 온도별 개별 (best.pt, summary.json, predictions_*.npz)
 ```
 
 **넘길 건 회로당 `model.pt` 하나다.** 온도는 내부적으로만 갈라져 있다 — 125C 와
