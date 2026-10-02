@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scatter and rank-movement figures, from the prediction files on disk.
 
-    python3 scripts/plot.py                                  # everything under runs/setup
+    python3 scripts/plot.py                 # runs/setup -> runs/setup/_all/plots
     python3 scripts/plot.py --runs runs/extrapolation/setup  # the experiment tree
     python3 scripts/plot.py --design MFC_Timing_Report --temp 125
     python3 scripts/plot.py --corners hidden --out plots
@@ -192,7 +192,10 @@ def main(argv=None):
                          "or hidden_from_<circuit> for a borrowed model")
     ap.add_argument("--design", default=None, help="this circuit only")
     ap.add_argument("--temp", default=None, help="this temperature only")
-    ap.add_argument("--out", default="plots", help="where the .png go")
+    ap.add_argument("--out", default=None,
+                    help="where the .png go (default <runs>/_all/plots, so the "
+                         "figures sit with the run they came from and two "
+                         "experiments cannot overwrite each other)")
     ap.add_argument("--track", type=int, default=5,
                     help="how many paths the rank figure follows (default 5)")
     ap.add_argument("--only", choices=["scatter", "rank"], default=None,
@@ -222,7 +225,13 @@ def main(argv=None):
               file=sys.stderr)
         return 1
 
-    os.makedirs(args.out, exist_ok=True)
+    # Beside the predictions by default. With a fixed `plots/` in the working
+    # directory, drawing setup and then the extrapolation experiment wrote the
+    # same file names -- same circuit, same temperature, same corner -- and the
+    # second quietly replaced the first.
+    out_dir = args.out or os.path.join(args.runs, "_all", "plots")
+    args.out = out_dir
+    os.makedirs(out_dir, exist_ok=True)
     made = []
     for circuit, temp, fp in found:
         keys, corners, truth, model = _load(fp)

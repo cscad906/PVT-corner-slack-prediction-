@@ -390,7 +390,7 @@ si_corner_model/
     ├── <회로>/model.pt                        회로당 한 파일 (bundle)
     ├── _all/predict_<온도>_hidden.rpt         홀드아웃 코너 리포트 (predict)
     ├── _all/runtime.rpt                      회로별 소요시간 (실행마다 한 줄 추가)
-    └── plots/                                scripts/plot.py 가 그리는 그림 (별도 실행)
+    └── _all/plots/                           scripts/plot.py 가 그리는 그림 (별도 실행)
     └── _all/predictions_hidden.npz            전 회로·온도 합본 (merge, 기계용)
     └── _all/summary.json                      코너별 성적표
 ```
@@ -577,18 +577,22 @@ designs:
 발표 자료의 **scatter plot** 과 **rank movement** 그래프를 예측 파일에서 바로 그린다.
 
 ```csh
-python3 scripts/plot.py                                   # runs/setup 전부 -> plots/
+python3 scripts/plot.py                                   # runs/setup 전부
 python3 scripts/plot.py --runs runs/extrapolation/setup   # 외삽 실험 쪽
 python3 scripts/plot.py --design MFC_Timing_Report --temp 125
-python3 scripts/plot.py --corners all --out plots_all     # seen 까지 전부
+python3 scripts/plot.py --corners all --only rank         # seen 까지, rank 만
 ```
 
-나오는 파일:
+**그림은 그 결과 폴더 안에** 들어간다 (`--out` 으로 바꿀 수 있다):
 
 ```
-plots/scatter_<회로>_<온도>_<코너>.png    코너마다 하나. 실측 vs 예측, y=x 점선, MAE·N
-plots/rank_<회로>_<온도>.png              코너를 가로축으로, True / Predicted 순위 궤적 2단
+runs/setup/_all/plots/scatter_<회로>_<온도>_<코너>.png   코너마다 하나. 실측 vs 예측, y=x, MAE·N
+runs/setup/_all/plots/rank_<회로>_<온도>.png             True / Predicted 순위 궤적 2단
+runs/extrapolation/setup/_all/plots/...                  외삽 실험은 자기 폴더로
 ```
+
+실행한 위치에 `plots/` 를 만들지 않는다. 그러면 setup 과 외삽 실험을 차례로 그릴 때
+**회로·온도·코너가 같아서 같은 파일 이름으로 덮어쓴다.**
 
 - **scatter**: 대각선에서 떨어진 거리가 오차다. 한쪽 끝에서만 휘면 "범위 가운데는
   맞고 끝에서 틀리는" 모델인데, MAE 하나로는 안 보인다
