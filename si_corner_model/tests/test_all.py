@@ -1871,6 +1871,22 @@ def test_model_carries_to_another_circuit(real_tree, tmp_path, monkeypatch):
     same = _load_predictor(model(), weights=ckpt).predict_corners(H)
     np.testing.assert_allclose(same, own, rtol=1e-6, atol=1e-6)
 
+    # A borrowed run must not overwrite this circuit's own result.
+    # predictions_<corners>.csv is what `merge` reads, so a transfer tagged the
+    # same way would have the merged table report another circuit's correction
+    # as this one's -- with nothing in the file to say so.
+    from si_model.run import stage_predict
+
+    out = m["cfg"]["train"]["out_dir"]
+    own_fp = os.path.join(out, "predictions_hidden.csv")
+    stage_predict(model(), "hidden")
+    before = open(own_fp).read()
+    stage_predict(model(), "hidden", weights=ckpt)
+    assert open(own_fp).read() == before, "the transfer overwrote the own-model file"
+    src = os.path.basename(os.path.dirname(os.path.abspath(ckpt)))
+    assert os.path.exists(os.path.join(out, "predictions_hidden_from_%s.csv" % src)), \
+        sorted(os.listdir(out))
+
     # a second circuit that numbers its cells differently
     d = dict(np.load(model()["cfg"]["data"]["cache"]))
     vocab = [str(x) for x in d["fam_vocab"]]

@@ -2452,7 +2452,16 @@ def stage_predict(m: dict, corners: str, weights: "str | None" = None) -> None:
               f"Name the corners you want instead: predict --at / --sweep.",
               flush=True)
         return
-    tr.export_predictions(m["cfg"]["train"]["out_dir"], idx, tag=corners)
+    # Borrowed weights write to their OWN file. predictions_<corners>.csv is
+    # this circuit's own trained result and is what `merge` reads, so a transfer
+    # run tagged the same way would overwrite it and the merged table would
+    # report another circuit's correction as this one's. Both files coexist now,
+    # and the name says where the weights came from.
+    tag = corners
+    if weights:
+        src = os.path.basename(os.path.dirname(os.path.abspath(weights)))
+        tag = "%s_from_%s" % (corners, src or "weights")
+    tr.export_predictions(m["cfg"]["train"]["out_dir"], idx, tag=tag)
 
 
 def _split_request(models: list, corners: str) -> "tuple[list, dict]":
