@@ -195,6 +195,10 @@ def main(argv=None):
     ap.add_argument("--out", default="plots", help="where the .png go")
     ap.add_argument("--track", type=int, default=5,
                     help="how many paths the rank figure follows (default 5)")
+    ap.add_argument("--only", choices=["scatter", "rank"], default=None,
+                    help="draw just one kind. --corners all gives one scatter "
+                         "per corner, which is 14-21 files per model on a wide "
+                         "grid; `--only rank` is usually what that run is for")
     args = ap.parse_args(argv)
 
     try:
@@ -222,9 +226,12 @@ def main(argv=None):
     made = []
     for circuit, temp, fp in found:
         keys, corners, truth, model = _load(fp)
-        made += scatter(plt, keys, corners, truth, model, circuit, temp, args.out)
-        made += rank_movement(plt, keys, corners, truth, model, circuit, temp,
-                              args.out, args.track)
+        if args.only != "rank":
+            made += scatter(plt, keys, corners, truth, model, circuit, temp,
+                            args.out)
+        if args.only != "scatter":
+            made += rank_movement(plt, keys, corners, truth, model, circuit,
+                                  temp, args.out, args.track)
     for fp in made:
         print("wrote %s" % fp)
     print("%d figures in %s/" % (len(made), args.out))

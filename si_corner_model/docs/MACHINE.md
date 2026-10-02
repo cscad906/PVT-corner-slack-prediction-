@@ -597,8 +597,20 @@ plots/rank_<회로>_<온도>.png              코너를 가로축으로, True / 
   수천 개 중 거의 전부라 아무것도 말해주지 않는다. 왼쪽이 실측 순위, 오른쪽이 예측
   순위이고, **모양이 같으면 그 모델로 critical path 를 골라도 된다**는 뜻이다. ps 오차가
   조금 있어도 순서가 살아있으면 쓸모가 있다
-- 코너가 많아야 궤적이 보인다. **`predict --corners all`** 로 돌리면 seen 까지 전부
-  들어가서 제일 풍부하다. 측정값 없는 코너(query)는 scatter 에서 빠진다
+- 코너가 많아야 궤적이 보인다. **`--corners all` 은 먼저 `predict` 에 줘야 한다** —
+  `plot.py` 는 어떤 파일을 읽을지 고를 뿐이다:
+
+  ```csh
+  bash scripts/run.sh predict --corners all      # predictions_all.npz 를 만든다
+  python3 scripts/plot.py --corners all --only rank
+  ```
+
+  그러면 회로마다 **자기 격자 전체**가 궤적이 된다 (PERIC0 8/12, MFC 10/15,
+  MIF 14/21 코너). seen 코너도 예측값이다 — 자기 토큰을 가린 LOO 방식이라
+  외운 값이 아니다
+- **`--only rank`** 를 권한다. `--corners all` 이면 scatter 가 코너마다 하나씩
+  생겨서 회로 6개면 70~100장이 된다. `--only scatter` 도 있다
+- 측정값 없는 코너(query)는 scatter 에서 빠진다
 
 **matplotlib 이 필요하다.** 파이프라인의 다른 부분은 쓰지 않으므로, 없는 장비에서는
 이 스크립트만 안 되고 그렇다고 한 줄로 알려준다 (`pip install matplotlib`). 디스플레이가
