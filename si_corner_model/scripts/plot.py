@@ -33,16 +33,22 @@ import numpy as np
 
 
 def _load(fp):
-    """(path_keys, corners, truth[N,C], model[N,C]) from a predictions npz."""
+    """(path_keys, corners, seen[C], truth[N,C], model[N,C]) from a npz.
+
+    `seen` marks the corners the model was fit on. Files written before it was
+    recorded come back all-False, which is what predictions_hidden.npz is.
+    """
     z = np.load(fp, allow_pickle=False)
     keys = [str(x) for x in z["path_keys"]]
     corners = [str(x) for x in z["corners"]]
+    seen = (np.asarray(z["seen"], bool) if "seen" in z.files
+            else np.zeros(len(corners), bool))
     if "truth_ps" in z:
         truth, model = np.asarray(z["truth_ps"], float), np.asarray(z["model_ps"], float)
     else:                                   # the slew task stores ns
         truth = np.asarray(z["truth_ns"], float) * 1000.0
         model = np.asarray(z["model_ns"], float) * 1000.0
-    return keys, corners, truth, model
+    return keys, corners, seen, truth, model
 
 
 def _find(runs, corners, design=None, temp=None):
@@ -64,8 +70,14 @@ def _find(runs, corners, design=None, temp=None):
     return out
 
 
-def scatter(plt, keys, corners, truth, model, circuit, temp, out_dir):
-    """One figure per corner: predicted against measured, with y = x.
+def scatter(plt, keys, corners, seen, truth, model, circuit, temp, out_dir,
+            include_seen=False):
+    """One figure per HELD-OUT corner: predicted against measured, with y = x.
+
+    Seen corners are skipped. The model was fit on them, so the scatter shows
+    the fit against its own data and is tight by construction -- a page of
+    those says nothing and buries the corners that do. `--include-seen` draws
+    them anyway.
 
     The diagonal is the whole content of the plot -- distance from it is the
     error, and a cloud that bends away from it at one end is a model that is
@@ -75,6 +87,8 @@ def scatter(plt, keys, corners, truth, model, circuit, temp, out_dir):
     """
     made = []
     for ci, corner in enumerate(corners):
+        if seen[ci] and not include_seen:
+            continue
         t, md = truth[:, ci], model[:, ci]
         ok = np.isfinite(t) & np.isfinite(md)
         if not ok.any():
@@ -121,8 +135,8 @@ def _ranks(y):
     return r
 
 
-def rank_movement(plt, keys, corners, truth, model, circuit, temp, out_dir,
-                  n_track=5):
+def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
+                  out_dir, n_track=5):
     """True and predicted rank trajectories, side by side.
 
     The tracked paths are the ones whose TRUE rank moves most, measured as the
@@ -136,6 +150,11 @@ def rank_movement(plt, keys, corners, truth, model, circuit, temp, out_dir,
 
     The two panels share a y axis so a difference in shape is the difference
     between the model and the measurement, not between two scalings.
+
+    Every corner is on the axis, seen ones included: a rank is a position
+    within one ordering, and dropping corners out of the middle would draw a
+    trajectory that never existed. The corners the model was fit on are marked
+    on the tick labels so what is held out stays visible.
     """
     ok_cols = [ci for ci in range(len(corners))
                if np.isfinite(truth[:, ci]).any() and np.isfinite(model[:, ci]).any()]
@@ -168,7 +187,9 @@ def rank_movement(plt, keys, corners, truth, model, circuit, temp, out_dir,
     for ax, title in zip(axes, ("True rank trajectory", "Predicted rank trajectory")):
         ax.set_title(title, fontsize=12)
         ax.set_xticks(range(len(cn)))
-        ax.set_xticklabels(cn, rotation=45, ha="right", fontsize=8)
+        ax.set_xticklabels([c + (" (seen)" if seen[ok_cols[i]] else "")
+                            for i, c in enumerate(cn)],
+                           rotation=45, ha="right", fontsize=8)
         ax.grid(True, lw=0.5, alpha=0.5)
     axes[0].set_ylabel("Rank position  (1 = worst slack)")
     fig.suptitle("%s %s - rank movement over %d corners (baseline %s)"
@@ -198,6 +219,9 @@ def main(argv=None):
                          "experiments cannot overwrite each other)")
     ap.add_argument("--track", type=int, default=5,
                     help="how many paths the rank figure follows (default 5)")
+    ap.add_argument("--include-seen", action="store_true",
+                    help="scatter the corners the model was fit on too. Off: "
+                         "those show the fit against its own data")
     ap.add_argument("--only", choices=["scatter", "rank"], default=None,
                     help="draw just one kind. --corners all gives one scatter "
                          "per corner, which is 14-21 files per model on a wide "
@@ -234,13 +258,13 @@ def main(argv=None):
     os.makedirs(out_dir, exist_ok=True)
     made = []
     for circuit, temp, fp in found:
-        keys, corners, truth, model = _load(fp)
+        keys, corners, seen, truth, model = _load(fp)
         if args.only != "rank":
-            made += scatter(plt, keys, corners, truth, model, circuit, temp,
-                            args.out)
+            made += scatter(plt, keys, corners, seen, truth, model, circuit,
+                            temp, args.out, args.include_seen)
         if args.only != "scatter":
-            made += rank_movement(plt, keys, corners, truth, model, circuit,
-                                  temp, args.out, args.track)
+            made += rank_movement(plt, keys, corners, seen, truth, model,
+                                  circuit, temp, args.out, args.track)
     for fp in made:
         print("wrote %s" % fp)
     print("%d figures in %s/" % (len(made), args.out))

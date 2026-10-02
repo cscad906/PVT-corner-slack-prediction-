@@ -952,9 +952,14 @@ class Trainer:
         truth = self.slack_ps.cpu().numpy()[:, idx]
         keys = [str(x) for x in self.ds["path_keys"]]
         corners = [self.split.corners[int(i)] for i in idx]
+        # Which corners the model was fit on. `--corners all` writes seen and
+        # held-out ones into the same file, and a scatter of a seen corner is
+        # not a result -- it is the fit looking at its own data. Without this
+        # flag nothing downstream can tell them apart.
+        seen = np.asarray([bool(self.split.seen[int(i)]) for i in idx])
         fp = "%s/predictions_%s.npz" % (out_dir, tag)
         np.savez_compressed(fp, path_keys=np.asarray(keys),
-                            corners=np.asarray(corners),
+                            corners=np.asarray(corners), seen=seen,
                             truth_ps=truth, model_ps=pred)
         # Always: this is the only line that says where the numbers went, and
         # the quiet default is about per-model result blocks, not about files.

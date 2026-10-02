@@ -18,15 +18,48 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
 
-def _write(runs, design, temp, corners, truth, model, keys=None):
+def _write(runs, design, temp, corners, truth, model, keys=None, seen=None):
     d = os.path.join(runs, design, str(temp))
     os.makedirs(d, exist_ok=True)
     n = len(truth)
+    kw = {} if seen is None else {"seen": np.asarray(seen, bool)}
     np.savez_compressed(
         os.path.join(d, "predictions_hidden.npz"),
         path_keys=np.asarray(keys or ["p%d" % i for i in range(n)]),
         corners=np.asarray(corners),
-        truth_ps=np.asarray(truth, float), model_ps=np.asarray(model, float))
+        truth_ps=np.asarray(truth, float), model_ps=np.asarray(model, float),
+        **kw)
+
+
+def test_scatter_skips_the_corners_the_model_was_fit_on(tmp_path):
+    """A seen corner's scatter is the fit against its own data -- tight by
+    construction, and with --corners all there are more of those than of the
+    held-out ones. They are skipped unless asked for; the rank figure still
+    spans every corner, because a rank is a position within one ordering and
+    dropping corners out of the middle draws a trajectory that never was."""
+    pytest.importorskip("matplotlib")
+    import plot
+
+    runs = str(tmp_path / "runs" / "setup")
+    rng = np.random.RandomState(1)
+    truth = rng.rand(20, 4) * 300.0
+    _write(runs, "cpu", "125", ["s1", "h1", "s2", "h2"], truth,
+           truth + rng.randn(20, 4), seen=[True, False, True, False])
+
+    out = str(tmp_path / "a")
+    assert plot.main(["--runs", runs, "--out", out, "--only", "scatter"]) == 0
+    assert sorted(os.listdir(out)) == ["scatter_cpu_125_h1.png",
+                                       "scatter_cpu_125_h2.png"]
+
+    out2 = str(tmp_path / "b")
+    assert plot.main(["--runs", runs, "--out", out2, "--only", "scatter",
+                      "--include-seen"]) == 0
+    assert len(os.listdir(out2)) == 4
+
+    # the rank figure keeps every corner and marks which were fit on
+    out3 = str(tmp_path / "c")
+    assert plot.main(["--runs", runs, "--out", out3, "--only", "rank"]) == 0
+    assert os.listdir(out3) == ["rank_cpu_125.png"]
 
 
 def test_plot_writes_a_scatter_per_corner_and_one_rank_figure(tmp_path):
