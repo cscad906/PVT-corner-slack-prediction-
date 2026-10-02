@@ -70,15 +70,21 @@ def main():
         with open(fp, encoding="utf-8", errors="replace") as f:
             src = f.read()
         lines = src.count("\n")
-        feats = [n for n in ("period_norm", "v_transform", "blind_hidden",
-                             "runtime.rpt", "_retime")
-                 if n in src]
-        if len(feats) < 5:
-            return False, ("%d lines, has %s -- this is an OLDER copy. Today's "
-                           "code has all of period_norm, v_transform, "
-                           "blind_hidden, runtime.rpt, _retime"
-                           % (lines, feats or "none of them"))
-        return True, "%d lines, all of %s present" % (lines, len(feats))
+        # One name per feature that was asked for and landed in run.py. The
+        # point is to NAME what is missing: "unrecognized arguments: --save"
+        # from an old copy reads as a bug in the flag, not as a copy that
+        # predates it, and the two have completely different fixes.
+        want = ("period_norm", "v_transform", "blind_hidden", "runtime.rpt",
+                "_retime", '"--save"', "[per corner]", "[TIME]")
+        missing = [n for n in want if n not in src]
+        if missing:
+            return False, ("%d lines, MISSING %s -- this is an OLDER copy. "
+                           "Run `git pull` in %s (a flag this copy predates "
+                           "shows up as `unrecognized arguments`, which looks "
+                           "like a broken flag and is not one)"
+                           % (lines, ", ".join(missing), here))
+        return True, "%d lines, all %d expected features present" % (lines,
+                                                                    len(want))
     check("this copy has today's code", _which_copy)
 
     def _script(name):
