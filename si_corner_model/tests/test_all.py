@@ -1553,7 +1553,8 @@ def test_base_save_gives_the_report_and_the_arrays_without_training(
     assert abs(float(summ["mean absolute error (ps)"][i]) - want) < 0.05
 
 
-def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
+def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch,
+                                             capsys):
     """runs/<mode>/_all/runtime.rpt: one line per stage, appended.
 
     The question is "how long does this pipeline take on this drop", and it
@@ -1587,6 +1588,12 @@ def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     assert run.main(["build", "--design", "boomcore"]) == 0
 
     fp = os.path.join("runs", "setup", "_all", "runtime.rpt")
+    # it says it recorded, and where. Writing the line in silence made a run
+    # that recorded its timing look exactly like one that did not, and the path
+    # is relative to the working directory -- the other half of "nothing was
+    # created"
+    said = [l for l in capsys.readouterr().out.splitlines() if "[TIME]" in l]
+    assert len(said) == 1 and fp in said[0] and "boomcore" in said[0], said
     first = open(fp).read().splitlines()
     assert first[0].startswith("#")
     assert first[1].split()[:4] == ["date", "stage", "circuit", "mode"]
@@ -1611,8 +1618,10 @@ def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     # only build, train and inference are recorded. `base` is a diagnostic
     # measured in seconds, and a line per internal stage buried the two that
     # are measured in hours among four that are not.
+    capsys.readouterr()                             # the second build's line
     assert run.main(["base", "--design", "boomcore"]) == 0
     assert open(fp).read().splitlines() == again
+    assert "[TIME]" not in capsys.readouterr().out, "base is not a timed stage"
 
 
 def test_blind_hidden_keeps_every_choice_off_the_held_out_corners(

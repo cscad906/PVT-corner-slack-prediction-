@@ -1204,12 +1204,22 @@ def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
                        os.environ.get("OMP_NUM_THREADS", "-"),
                        socket.gethostname(),
                        ("  " + extra) if extra else ""))
-    except Exception:            # noqa: BLE001 -- see below
+        # Say it happened, and where. The line used to be written in silence,
+        # so a run that recorded its timing looked exactly like a run that did
+        # not -- and the path is relative to the working directory, which is
+        # the other half of "it did not get created". Asked for after a run
+        # with --design and --temp appeared to record nothing.
+        print("  [TIME] %s %s: wall %s, cpu %s -> %s"
+              % (stage, (m["design"] if m else "-"), _hms(wall), _hms(cpu), fp),
+              flush=True)
+    except Exception as e:       # noqa: BLE001 -- see below
         # Deliberately everything, not just OSError. This writes a note about a
         # run that already succeeded; a read-only directory, a hostname lookup
         # that fails, a locale that cannot encode -- none of them are a reason
-        # to lose four hours of build.
-        pass
+        # to lose four hours of build. But it is said out loud: swallowing the
+        # failure in silence is what makes a missing line unexplainable.
+        print("  [TIME] could not record the timing of %s (%s: %s) -- the run "
+              "itself is unaffected" % (stage, type(e).__name__, e), flush=True)
 
 
 def _runs_root(p: dict) -> str:
@@ -3744,8 +3754,11 @@ def main(argv=None):
                 if stage == "build":
                     timed_model("build", m, lambda: stage_build(m))
                 elif stage == "base":
-                    # a diagnostic, measured in seconds -- timed only when it
-                    # is asked to leave files behind
+                    # a diagnostic, measured in seconds: deliberately NOT in
+                    # runtime.rpt, which records the stages measured in hours.
+                    # Said out loud because looking for a base line in that file
+                    # and not finding one is indistinguishable from the logging
+                    # being broken.
                     stage_base(m, save=args.save)
                 elif stage == "train":
                     timed_model("train", m, lambda: stage_train(m),
