@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""PrimeTime voltage scaling against this model, path by path.
+"""PrimeTime voltage scaling against the OLS base, for PERIC0 at 0.52 V.
 
-    python3 scripts/compare_scaling.py --scaling <dir> --list     # look first
-    python3 scripts/compare_scaling.py --scaling <dir>
-    python3 scripts/compare_scaling.py --scaling <dir> --mode hold
+    python3 scripts/compare_scaling.py --list      # look first, draw nothing
+    python3 scripts/compare_scaling.py
+    python3 scripts/compare_scaling.py --mode hold
+
+No arguments needed: the one corner this is for is hardcoded at the top --
+PERIC0, 0.52 V, the reports under pt_si/pt_si_re/example/scaling/PERIC0 (both
+hold/ and setup/ below it). Everything is still overridable.
 
 PrimeTime can report a corner whose library does not exist by scaling one that
 does. That is the other answer to the question this model answers, so the
@@ -23,20 +27,23 @@ summary of that distance is printed to the terminal.
 
 FINDING THE CORNER
 ------------------
-The scaling reports are named by hand, so the corner is read by looking for
-TOKENS anywhere in the name, in any order and in any case:
+The reports are named by hand, so the name is read with THIS PROJECT's own
+tokeniser (si_model.parsing.discovery) -- the one the build stage reads the
+company's report names with. Tokens in any order, any case:
 
-    voltage      0p52V / 0.52V / 520mV
-    temperature  125C / m25 / -40C / n40C
+    voltage      0p52V / 0.52V / 0p52 / 520mV   (the `V` is optional; a
+                 decimal marker is required, so a bare `125` is never a voltage)
+    temperature  125C / m25 / -40C / n40C       (returned as the runs tree
+                 spells it: m25, not -25)
     BEOL level   rcmax rcmin cmax cmin cnom cworst cbest ctyp typical
-    check        hold / setup
+    check        hold / setup, or the parent directory
 
-`restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt` reads as
-(0.52V, 125C, rcmax, hold); so does `SSPG-0.52v-RCmax-125c.hold.rpt`. This is
-the same reading applied to the model's own corner labels, which have the same
-shape (`SSPG_0p52V_RCMAX`), so the two sides cannot drift apart. A name it
-cannot read is listed and skipped, never guessed at, and `--list` prints what
-it made of every file without drawing -- run that first.
+A name that says NOTHING is still compared, as the hardcoded corner, with
+"ASSUMED ..." printed beside it -- there is one corner here and skipping the
+only file leaves nothing to draw. A name that says a DIFFERENT voltage is
+skipped: assuming a silent name is one thing, overriding a name that says
+something else would compare two corners while reporting one. `--list` prints
+what it made of every file and draws nothing -- run that first.
 
 WHERE THE MODEL'S NUMBERS COME FROM
 -----------------------------------
@@ -72,16 +79,26 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-# Enough naming conventions that an unfamiliar deliverable is read rather than
-# skipped. Longest first: `rcmax` must win over `cmax`, which is a substring of
-# it, or every RC corner reads as a C corner.
+# THE comparison this script exists for: PERIC0 at 0.52 V, the PrimeTime
+# voltage-scaling run under the path below. Hardcoded on purpose -- it is one
+# corner of one circuit, asked for by name, and a generic search over a
+# directory of hand-named files is how a wrong corner gets compared without
+# anyone noticing. Everything here is still overridable from the command line.
+SCALING_DIR = os.path.join("pt_si", "pt_si_re", "example", "scaling", "PERIC0")
+DESIGN = "PERIC0"
+VOLT = 0.52
+# Used when the file name does not say. The names are typed by hand, so a name
+# that cannot be read is NOT a reason to skip the file -- there is only one
+# corner here and skipping it leaves nothing to draw. What was assumed is
+# printed, so a wrong assumption is visible rather than silent.
+LEVEL = "rcmax"
+TEMP = "125"
+
+# Longest first: `rcmax` must win over `cmax`, which is a substring of it, or
+# every RC corner reads as a C corner.
 LEVELS = ("rcworst", "rcbest", "rcmax", "rcmin", "rctyp", "cworst", "cbest",
           "typical", "cnom", "ctyp", "cmax", "cmin")
 
-_V_P = re.compile(r"(\d)p(\d{1,3})\s*v", re.I)
-_V_D = re.compile(r"(\d)\.(\d{1,3})\s*v", re.I)
-_V_MV = re.compile(r"(\d{3,4})\s*mv", re.I)
-_T = re.compile(r"(?:^|[^a-z0-9])(m|n|-)?(\d{1,3})\s*c(?:[^a-z]|$)", re.I)
 _SUFFIX = re.compile(r"_#\d+$")
 
 # What the second series is called on the figure. The comparison is against the
@@ -93,30 +110,54 @@ MINE = {"base": "base (OLS)", "hidden": "model (trained)",
 
 
 def tokens(name):
-    """(voltage, temp, level, check) from a name. None for anything absent.
+    """(voltage, temp, level, check) from a name, using THIS PROJECT's reader.
 
-    Used on BOTH the scaling file names and the model's own corner labels --
-    `SSPG_0p52V_RCMAX` and `restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt`
-    are the same convention, so one reader keeps the two sides from drifting.
-    The caller reports what it could not read instead of guessing: a wrong
-    guess here compares two different corners, and the plot then looks like a
-    model error.
+    The regexes come from si_model.parsing.discovery, which is what the build
+    stage reads the company's own report names with. Hand-rolling a second
+    reader here was a mistake that cost a run: it required a `V` right after
+    the number, so `SSPG_0p52_125C_RCMAX` -- a perfectly ordinary name with the
+    unit left off -- came out as "no voltage in the name". The project's own
+    pattern makes the `v` optional and requires a decimal marker instead, so a
+    bare `125` can never be read as a voltage.
+
+    The temperature comes back in the form the runs tree uses (`m25`, not
+    `-25`), because that is the directory the predictions are looked up in.
     """
-    n = os.path.basename(str(name)).lower()
+    from si_model.parsing.discovery import (_HYPHEN_SEP_RE, _T_TOK_RE,
+                                            _V_TOK_RE, _cut, _word_re,
+                                            norm_temp)
+
+    s = os.path.basename(str(name))
+    check = None
+    for w in ("hold", "setup"):
+        m = _word_re(w).search(s)
+        if m:
+            check, s = w, _cut(s, m)
+            break
+    lv = None
+    for n in sorted(LEVELS, key=len, reverse=True):      # rcmax before cmax
+        m = _word_re(n).search(s)
+        if m:
+            lv, s = n, _cut(s, m)
+            break
     v = None
-    m = _V_P.search(n) or _V_D.search(n)
+    m = _V_TOK_RE.search(s)
     if m:
         v = float("%s.%s" % (m.group(1), m.group(2)))
+        s = _cut(s, m)                      # so the temperature is what is left
     else:
-        m = _V_MV.search(n)
+        # millivolts, which the project's own naming does not use but a
+        # hand-named scaling report might. Safe to add because it needs the
+        # literal `mv`: no bare number can reach it.
+        m = re.search(r"(?<!\d)(\d{3,4})\s*mv(?![a-z0-9])", s, re.I)
         if m:
             v = int(m.group(1)) / 1000.0
+            s = _cut(s, m)
     t = None
-    m = _T.search(n)
+    m = _T_TOK_RE.search(s)
     if m:
-        t = ("-" if m.group(1) in ("m", "n", "-") else "") + m.group(2)
-    lv = next((l for l in LEVELS if l in n), None)
-    check = "hold" if "hold" in n else ("setup" if "setup" in n else None)
+        t = norm_temp(m.group(0), bool(_HYPHEN_SEP_RE.search(os.path.basename(
+            str(name)))))
     return v, t, lv, check
 
 
@@ -396,17 +437,22 @@ def draw(plt, x, pt, mine, title, xlabel, fp, mine_label="base (OLS)"):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="PrimeTime voltage scaling against this model, path by path.")
-    ap.add_argument("--scaling", required=True,
+    ap.add_argument("--scaling", default=SCALING_DIR,
                     help="directory of PT scaling reports, searched "
-                         "recursively -- hold/ and setup/ below it are fine")
+                         "recursively -- hold/ and setup/ below it are fine. "
+                         "Default: " + SCALING_DIR)
+    ap.add_argument("--volt", type=float, default=VOLT,
+                    help="the scaled voltage. Default %g -- the one corner "
+                         "this is for. A report whose name says a DIFFERENT "
+                         "voltage is skipped" % VOLT)
     ap.add_argument("--runs", default=None,
                     help="this model's output tree (default runs/<mode>)")
     ap.add_argument("--mode", default=None, choices=["setup", "hold"],
                     help="only reports of this check (default: both)")
     ap.add_argument("--temp", default=None, help="only this temperature")
     ap.add_argument("--design", default=None,
-                    help="circuit name (default: the last directory of "
-                         "--scaling that names one in the runs tree)")
+                    help="circuit name (default: read off the --scaling path, "
+                         "else " + DESIGN + ")")
     ap.add_argument("--out", default=None,
                     help="where the .png go (default <runs>/_all/plots)")
     ap.add_argument("--source", default="base",
@@ -440,41 +486,53 @@ def main(argv=None):
             if cand.lower() not in ("scaling", "setup", "hold"):
                 design = cand
                 break
+        design = design or DESIGN
         print("design  : %s   (from the --scaling path; override with --design)"
               % design)
 
     jobs, skipped = [], []
     for fp in found:
         v, t, lv, check = tokens(fp)
-        # the check often names the parent directory, not the file
+        # hold/setup usually names the parent directory, not the file
         if check is None:
             low = os.path.dirname(fp).lower()
             check = "hold" if "hold" in low else ("setup" if "setup" in low
                                                  else None)
+        # A name that says a DIFFERENT voltage is a different corner and is
+        # skipped. A name that says nothing is this corner: there is one here,
+        # the names are typed by hand, and skipping the only file leaves
+        # nothing to draw. The assumption is printed, not buried.
+        guessed = []
+        if v is None:
+            v, _ = args.volt, guessed.append("%gV" % args.volt)
+        elif abs(v - args.volt) > 1e-6:
+            skipped.append((fp, "names %gV, not %g" % (v, args.volt)))
+            continue
+        if lv is None:
+            lv, _ = LEVEL, guessed.append(LEVEL)
+        if t is None:
+            t, _ = TEMP, guessed.append(TEMP + "C")
         if args.mode and check and check != args.mode:
             continue
-        if args.temp is not None and t is not None and t != str(args.temp):
+        if args.temp is not None and t != str(args.temp):
             continue
-        if v is None or lv is None:
-            skipped.append((fp, "voltage" if v is None else "BEOL level"))
-            continue
-        jobs.append((fp, v, t, lv, check))
+        jobs.append((fp, v, t, lv, check, guessed))
 
     print("%d report(s) under %s" % (len(found), args.scaling))
-    for fp, v, t, lv, check in jobs:
-        print("  %-54s -> %.3fV %-7s %-5s %s"
-              % (os.path.basename(fp)[:54], v, lv,
-                 (t + "C") if t else "?C", check or "?"))
+    for fp, v, t, lv, check, guessed in jobs:
+        print("  %-54s -> %.3fV %-7s %-5s %-5s%s"
+              % (os.path.basename(fp)[:54], v, lv, t + "C", check or "?",
+                 "   ASSUMED %s (not in the name)" % ", ".join(guessed)
+                 if guessed else ""))
     for fp, why in skipped:
-        print("  %-54s -- no %s in the name, skipped"
-              % (os.path.basename(fp)[:54], why))
+        print("  %-54s -- %s, skipped" % (os.path.basename(fp)[:54], why))
     if not jobs:
-        print("nothing to compare -- no name carried both a voltage and a "
-              "BEOL level", file=sys.stderr)
+        print("nothing to compare -- every report under %s names a voltage "
+              "other than %g" % (args.scaling, args.volt), file=sys.stderr)
         return 1
 
     pairs, missing = [], []
-    for fp, v, t, lv, check in jobs:
+    for fp, v, t, lv, check, _ in jobs:
         mode = args.mode or check or "setup"
         runs = args.runs or os.path.join("runs", mode)
         got = (read_npz(runs, design, t, v, lv, args.source)

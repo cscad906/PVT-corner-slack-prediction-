@@ -688,14 +688,20 @@ rank_MFC_Timing_Report_125.png  /  rank_MFC_Timing_Report_125_hidden_from_MIF_..
 PrimeTime 은 **라이브러리가 없는 코너**도 있는 코너를 스케일해서 리포트할 수 있다.
 그게 이 모델이 답하는 질문의 **다른 답**이다. 두 답을 같은 경로 위에 같이 찍는다.
 
+**PERIC0 0.52 V 하나만 보는 스크립트다.** 경로도 전압도 파일 위에 박혀 있어서
+인자 없이 그냥 돌리면 된다.
+
 ```csh
 # 반드시 먼저: 파일 이름을 어떤 코너로 읽었는지 확인 (그리지 않는다)
-python3 scripts/compare_scaling.py --scaling pt_si/pt_si_re/example/scaling/PERIC0 --list
+python3 scripts/compare_scaling.py --list
 
 # 그리기
-python3 scripts/compare_scaling.py --scaling pt_si/pt_si_re/example/scaling/PERIC0
-python3 scripts/compare_scaling.py --scaling .../scaling/PERIC0 --mode hold
+python3 scripts/compare_scaling.py
+python3 scripts/compare_scaling.py --mode hold
 ```
+
+기본값은 `pt_si/pt_si_re/example/scaling/PERIC0`, 0.52 V, `rcmax`, `125`C 이고
+`--scaling` / `--volt` / `--design` / `--temp` 로 덮을 수 있다.
 
 `--scaling` 아래를 **재귀적으로** 뒤지므로 그 밑에 `hold/` `setup/` 이 갈려 있어도 한 번에
 다 처리된다. 회로 이름은 경로에서 추측한다 (`--design` 으로 덮어쓸 수 있다).
@@ -724,11 +730,18 @@ python3 scripts/compare_scaling.py --scaling .../scaling/PERIC0 --mode hold
 | BEOL | `rcmax` `rcmin` `cmax` `cmin` `cnom` `cworst` `cbest` `ctyp` `typical` |
 | 체크 | `hold` / `setup` (파일명에 없으면 상위 폴더 이름으로) |
 
-`restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt` 도, `SSPG-0.52v-RCmax-125c.hold.rpt`
-도 같은 코너로 읽는다. **모델 쪽 코너 라벨(`SSPG_0p52V_RCMAX`)도 같은 함수로
-읽는다** — 한 규칙이라 두 쪽이 어긋나질 수 없다. 못 읽는 이름은 **추측하지 않고**
-건너뛰며 목록에 찍는다. 그래서 `--list` 를 먼저 돌리라는 것 — 코너를 하나 잘못 읽으면
-**다른 코너끼리 비교해 놓고 모델이 틀린 것처럼 보인다.**
+읽는 건 **이 프로젝트 자기 토크나이저**(`si_model.parsing.discovery`) — 빌드가 회사
+리포트 이름을 읽을 때 쓰는 바로 그거다. **`V` 는 선택이고** 소수점 표시(`p` / `.`)만
+있으면 된다. 전에 여기서 `V` 를 필수로 잃고 따로 정규식을 써다가
+`SSPG_0p52_125C_RCMAX` 같은 평범한 이름에 **"no voltage in the name"** 으로 한 번
+터졌다. 온도는 runs 트리가 쓰는 형태(`m25`, `-25` 아님)로 돌아온다 — 그게 예측값을
+찾을 디렉토리 이름이라.
+
+**이름이 아무것도 안 말해도 건너뛰지 않는다.** 박아둔 코너로 가정하고 그 옆에
+`ASSUMED ...` 를 찍는다 — 코너가 하나뿐인데 유일한 파일을 건너뛰면 그릴 게 없다.
+반대로 이름이 **다른 전압**을 말하면 건너뛴다: 침묵한 이름을 가정하는 것과,
+말하는 이름을 덮어쓰는 것은 다르다 — 뒤에길 **두 코너를 비교해 놓고 하나라고
+보고하게** 된다.
 
 **비교 대상은 OLS base 다** (`--source` 로 바꿈). 이미 써둔 걸 읽는다:
 

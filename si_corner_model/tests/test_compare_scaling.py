@@ -65,8 +65,15 @@ def _npz(runs, design, temp, labels, model, truth=None, idx=True, n=8):
     ("restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt",
      (0.52, "125", "rcmax", "hold")),
     ("SSPG-0.52v-RCmax-125c.setup.rpt", (0.52, "125", "rcmax", "setup")),
-    ("scaled_520mV_m25C_cmin_hold.rpt", (0.52, "-25", "cmin", "hold")),
-    ("TT_0p6V_n40C_rcmin.rpt", (0.6, "-40", "rcmin", None)),
+    ("scaled_520mV_m25C_cmin_hold.rpt", (0.52, "m25", "cmin", "hold")),
+    # the temperature comes back in the form the runs tree spells it, `m40`,
+    # because that is the directory the predictions are looked up in
+    ("TT_0p6V_n40C_rcmin.rpt", (0.6, "m40", "rcmin", None)),
+    # the unit left off the number: an ordinary name that a hand-rolled reader
+    # requiring a `V` rejected outright, which is what sent a real run to
+    # "no voltage in the name"
+    ("SSPG_0p52_125C_RCMAX_hold.rpt", (0.52, "125", "rcmax", "hold")),
+    ("SSPG-0p52-m25-rcmax-hold.rpt", (0.52, "m25", "rcmax", "hold")),
     # rcmax must not read as cmax: one is a substring of the other, and the
     # wrong one silently compares a different corner
     ("x_0p52V_RCMAX_125C.rpt", (0.52, "125", "rcmax", None)),
@@ -240,15 +247,35 @@ def test_it_says_what_to_run_when_the_corner_is_nowhere(tmp_path, capsys):
     assert "[no base]" in o
 
 
-def test_an_unreadable_name_is_listed_and_skipped_not_guessed(tmp_path, capsys):
+def test_a_name_that_says_nothing_is_still_compared_and_says_so(tmp_path, capsys):
+    """This script is for ONE corner -- PERIC0 at 0.52 V -- so a file name it
+    cannot read is not a reason to skip the only file there is. It assumes the
+    hardcoded corner and prints what it assumed, which is the difference
+    between a guess and a silent one."""
     sc = tmp_path / "s" / "PERIC0" / "setup"
     sc.mkdir(parents=True)
-    (sc / "whatever.rpt").write_text(_fixed_path_report([1.0]))
-    rc = cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--list"])
-    assert rc == 1
+    (sc / "restored_scaled.rpt").write_text(_fixed_path_report([100.0] * 8))
+    runs = str(tmp_path / "runs" / "setup")
+    _npz(runs, "PERIC0", 125, ["SSPG_0p52V_RCMAX"], np.full((8, 1), 80.0))
+    assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--runs", runs,
+                    "--list"]) == 0
+    o = capsys.readouterr().out
+    assert "ASSUMED 0.52V, rcmax, 125C (not in the name)" in o
+    assert "[matched]" in o, o
+
+
+def test_a_report_naming_another_voltage_is_skipped(tmp_path, capsys):
+    """0.54 V is a different corner. Assuming a name that says nothing is one
+    thing; overriding a name that says something else is another, and would
+    compare two corners while reporting one."""
+    sc = tmp_path / "s" / "PERIC0" / "setup"
+    sc.mkdir(parents=True)
+    (sc / "scaled_SSPG_0p54V_125C_rcmax_setup.rpt").write_text(
+        _fixed_path_report([100.0] * 8))
+    assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--list"]) == 1
     o = capsys.readouterr()
-    assert "no voltage in the name, skipped" in o.out
-    assert "voltage and a BEOL level" in o.err
+    assert "names 0.54V, not 0.52, skipped" in o.out
+    assert "names a voltage other than 0.52" in o.err
 
 
 def test_list_reports_without_drawing_and_without_matplotlib(tmp_path, capsys):
