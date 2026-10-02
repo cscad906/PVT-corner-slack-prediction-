@@ -1497,6 +1497,62 @@ def test_transformed_axis_survives_predict_and_the_checkpoint(real_tree, tmp_pat
     # is test_v_transform_auto_recovers_the_generating_variable above)
 
 
+def test_base_save_gives_the_report_and_the_arrays_without_training(
+        real_tree, tmp_path, monkeypatch):
+    """`run.sh base --save`: the per-corner block and the plot input, from the
+    OLS base alone.
+
+    base takes seconds and no GPU, so it is where a setting gets changed and
+    looked at -- but it only printed, which left the quick loop (change
+    something, read the WNS, look at a scatter) behind a training. The arrays
+    it writes are the shape predict writes, so the report writer and
+    scripts/plot.py take them unchanged.
+
+    Off without the flag: a diagnostic that leaves files behind surprises
+    whoever runs it twice.
+    """
+    import si_model.run as run
+    from si_model.parsing.build_dataset import build
+    from si_model.run import expand, select
+
+    monkeypatch.setenv("SI_ROOT", str(real_tree))
+    monkeypatch.chdir(tmp_path)
+
+    def project():
+        return _base_project(real_tree)
+
+    for m in select(expand(project()), design="boomcore"):
+        build(m["cfg"])
+
+    monkeypatch.setenv("SI_STAGE", "")
+    monkeypatch.setattr(run, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(run, "load_project", lambda *a, **k: project())
+
+    assert run.main(["base", "--design", "boomcore"]) == 0
+    out = os.path.join("runs", "setup", "boomcore", "125")
+    assert not os.path.exists(os.path.join(out, "predictions_base.npz"))
+
+    assert run.main(["base", "--design", "boomcore", "--save"]) == 0
+    z = np.load(os.path.join(out, "predictions_base.npz"), allow_pickle=False)
+    # every corner, with the fit-on ones flagged: at a seen corner the value is
+    # the leave-one-out fit, so it is a prediction there too
+    assert len(z["corners"]) == 8 and int(z["seen"].sum()) == 6
+    assert z["truth_ps"].shape == z["model_ps"].shape == (12, 8)
+    assert np.isfinite(z["clock_ns"]).all() and (z["n_cycles"] > 0).all()
+
+    fp = os.path.join("runs", "setup", "_all", "predict_125_base.rpt")
+    labels, paths, summ = _read_report(fp)
+    assert len(labels) == 8 and len(paths) == 12
+    for row in ("mean measured slack (ps)", "mean absolute error (ps)",
+                "WNS measured (ps)", "WNS error (ps)", "WNS error (%)"):
+        assert row in summ, sorted(summ)
+    # the numbers are the base's, not a model's -- they match the arrays
+    i = [k for k, c in enumerate([str(x) for x in z["corners"]])
+         if not z["seen"][k]][0]
+    want = float(np.abs(z["model_ps"][:, i] - z["truth_ps"][:, i]).mean())
+    assert abs(float(summ["mean absolute error (ps)"][i]) - want) < 0.05
+
+
 def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     """runs/<mode>/_all/runtime.rpt: one line per stage, appended.
 

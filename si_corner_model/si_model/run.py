@@ -1765,7 +1765,106 @@ def stage_build(m: dict) -> None:
     build(m["cfg"])
 
 
-def stage_base(m: dict) -> None:
+def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
+    """Write the OLS base's own predictions, so the base can be read and
+    plotted exactly like a trained run.
+
+    `base` takes seconds and needs no GPU, and until now it only printed. That
+    made the quick loop -- change a setting, see the per-corner WNS, look at a
+    scatter -- impossible without a training first. The arrays written here are
+    the same shape predict writes, so the report writer and scripts/plot.py
+    take them unchanged.
+
+    Every corner goes in, with the seen ones flagged: at a seen corner the
+    value is the leave-one-out fit (that corner's own measurement excluded), so
+    it is a prediction there too, and the rank trajectory wants the whole grid.
+    """
+    import numpy as np
+
+    out_dir = m["cfg"]["train"]["out_dir"]
+    os.makedirs(out_dir, exist_ok=True)
+    gap = ds.get("cycle_gap")
+    clock = np.full(len(split.corners), np.nan)
+    ncyc = np.zeros(native.shape[0])
+    if gap is not None:
+        from si_model.training.loo import _mode_gap
+        gap = np.asarray(gap, float)[:, :len(split.corners)]
+        for c in range(gap.shape[1]):
+            t = _mode_gap(gap[:, c])
+            if t:
+                clock[c] = t
+        ref = split.ref_ci
+        t_ref = _mode_gap(gap[:, ref]) if gap.shape[1] > ref else None
+        if t_ref:
+            ncyc = np.where(np.isfinite(gap[:, ref]), gap[:, ref] / t_ref, 0.0)
+    keys = [str(x) for x in ds["path_keys"]]
+    pidx = ds.get("path_idx")
+    pidx = np.arange(len(keys)) if pidx is None else np.asarray(pidx, np.int64)
+    fp = os.path.join(out_dir, "predictions_base.npz")
+    np.savez_compressed(
+        fp,
+        path_keys=np.asarray(keys), path_idx=pidx,
+        corners=np.asarray([str(c) for c in split.corners]),
+        seen=np.asarray(split.seen, bool),
+        measured=np.asarray(measured, bool),
+        truth_ps=np.asarray(native, float) * 1000.0,
+        model_ps=np.asarray(loo_native, float) * 1000.0,
+        clock_ns=clock, n_cycles=ncyc)
+    print("  [SAVE] %s  (%d paths x %d corners)"
+          % (fp, len(keys), len(split.corners)), flush=True)
+    return fp
+
+
+def _report_from_saved(p: dict, models: list, tag: str) -> list:
+    """Build the per-temperature .rpt from prediction arrays already on disk.
+
+    The same report the predict stage writes, from whichever arrays are named
+    -- so a base-only run gets the per-corner block (measured, MAE, WNS and its
+    error) without a model existing yet.
+    """
+    import numpy as np
+
+    def f1(x):
+        return "%.1f" % x if np.isfinite(x) else ""
+
+    loaded = []
+    for m in models:
+        fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_%s.npz" % tag)
+        if not os.path.exists(fp):
+            continue
+        z = np.load(fp, allow_pickle=False)
+        corners = [str(x) for x in z["corners"]]
+        meas = (np.asarray(z["measured"], bool) if "measured" in z.files
+                else np.ones(len(corners), bool))
+        truth = np.asarray(z["truth_ps"], float).copy()
+        truth[:, ~meas] = np.nan            # no measurement -> no comparison
+        loaded.append((m, [str(x) for x in z["path_keys"]],
+                       np.asarray(z["path_idx"], np.int64)
+                       if "path_idx" in z.files else np.arange(len(z["path_keys"])),
+                       np.asarray(z["model_ps"], float),
+                       ["seen" if b else "hidden"
+                        for b in np.asarray(z["seen"], bool)],
+                       np.asarray(z["n_cycles"], float) if "n_cycles" in z.files else None,
+                       [float(x) for x in z["clock_ns"]] if "clock_ns" in z.files else None,
+                       truth, corners))
+    if not loaded:
+        return []
+    temps, out = [], []
+    for e in loaded:
+        if str(e[0]["temp"]) not in temps:
+            temps.append(str(e[0]["temp"]))
+    fps = _predict_files(p, tag, temps)
+    for t in temps:
+        grp = [e[:8] for e in loaded if str(e[0]["temp"]) == t]
+        cols = [e[8] for e in loaded if str(e[0]["temp"]) == t][0]
+        keep = list(range(len(cols)))
+        _write_predict_report(fps[t], cols, keep, grp, t, None, None, f1)
+        print("  [SAVE] %s" % fps[t], flush=True)
+        out.append(fps[t])
+    return out
+
+
+def stage_base(m: dict, save: bool = False) -> None:
     """OLS-base-only error per hidden corner. numpy only -- no torch, no GPU.
 
     This is the ONLY place base numbers are printed: training logs, summaries and
@@ -1858,6 +1957,8 @@ def stage_base(m: dict) -> None:
     skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
     if skipped:
         print(f"    (skipped, no ground truth: {skipped})")
+    if save:
+        _save_base_predictions(m, ds, split, native, loo_native, measured)
     _print_slack_vs_voltage(native, split, measured, field,
                             ds.get("cycle_gap"), cfg, off)
     _print_level_spacing(y, split, cfg)
@@ -3426,6 +3527,12 @@ def main(argv=None):
                     help="predict: use another circuit's trained model "
                          "(runs/<mode>/<circuit>/model.pt). This circuit's own "
                          "base is still fitted on its own reports")
+    ap.add_argument("--save", action="store_true",
+                    help="base: also write the base's own predictions and the "
+                         "report, so the OLS base can be read and plotted like "
+                         "a trained run (predictions_base.npz + "
+                         "_all/predict_<temp>_base.rpt). Off by default -- base "
+                         "is a diagnostic and leaves nothing behind unless asked")
     ap.add_argument("--tag", default=None,
                     help="write to runs/<tag>/<mode>/ instead of runs/<mode>/, "
                          "for an experiment that must not overwrite the main "
@@ -3611,7 +3718,9 @@ def main(argv=None):
                 if stage == "build":
                     timed_model("build", m, lambda: stage_build(m))
                 elif stage == "base":
-                    stage_base(m)          # a diagnostic, measured in seconds
+                    # a diagnostic, measured in seconds -- timed only when it
+                    # is asked to leave files behind
+                    stage_base(m, save=args.save)
                 elif stage == "train":
                     timed_model("train", m, lambda: stage_train(m),
                                 "epochs=%s" % m["cfg"]["train"].get("epochs"))
@@ -3624,6 +3733,14 @@ def main(argv=None):
             # this circuit's last temperature in this stage -> write its line
             if i + 1 == len(models) or models[i + 1]["design"] != m["design"]:
                 flush_models(stage, m["design"])
+        if stage == "base" and args.save:
+            # the per-corner block -- measured, MAE, WNS and its error -- from
+            # the arrays just written, so the base is readable without a model
+            try:
+                _report_from_saved(p, models, "base")
+            except Exception as e:                      # noqa: BLE001
+                failed.append(("base:report", repr(e)))
+                traceback.print_exc()
 
     flush_inference()
     print("\n" + "=" * 60)

@@ -572,6 +572,48 @@ designs:
 
 ---
 
+## 8.3 학습 없이 결과 보기 — `base --save`
+
+`base` 는 OLS만 풀고 **초 단위**다. 거기에 `--save` 를 붙이면 **학습한 것과 똑같은
+모양의 결과물**이 나온다 — 리포트와 그림까지.
+
+```csh
+bash scripts/run.sh base --save
+python3 scripts/plot.py --corners base
+```
+
+```
+runs/setup/<회로>/<온도>/predictions_base.npz    경로 x 코너 (기계용)
+runs/setup/_all/predict_<온도>_base.rpt          ★ 코너별 Summary (WNS 포함)
+runs/setup/_all/plots/*_base.png                 ★ scatter + rank
+```
+
+`.rpt` 의 Summary 는 predict 가 쓰는 것과 **같은 블록**이다:
+
+```
+  clock period (ns)                      2.0000    2.0000
+  mean predicted slack (ps)               274.6     247.2
+  mean measured slack (ps)                278.9     242.9
+  mean absolute error (ps)                  4.3       4.3
+  WNS predicted (ps)                      252.6     225.2
+  WNS measured (ps)                       256.9     220.9
+  WNS error (ps)                           -4.3       4.3
+  WNS error (%)                          -1.67%     1.95%
+  max clock frequency (MHz)               572.3     563.4
+```
+
+- **모든 코너가 들어간다** (seen 포함). seen 코너의 값은 **그 코너를 빼고 적합한
+  LOO 예측**이라 거기서도 예측이다. 그래서 rank 궤적이 격자 전체로 길게 나온다
+  (scatter 는 전처럼 홀드아웃만 그린다)
+- 파일 이름 끝에 `_base` 가 붙어서 **학습 결과와 안 섞인다**
+- **`--save` 를 안 주면 아무것도 안 쓴다.** base 는 진단이고, 두 번 돌렸을 때
+  파일이 남아 있으면 헷갈린다
+
+설정을 바꿔가며 보는 고리가 이걸로 닫힌다: 고치고 → `base --save` → `.rpt` 의 WNS
+확인 → 그림. 학습은 마지막에 한 번만 하면 된다.
+
+---
+
 ## 8.4 그림 그리기 — `scripts/plot.py`
 
 발표 자료의 **scatter plot** 과 **rank movement** 그래프를 예측 파일에서 바로 그린다.
