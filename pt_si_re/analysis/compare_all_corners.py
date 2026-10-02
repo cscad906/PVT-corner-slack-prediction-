@@ -182,6 +182,7 @@ def compare_pair(run, gt_path, output_dir):
         "paths": summary["compared_paths"], "excluded": summary["excluded_paths"],
         "gt_mean": mean(gt_slacks), "gt_abs_mean": denominator,
         "mae": summary["mae_ps"], "bias": summary["bias_ps"], "max": summary["worst_abs_error_ps"],
+        "p90": summary["abs_error_percentiles_ps"]["p90"], "p99": summary["abs_error_percentiles_ps"]["p99"],
         "gt_wns": summary["ground_truth_wns_ps"], "pt_wns": summary["pt_scaling_wns_ps"],
         "wns_err": summary["pt_scaling_wns_ps"] - summary["ground_truth_wns_ps"],
         "wns_pct": summary["wns_error_percent"], "clock": summary["clock_validation_status"],
@@ -194,6 +195,8 @@ def compare_pair(run, gt_path, output_dir):
     metrics.update({"a_paths": len(aligned), "a_mismatch": detail["counts"]["clock_mismatch"],
                     "a_mae": detail["mae_ps"], "a_bias": detail["bias_ps"],
                     "a_max": detail["worst_abs_error_ps"], "a_wns_err": None, "a_wns_pct": None,
+                    "a_p90": detail["abs_error_percentiles_ps"]["p90"],
+                    "a_p99": detail["abs_error_percentiles_ps"]["p99"],
                     "a_mae_pct": None, "a_max_pct": None})
     if aligned:
         a_denominator = mean([abs(row["ground_truth_ps"]) for row in aligned])
@@ -216,28 +219,32 @@ def render(args, results, problems):
     out = ["COMPARE ALL CORNERS",
            "scaled dir : {}".format(os.path.abspath(args.scaled_dir)),
            "GT dir     : {}".format(os.path.abspath(args.gt_dir)),
-           "unit       : ps; MAE%/max% = value / mean(|GT slack|); WNS% = |WNS err| / |GT WNS|", ""]
+           "unit       : ps; MAE%/max% = value / mean(|GT slack|); WNS% = |WNS err| / |GT WNS|",
+           "p90/p99    : 90% / 99% of the paths have |error| at or below this value", ""]
     ordered = sorted(results, key=lambda item: (item[0]["analysis"] != "setup", item[0]["mode"], item[0]["v"]))
-    head = ("{:<6} {:<5} {:<22} {:>6} {:>10} {:>9} {:>7} {:>9} {:>7} {:>10} {:>10} {:>9} {:>7} {:<8}").format(
-        "type", "mode", "corner", "paths", "GT_mean", "MAE", "MAE%", "max_err", "max%",
+    head = ("{:<6} {:<5} {:<22} {:>6} {:>10} {:>9} {:>7} {:>8} {:>8} {:>9} {:>7} {:>10} {:>10} {:>9} {:>7} {:<8}").format(
+        "type", "mode", "corner", "paths", "GT_mean", "MAE", "MAE%", "p90", "p99", "max_err", "max%",
         "GT_WNS", "PT_WNS", "WNS_err", "WNS%", "clock")
     out.extend(["RAW (as compare_scaling_mae.py)", head, "-" * len(head)])
     for run, m in ordered:
         corner = "{} {}V {}C {}".format(run["process"], fmt(run["v"]), fmt(run["t"]), run["beol"])
-        out.append("{:<6} {:<5} {:<22} {:>6} {} {} {} {} {} {} {} {} {} {:<8}".format(
+        out.append("{:<6} {:<5} {:<22} {:>6} {} {} {} {} {} {} {} {} {} {} {} {:<8}".format(
             run["analysis"], run["mode"], corner, m["paths"], num(m["gt_mean"], 10, True),
-            num(m["mae"], 9), num(m["mae_pct"], 7), num(m["max"], 9), num(m["max_pct"], 7),
+            num(m["mae"], 9), num(m["mae_pct"], 7), num(m["p90"], 8), num(m["p99"], 8),
+            num(m["max"], 9), num(m["max_pct"], 7),
             num(m["gt_wns"], 10, True), num(m["pt_wns"], 10, True), num(m["wns_err"], 9, True),
             num(m["wns_pct"], 7), m["clock"]))
-    head = ("{:<6} {:<5} {:<22} {:>6} {:>9} {:>7} {:>9} {:>9} {:>7} {:>9} {:>7} {:>8}").format(
-        "type", "mode", "corner", "paths", "MAE", "MAE%", "bias", "max_err", "max%", "WNS_err", "WNS%", "clk_mism")
+    head = ("{:<6} {:<5} {:<22} {:>6} {:>9} {:>7} {:>9} {:>8} {:>8} {:>9} {:>7} {:>9} {:>7} {:>8}").format(
+        "type", "mode", "corner", "paths", "MAE", "MAE%", "bias", "p90", "p99", "max_err", "max%",
+        "WNS_err", "WNS%", "clk_mism")
     out.extend(["", "PERIOD-ALIGNED (each path's own clock-edge difference removed; setup is the one that matters)",
                 head, "-" * len(head)])
     for run, m in ordered:
         corner = "{} {}V {}C {}".format(run["process"], fmt(run["v"]), fmt(run["t"]), run["beol"])
-        out.append("{:<6} {:<5} {:<22} {:>6} {} {} {} {} {} {} {} {:>8}".format(
+        out.append("{:<6} {:<5} {:<22} {:>6} {} {} {} {} {} {} {} {} {} {:>8}".format(
             run["analysis"], run["mode"], corner, m["a_paths"], num(m["a_mae"], 9), num(m["a_mae_pct"], 7),
-            num(m["a_bias"], 9, True), num(m["a_max"], 9), num(m["a_max_pct"], 7),
+            num(m["a_bias"], 9, True), num(m["a_p90"], 8), num(m["a_p99"], 8),
+            num(m["a_max"], 9), num(m["a_max_pct"], 7),
             num(m["a_wns_err"], 9, True), num(m["a_wns_pct"], 7), m["a_mismatch"]))
     if problems:
         out.extend(["", "NOT COMPARED"])

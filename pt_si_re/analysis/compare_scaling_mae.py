@@ -88,6 +88,7 @@ Hold 결과 실행 방법
 결과 해석
     error = PT scaling slack - ground-truth slack
     MAE   = path별 absolute error 평균
+    p50/p90/p95/p99 = 경로의 50/90/95/99% 가 |error| 가 이 값 이하 (nearest-rank)
     bias  = signed error 평균. 양수면 scaling slack이 GT보다 크게 나온 것이다.
 
     Fixed-path WNS는 양쪽 report에서 slack을 읽을 수 있는 동일 path 집합의
@@ -654,6 +655,31 @@ def parse_report(path):
     return results
 
 
+DIST_PERCENTILES = (50, 90, 95, 99)
+
+
+def abs_error_percentiles(values):
+    """Nearest-rank percentiles of |error|: pNN = NN% of paths have |error| <= value."""
+    ordered = sorted(abs(value) for value in values)
+    result = {}
+    for percent in DIST_PERCENTILES:
+        key = "p%d" % percent
+        if not ordered:
+            result[key] = None
+        else:
+            result[key] = ordered[max(0, int(math.ceil(percent / 100.0 * len(ordered))) - 1)]
+    return result
+
+
+def percentile_text(dist):
+    """'p50 / p90 / p95 / p99' values in ps, NA when unavailable."""
+    parts = []
+    for percent in DIST_PERCENTILES:
+        value = None if dist is None else dist.get("p%d" % percent)
+        parts.append("NA" if value is None else "%.3f" % value)
+    return " / ".join(parts)
+
+
 def evaluate(scaled, truth, factor, requested_analysis=None):
     rows = []
     errors = []
@@ -833,6 +859,7 @@ def evaluate(scaled, truth, factor, requested_analysis=None):
         "rmse_ps": math.sqrt(sum(value * value for value in errors) / len(errors)),
         "bias_ps": sum(errors) / len(errors),
         "worst_abs_error_ps": max(abs_errors),
+        "abs_error_percentiles_ps": abs_error_percentiles(abs_errors),
         "worst_path_key": worst_row["path_key"],
         "wns_scope": "shared_resolved_fixed_paths",
         "wns_definition": "minimum slack without clamping to zero",
@@ -1014,6 +1041,7 @@ def write_summary_text(path, summary):
         f"RMSE                : {summary['rmse_ps']:.6f} ps",
         f"bias                : {summary['bias_ps']:+.6f} ps",
         f"worst absolute error: {summary['worst_abs_error_ps']:.6f} ps",
+        f"|error| p50/p90/p95/p99: {percentile_text(summary.get('abs_error_percentiles_ps'))} ps",
         f"worst path key      : {summary['worst_path_key']}",
         component_line("arrival", summary),
         component_line("required", summary),
@@ -1156,6 +1184,9 @@ def share_lines(summary):
             f"unavailable={summary['clock_relation_unavailable']}"),
         worst_line,
         (
+            f"DIST_SHARE p50/p90/p95/p99={percentile_text(summary.get('abs_error_percentiles_ps')).replace(' ', '')}ps "
+            f"paths={summary['compared_paths']}"),
+        (
             f"ERROR_SHARE slack_mae={compact_number(summary['mae_ps'])}ps "
             f"arrival_mae={compact_number(summary['arrival_mae_ps'])}ps "
             f"required_mae={compact_number(summary['required_mae_ps'])}ps "
@@ -1170,6 +1201,8 @@ def share_lines(summary):
     ] + ([diagnostic_share_line(summary["path_diagnostics"])] if "path_diagnostics" in summary else []) + (
         [f"ALIGNED_SHARE mae={compact_number(summary['period_alignment']['mae_ps'])}ps "
          f"bias={compact_number(summary['period_alignment']['bias_ps'])}ps "
+         f"p90={compact_number(summary['period_alignment']['abs_error_percentiles_ps']['p90'])}ps "
+         f"p99={compact_number(summary['period_alignment']['abs_error_percentiles_ps']['p99'])}ps "
          f"aligned={summary['period_alignment']['counts']['aligned']} "
          f"clock_mismatch={summary['period_alignment']['counts']['clock_mismatch']}"]
         if summary.get("period_alignment") else [])
@@ -1257,6 +1290,7 @@ def period_alignment(rows, analysis):
     result = {"analysis": analysis, "counts": counts, "paths": len(aligned),
               "mae_ps": None, "rmse_ps": None, "bias_ps": None,
               "worst_abs_error_ps": None, "worst_idx": None, "worst_path_key": None,
+              "abs_error_percentiles_ps": abs_error_percentiles([]),
               "shift_by_clock_pair": []}
     if aligned:
         errors = [row["aligned_err_ps"] for row in aligned]
@@ -1266,6 +1300,7 @@ def period_alignment(rows, analysis):
             "rmse_ps": (sum(e * e for e in errors) / len(errors)) ** 0.5,
             "bias_ps": sum(errors) / len(errors),
             "worst_abs_error_ps": abs(worst["aligned_err_ps"]),
+            "abs_error_percentiles_ps": abs_error_percentiles(errors),
             "worst_idx": worst["idx"], "worst_path_key": worst["path_key"]})
     for pair in sorted(shifts_by_pair, key=lambda name: -len(shifts_by_pair[name])):
         values = shifts_by_pair[pair]
@@ -1294,6 +1329,7 @@ def period_alignment_lines(summary):
         f"aligned RMSE        : {detail['rmse_ps']:.3f} ps",
         f"aligned bias        : {detail['bias_ps']:+.3f} ps",
         f"aligned worst       : {detail['worst_abs_error_ps']:.3f} ps idx={detail['worst_idx']}",
+        f"aligned p50/p90/p95/p99: {percentile_text(detail['abs_error_percentiles_ps'])} ps",
         "edge shift removed by clock pair (scaled - GT):"])
     for item in detail["shift_by_clock_pair"][:10]:
         lines.append(f"  {item['clocks']:<40} paths={item['paths']} mean={item['mean_ps']:+.3f} ps "
@@ -1393,6 +1429,7 @@ def main():
     print(f"RMSE           : {summary['rmse_ps']:.3f} ps")
     print(f"bias           : {summary['bias_ps']:+.3f} ps")
     print(f"worst          : {summary['worst_abs_error_ps']:.3f} ps")
+    print(f"p50/p90/p95/p99: {percentile_text(summary.get('abs_error_percentiles_ps'))} ps")
     print(component_line("arrival", summary))
     print(component_line("required", summary))
     print("")

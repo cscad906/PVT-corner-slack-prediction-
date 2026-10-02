@@ -73,6 +73,8 @@ python3 analysis/compare_all_corners.py --scaled-dir <RESULT_FOLDER> --gt-dir <.
 - `PERIOD-ALIGNED`: 경로마다 자기 클럭 edge 차이를 뺀 MAE·MAE%·bias·max·WNS 오차(아래 `--align-period` 와 같은 계산)
 
 퍼센트: `MAE%`, `max%` = 값 / mean(|GT slack|) x 100, `WNS%` = |WNS 오차| / |GT WNS| x 100.
+`p90`, `p99` = 경로의 90% / 99% 가 |오차| 이 값 이하(nearest-rank). `compare_scaling_mae.py` 결과에도
+`p50/p90/p95/p99` 줄로 나옵니다.
 
 ### 코너별 클럭 주기가 다를 때 (`--align-period`)
 

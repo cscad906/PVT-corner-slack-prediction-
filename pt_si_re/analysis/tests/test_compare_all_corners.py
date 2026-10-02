@@ -67,6 +67,7 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("RAW (as compare_scaling_mae.py)", text)
         self.assertIn("PERIOD-ALIGNED", text)
+        self.assertEqual(text.count(" p90 "), 2)  # one column in each table
         self.assertEqual(text.count("SSPG 0.6V 125C RCMAX"), 6)  # setup path/net + hold, in both tables
         self.assertIn("restored_scaled_SSPG_0p95V_125C_RCMAX_V_setup.rpt: NO_GT", text)
         self.assertTrue((self.out / "setup" / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_setup" / "period_aligned.txt").exists())

@@ -289,7 +289,22 @@ class ReportDiagnosticsTests(unittest.TestCase):
         self.assertAlmostEqual(summary["period_alignment"]["mae_ps"], 0)
         self.assertIn("aligned MAE         : 0.000 ps", (directory / "summary.txt").read_text())
         self.assertIn("ALIGNED_SHARE mae=0.000ps", result.stdout)
+        self.assertIn("DIST_SHARE p50/p90/p95/p99=300.000/300.000/300.000/300.000ps", result.stdout)
+        self.assertIn("aligned p50/p90/p95/p99: 0.000 / 0.000 / 0.000 / 0.000 ps", result.stdout)
         self.assertIn("aligned", (directory / "period_aligned.txt").read_text())
+
+    def test_abs_error_percentiles(self):
+        dist = COMPARISON.abs_error_percentiles(list(range(-100, 0)))  # |error| 1..100
+        self.assertEqual((dist["p50"], dist["p90"], dist["p95"], dist["p99"]), (50, 90, 95, 99))
+        self.assertEqual(COMPARISON.abs_error_percentiles([7.0])["p99"], 7.0)
+        self.assertIsNone(COMPARISON.abs_error_percentiles([])["p90"])
+        self.assertEqual(COMPARISON.percentile_text(dist), "50.000 / 90.000 / 95.000 / 99.000")
+        _, summary = self.compare(timing_report(updates={"data_net1": 0.031}), timing_report())
+        self.assertAlmostEqual(summary["abs_error_percentiles_ps"]["p90"], 11)
+        path = self.root / "summary.txt"
+        COMPARISON.write_summary_text(path, dict(summary, scaled_report="s", ground_truth_report="g",
+                                                 input_unit="ns", output_unit="ps"))
+        self.assertIn("|error| p50/p90/p95/p99: 11.000 / 11.000 / 11.000 / 11.000 ps", path.read_text())
 
     def test_cli_setup_hold_same_corner_are_separate(self):
         cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),
