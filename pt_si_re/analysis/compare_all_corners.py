@@ -26,7 +26,17 @@ Comparison
 
 Output
     Screen and <output-dir>/summary_all.txt (a new summary_all_runN.txt when it
-    exists), plain fixed-width text for less/gvim.
+    exists), plain fixed-width text for less/gvim. Three tables, one row per
+    corner/analysis/mode:
+        RAW            paths, mean GT slack, MAE, MAE%, p90, p99, max err, max%,
+                       GT/PT WNS, WNS error, WNS%, clock validation
+        PERIOD-ALIGNED the same after removing each path's clock-edge difference
+                       (read this one for setup)
+        VIOLATIONS     GT -> PT violation count, hit / missed / false alarm,
+                       MAE and bias of GT-violated and GT-met paths
+    Per corner, as compare_scaling_mae.py: summary.txt, path_errors.txt,
+    path_diagnostics.txt, period_aligned.txt and path_breakdown.txt (one line
+    per path: where its slack error comes from).
 
 Percent definitions
     MAE% and max% = value / mean(|GT slack|) * 100 over the compared paths

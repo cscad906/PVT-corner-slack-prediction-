@@ -24,6 +24,15 @@ Hold 결과 실행 방법
             --analysis hold \
             --output-dir mfc_scaling_comparison
 
+코너별 클럭 주기가 다를 때 (setup)
+    링크 코너 세션과 목표 코너 GT 의 SDC 주기가 다르면 setup MAE 에 주기 차이가
+    섞인다(CLOCK VALIDATION: INVALID). --align-period 를 붙이면 경로마다 자기
+    launch/capture edge 차이를 뺀 보정 결과가 따로 나온다. setup 은 보정 값을 본다.
+
+        python3 analysis/compare_scaling_mae.py <scaled.rpt> <GT.rpt> --analysis setup --align-period
+
+디자인의 모든 코너(setup/hold)를 한 번에 비교하려면 analysis/compare_all_corners.py 를 쓴다.
+
 입력 파일 순서
     첫 번째 파일: run_scaling_after_restore.tcl이 만든 PT scaling 결과 .rpt
     두 번째 파일: 실제 target DB/lib session에서 만든 ground-truth .rpt
@@ -78,6 +87,20 @@ Hold 결과 실행 방법
         REVIEW      : 핀 순서/전이/셀 구성 차이, 미해석 행 또는 잔여 오차가 있음
         UNAVAILABLE : timing point의 Incr를 읽을 수 없어 상세 분해 불가
         EXCLUDED    : 양쪽에서 slack을 읽을 수 없어 기존 비교에서 제외됨
+
+    path_breakdown.txt
+        경로당 한 줄. slack 오차를 edge(주기)/launch 클럭/데이터/capture 클럭/
+        constraint(setup/hold time, uncertainty, CRPR)/unexplained 기여분으로 나눈 값과
+        edge 를 뺀 가장 큰 원인(main_source). 각 열을 더하면 slack 오차가 된다.
+
+    period_aligned.txt (--align-period 일 때)
+        경로별 원래 오차, 뺀 edge shift, 보정 오차.
+
+    summary.txt 와 화면에 함께 나오는 것
+        p50/p90/p95/p99     : 경로의 50/90/95/99% 가 |오차| 이 값 이하
+        violations GT -> PT : 위반(slack<0) 개수, hit / missed(GT 위반인데 PT 통과) /
+                              false_alarm(GT 통과인데 PT 위반), GT 위반·통과 경로별
+                              MAE·bias, missed idx. --align-period 면 보정 기준으로 한 번 더.
 
         EXPLAINED는 GT와 scaling 세션 설정이 같다는 뜻이 아니다. 기존
         CLOCK VALIDATION도 함께 확인한다. *_unexplained_error_ps는 알려진
