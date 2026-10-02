@@ -291,6 +291,10 @@ class ReportDiagnosticsTests(unittest.TestCase):
         self.assertIn("ALIGNED_SHARE mae=0.000ps", result.stdout)
         self.assertIn("DIST_SHARE p50/p90/p95/p99=300.000/300.000/300.000/300.000ps", result.stdout)
         self.assertIn("aligned p50/p90/p95/p99: 0.000 / 0.000 / 0.000 / 0.000 ps", result.stdout)
+        self.assertIn("violations (slack<0) GT -> PT: 0 -> 0", result.stdout)
+        self.assertIn("VIOL_SHARE basis=aligned", result.stdout)
+        self.assertTrue((directory / "path_breakdown.txt").exists())
+        self.assertIn("aligned violations", (directory / "summary.txt").read_text())
         self.assertIn("aligned", (directory / "period_aligned.txt").read_text())
 
     def test_abs_error_percentiles(self):
@@ -305,6 +309,40 @@ class ReportDiagnosticsTests(unittest.TestCase):
         COMPARISON.write_summary_text(path, dict(summary, scaled_report="s", ground_truth_report="g",
                                                  input_unit="ns", output_unit="ps"))
         self.assertIn("|error| p50/p90/p95/p99: 11.000 / 11.000 / 11.000 / 11.000 ps", path.read_text())
+
+    def test_violation_summary_verdicts_and_split(self):
+        def row(idx, gt, err, aligned=None):
+            return {"idx": idx, "ground_truth_ps": gt, "pt_scaling_err_ps": err,
+                    "abs_error_ps": None if err is None else abs(err), "aligned_err_ps": aligned}
+        rows = [row(1, -10, 5, 5), row(2, -10, 20, -20), row(3, 10, -20, -2), row(4, 50, 1, None),
+                row(5, -3, None)]
+        raw = COMPARISON.violation_summary(rows, False)
+        self.assertEqual((raw["paths"], raw["gt_viol"], raw["pt_viol"]), (4, 2, 2))
+        self.assertEqual((raw["hit"], raw["missed"], raw["false_alarm"], raw["ok"]), (1, 1, 1, 1))
+        self.assertEqual((raw["missed_idx"], raw["false_alarm_idx"]), ([2], [3]))
+        self.assertAlmostEqual(raw["viol"]["mae_ps"], 12.5)
+        self.assertAlmostEqual(raw["met"]["bias_ps"], -9.5)
+        aligned = COMPARISON.violation_summary(rows, True)  # path 4 has no aligned value
+        self.assertEqual((aligned["paths"], aligned["hit"], aligned["missed"], aligned["false_alarm"]), (3, 2, 0, 0))
+        text = "\n".join(COMPARISON.violation_lines(aligned))
+        self.assertIn("aligned violations (slack<0) GT -> PT: 2 -> 2", text)
+
+    def test_path_breakdown_sums_to_slack_error(self):
+        updates = {"launch_cell": 0.016, "cq": 0.044, "data_net1": 0.031,
+                   "capture_source": 0.023, "capture_cell": 0.016,
+                   "cppr": 0.008, "uncertainty": -0.015, "check": -0.025}
+        rows, _ = self.compare(timing_report(updates=updates, capture_edge=1.625), timing_report())
+        COMPARISON.period_alignment(rows, "setup")
+        values = COMPARISON.breakdown_values(rows[0])
+        expected = {"edge": 625, "launch_clk": -6, "data": -15, "capture_clk": 7, "constraint": -4}
+        for name, value in expected.items():
+            self.assertAlmostEqual(values[name], value)
+        self.assertAlmostEqual(sum(expected.values()) + values["unexplained"], rows[0]["pt_scaling_err_ps"])
+        path = self.root / "path_breakdown.txt"
+        COMPARISON.write_path_breakdown(path, rows)
+        line = path.read_text().splitlines()[3]
+        self.assertEqual(line.split()[:4], ["1", "848.000000", "607.000000", "+625.000"])
+        self.assertIn("-18.000", line)
 
     def test_cli_setup_hold_same_corner_are_separate(self):
         cmd = [sys.executable, str(SCRIPT), str(self.root / "scaled.rpt"),

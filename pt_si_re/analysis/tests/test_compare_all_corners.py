@@ -68,7 +68,9 @@ class BatchTests(unittest.TestCase):
         self.assertIn("RAW (as compare_scaling_mae.py)", text)
         self.assertIn("PERIOD-ALIGNED", text)
         self.assertEqual(text.count(" p90 "), 2)  # one column in each table
-        self.assertEqual(text.count("SSPG 0.6V 125C RCMAX"), 6)  # setup path/net + hold, in both tables
+        self.assertIn("VIOLATIONS (slack < 0; PT judged on period-aligned slack)", text)
+        self.assertTrue((self.out / "setup" / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_setup" / "path_breakdown.txt").exists())
+        self.assertEqual(text.count("SSPG 0.6V 125C RCMAX"), 9)  # setup path/net + hold, in three tables
         self.assertIn("restored_scaled_SSPG_0p95V_125C_RCMAX_V_setup.rpt: NO_GT", text)
         self.assertTrue((self.out / "setup" / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_setup" / "period_aligned.txt").exists())
         self.assertTrue((self.out / "hold" / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_hold" / "summary.txt").exists())

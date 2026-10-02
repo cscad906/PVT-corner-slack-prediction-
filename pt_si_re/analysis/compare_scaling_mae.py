@@ -1046,7 +1046,7 @@ def write_summary_text(path, summary):
         component_line("arrival", summary),
         component_line("required", summary),
         "",
-    ] + wns_lines(summary) + [""] + diagnostic_summary_lines(summary) + period_alignment_lines(summary) + [
+    ] + violation_lines(summary.get("violation_raw")) + wns_lines(summary) + [""] + diagnostic_summary_lines(summary) + period_alignment_lines(summary) + [
         "",
         "Clock validation",
         f"status              : {summary['clock_validation_status']}",
@@ -1205,7 +1205,11 @@ def share_lines(summary):
          f"p99={compact_number(summary['period_alignment']['abs_error_percentiles_ps']['p99'])}ps "
          f"aligned={summary['period_alignment']['counts']['aligned']} "
          f"clock_mismatch={summary['period_alignment']['counts']['clock_mismatch']}"]
-        if summary.get("period_alignment") else [])
+        if summary.get("period_alignment") else []) + [
+        f"VIOL_SHARE basis={item['basis']} gt={item['gt_viol']} pt={item['pt_viol']} hit={item['hit']} "
+        f"missed={item['missed']} false_alarm={item['false_alarm']} "
+        f"mae_viol={compact_number(item['viol']['mae_ps'])}ps mae_met={compact_number(item['met']['mae_ps'])}ps"
+        for item in (summary.get("violation_raw"), summary.get("violation_aligned")) if item]
 
 
 def safe_corner_name(report_path):
@@ -1323,7 +1327,7 @@ def period_alignment_lines(summary):
              f"multi_edge={counts['multi_edge']} edge_unavailable={counts['edge_unavailable']})"]
     if detail["mae_ps"] is None:
         lines.append("aligned MAE         : unavailable (no path could be aligned)")
-        return lines
+        return lines + violation_lines(summary.get("violation_aligned"))
     lines.extend([
         f"aligned MAE         : {detail['mae_ps']:.3f} ps",
         f"aligned RMSE        : {detail['rmse_ps']:.3f} ps",
@@ -1336,7 +1340,7 @@ def period_alignment_lines(summary):
                      f"range=[{item['min_ps']:+.3f},{item['max_ps']:+.3f}] ps")
     if len(detail["shift_by_clock_pair"]) > 10:
         lines.append(f"  ... {len(detail['shift_by_clock_pair']) - 10} more clock pair(s) in summary.json")
-    return lines
+    return lines + [""] + violation_lines(summary.get("violation_aligned"))
 
 
 def write_period_aligned(path, rows):
@@ -1353,6 +1357,141 @@ def write_period_aligned(path, rows):
                          f"{format_number(row['period_shift_ps']):>13} "
                          f"{format_number(row['aligned_err_ps']):>13} "
                          f"{row['alignment_status']:<17} {row['path_key']}\n")
+
+
+def violation_summary(rows, use_aligned):
+    """Pass/fail agreement (slack < 0 = violated) and error split by the GT verdict.
+
+    use_aligned: judge PT on its period-aligned slack (PT slack - edge shift) and
+    use the aligned error; only paths that could be aligned are counted.
+    """
+    counts = {"paths": 0, "gt_viol": 0, "pt_viol": 0, "hit": 0, "missed": 0,
+              "false_alarm": 0, "ok": 0}
+    errors = {"viol": [], "met": []}
+    missed, false_alarm = [], []
+    for row in rows:
+        if row["abs_error_ps"] is None:
+            continue
+        if use_aligned:
+            if row.get("aligned_err_ps") is None:
+                continue
+            error = row["aligned_err_ps"]
+        else:
+            error = row["pt_scaling_err_ps"]
+        gt = row["ground_truth_ps"]
+        pt = gt + error
+        gt_viol, pt_viol = gt < 0, pt < 0
+        counts["paths"] += 1
+        counts["gt_viol"] += gt_viol
+        counts["pt_viol"] += pt_viol
+        if gt_viol and pt_viol:
+            counts["hit"] += 1
+        elif gt_viol:
+            counts["missed"] += 1
+            missed.append((gt, row["idx"]))
+        elif pt_viol:
+            counts["false_alarm"] += 1
+            false_alarm.append((gt, row["idx"]))
+        else:
+            counts["ok"] += 1
+        errors["viol" if gt_viol else "met"].append(error)
+    result = dict(counts, basis="aligned" if use_aligned else "raw")
+    for name, values in errors.items():
+        result[name] = {"paths": len(values),
+                        "mae_ps": sum(abs(v) for v in values) / len(values) if values else None,
+                        "bias_ps": sum(values) / len(values) if values else None}
+    # Most-violating GT first for missed; closest-to-zero GT first for false alarms.
+    result["missed_idx"] = [idx for _, idx in sorted(missed)][:20]
+    result["false_alarm_idx"] = [idx for _, idx in sorted(false_alarm, key=lambda item: item[0])][:20]
+    return result
+
+
+def violation_lines(detail):
+    """Text block for one violation_summary; empty when absent."""
+    if not detail:
+        return []
+    label = "aligned " if detail["basis"] == "aligned" else ""
+    viol, met = detail["viol"], detail["met"]
+    lines = [
+        f"{label}violations (slack<0) GT -> PT: {detail['gt_viol']} -> {detail['pt_viol']}  "
+        f"hit={detail['hit']} missed={detail['missed']} false_alarm={detail['false_alarm']} "
+        f"(of {detail['paths']} paths)",
+        f"{label}GT violated paths : {viol['paths']:>6}  MAE={compact_number(viol['mae_ps'])} ps "
+        f"bias={compact_number(viol['bias_ps'])} ps",
+        f"{label}GT met paths      : {met['paths']:>6}  MAE={compact_number(met['mae_ps'])} ps "
+        f"bias={compact_number(met['bias_ps'])} ps"]
+    if detail["missed_idx"]:
+        lines.append(f"{label}missed idx (GT fails, PT passes; first 20): " + " ".join(str(i) for i in detail["missed_idx"]))
+    if detail["false_alarm_idx"]:
+        lines.append(f"{label}false-alarm idx (GT passes, PT fails; first 20): " +
+                     " ".join(str(i) for i in detail["false_alarm_idx"]))
+    return lines + [""]
+
+
+BREAKDOWN_GROUPS = (
+    ("edge", ("launch_edge", "capture_edge")),
+    ("launch_clk", ("launch_clock_cell", "launch_clock_net", "launch_clock_port",
+                    "launch_clock_source_latency", "launch_clock_network_delay")),
+    ("data", ("data_cell", "data_net", "data_port", "input_external_delay")),
+    ("capture_clk", ("capture_clock_cell", "capture_clock_net", "capture_clock_port",
+                     "capture_clock_source_latency", "capture_clock_network_delay")),
+    ("constraint", ("clock_reconvergence_pessimism", "clock_uncertainty", "library_setup_time",
+                    "library_hold_time", "output_external_delay")),
+)
+
+
+def breakdown_values(row):
+    """Slack contribution (ps) of each term group; the groups plus 'unexplained' sum to the slack error."""
+    detail = row.get("diagnostic") or {}
+    components = detail.get("components")
+    if not components:
+        return None
+    values = {}
+    for name, terms in BREAKDOWN_GROUPS:
+        parts = [components[term]["slack_contribution_ps"] for term in terms
+                 if term in components and components[term].get("slack_contribution_ps") is not None]
+        values[name] = sum(parts) if parts else None
+    values["unexplained"] = detail.get("slack_unexplained_error_ps")
+    # The edge is the clock-period gap, not a delay source: pick the largest of the rest.
+    sources = [name for name in ("launch_clk", "data", "capture_clk", "constraint", "unexplained")
+               if values.get(name) not in (None, 0.0)]
+    values["main_source"] = max(sources, key=lambda name: abs(values[name])) if sources else None
+    return values
+
+
+def write_path_breakdown(path, rows):
+    """One line per compared path showing where its slack error comes from.
+
+    Columns are slack contributions in ps (scaled - GT, signed as they move the
+    slack), so edge + launch_clk + data + capture_clk + constraint + unexplained
+    = slack_err. main_source = the largest group other than the clock edge.
+    Order: |aligned_err| (or |slack_err|) descending.
+    """
+    compared = [row for row in rows if row["abs_error_ps"] is not None]
+
+    def size(row):
+        value = row.get("aligned_err_ps")
+        return abs(value) if value is not None else row["abs_error_ps"]
+
+    with path.open("w") as output:
+        output.write("# Slack contributions in ps (scaled - GT). edge+launch_clk+data+capture_clk+constraint+unexplained = slack_err.\n")
+        output.write("# aligned = slack_err - edge (NA without a usable clock edge). Order: |aligned| (or |slack_err|) descending.\n")
+        output.write(f"{'idx':>7} {'gt_slack':>11} {'slack_err':>10} {'edge':>10} {'aligned':>10} "
+                     f"{'launch_clk':>10} {'data':>10} {'capture_clk':>11} {'constraint':>10} "
+                     f"{'unexplained':>11} {'main_source':<12} path_key\n")
+        for row in sorted(compared, key=lambda item: (-size(item), item["path_key"])):
+            values = breakdown_values(row) or {}
+
+            def cell(name, width):
+                value = values.get(name)
+                return ("NA" if value is None else "%+.3f" % value).rjust(width)
+            aligned = row.get("aligned_err_ps")
+            output.write(f"{row['idx']:>7} {format_number(row['ground_truth_ps']):>11} "
+                         f"{format_number(row['pt_scaling_err_ps']):>10} {cell('edge', 10)} "
+                         f"{('NA' if aligned is None else '%+.3f' % aligned):>10} "
+                         f"{cell('launch_clk', 10)} {cell('data', 10)} {cell('capture_clk', 11)} "
+                         f"{cell('constraint', 10)} {cell('unexplained', 11)} "
+                         f"{str(values.get('main_source') or 'NA'):<12} {row['path_key']}\n")
 
 
 def main():
@@ -1400,6 +1539,8 @@ def main():
         summary["scaling_input_plan"] = None
     if args.align_period:
         summary["period_alignment"] = period_alignment(rows, analysis_type)
+        summary["violation_aligned"] = violation_summary(rows, True)
+    summary["violation_raw"] = violation_summary(rows, False)
 
     corner_name = safe_corner_name(args.ground_truth_rpt)
     # 출력 폴더 -> setup/hold -> 코너 순서로 저장하고 재실행은 해당 타입 안에서 _run2를 만든다.
@@ -1414,6 +1555,8 @@ def main():
     aligned_path = result_dir / "period_aligned.txt"
     if args.align_period:
         write_period_aligned(aligned_path, rows)
+    breakdown_path = result_dir / "path_breakdown.txt"
+    write_path_breakdown(breakdown_path, rows)
     with json_path.open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
 
@@ -1433,6 +1576,8 @@ def main():
     print(component_line("arrival", summary))
     print(component_line("required", summary))
     print("")
+    for line in violation_lines(summary.get("violation_raw")):
+        print(line)
     for line in wns_lines(summary):
         print(line)
     print("")
@@ -1472,6 +1617,7 @@ def main():
     print(f"summary JSON   : {json_path}")
     if args.align_period:
         print(f"period aligned : {aligned_path}")
+    print(f"path breakdown : {breakdown_path}")
     print("")
     print("=== COPY THIS RESULT ===")
     for line in share_lines(summary):

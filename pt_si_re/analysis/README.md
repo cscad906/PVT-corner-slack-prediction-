@@ -76,6 +76,23 @@ python3 analysis/compare_all_corners.py --scaled-dir <RESULT_FOLDER> --gt-dir <.
 `p90`, `p99` = 경로의 90% / 99% 가 |오차| 이 값 이하(nearest-rank). `compare_scaling_mae.py` 결과에도
 `p50/p90/p95/p99` 줄로 나옵니다.
 
+### 위반 경로 / 경로별 오차 원인
+
+`compare_scaling_mae.py` 와 `compare_all_corners.py` 결과에 다음이 같이 나옵니다.
+
+- **위반 개수와 판정 일치** (slack < 0 이 위반):
+  `violations (slack<0) GT -> PT: 120 -> 135  hit=115 missed=5 false_alarm=20`
+  - `missed`: GT 는 위반인데 PT 는 통과로 예측(낙관, 위험). 경로 번호는 `missed idx` 줄
+  - `false_alarm`: GT 는 통과인데 PT 는 위반으로 예측(비관)
+  - `GT violated paths` / `GT met paths` 줄: 각 그룹의 경로 수, MAE, bias
+  - `--align-period` 를 주면 주기 보정한 slack 으로 한 번 더(`aligned ...`). setup 은 이쪽을 봅니다.
+    `compare_all_corners.py` 의 `VIOLATIONS` 표는 항상 주기 보정 기준입니다.
+- **`path_breakdown.txt`** (코너 폴더): 경로당 한 줄로 오차가 어디서 왔는지 보여 줍니다.
+  열은 slack 기여분(ps, scaled - GT)이라 `edge + launch_clk + data + capture_clk + constraint
+  + unexplained = slack_err` 입니다. `edge` 는 주기 차이, `aligned` 는 그걸 뺀 값,
+  `constraint` 는 setup/hold time·uncertainty·CRPR, `main_source` 는 edge 를 뺀 가장 큰 원인.
+  보정 오차가 큰 순서라 맨 위 몇 줄만 보면 됩니다. 항목별 상세는 `path_diagnostics.txt`.
+
 ### 코너별 클럭 주기가 다를 때 (`--align-period`)
 
 스케일링 run 은 링크 코너 세션의 SDC 주기를, GT 는 목표 코너의 주기를 씁니다. 둘이

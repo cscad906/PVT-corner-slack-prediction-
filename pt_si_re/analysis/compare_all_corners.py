@@ -166,12 +166,15 @@ def compare_pair(run, gt_path, output_dir):
     summary["scaling_input_plan_path"] = str(inputs.resolve()) if inputs.is_file() else None
     summary["scaling_input_plan"] = inputs.read_text(errors="ignore") if inputs.is_file() else None
     summary["period_alignment"] = CMP.period_alignment(rows, analysis)
+    summary["violation_raw"] = CMP.violation_summary(rows, False)
+    summary["violation_aligned"] = CMP.violation_summary(rows, True)
 
     result_dir = CMP.create_result_dir(Path(output_dir) / analysis, CMP.safe_corner_name(run["path"]))
     CMP.write_path_text(result_dir / "path_errors.txt", rows)
     CMP.write_path_diagnostics(result_dir / "path_diagnostics.txt", rows)
     CMP.write_summary_text(result_dir / "summary.txt", summary)
     CMP.write_period_aligned(result_dir / "period_aligned.txt", rows)
+    CMP.write_path_breakdown(result_dir / "path_breakdown.txt", rows)
     with (result_dir / "summary.json").open("w") as output:
         json.dump(summary, output, indent=2, ensure_ascii=False)
 
@@ -190,6 +193,7 @@ def compare_pair(run, gt_path, output_dir):
     metrics["mae_pct"] = pct(metrics["mae"], denominator)
     metrics["max_pct"] = pct(metrics["max"], denominator)
 
+    metrics["viol"] = summary["violation_aligned"]
     aligned = [row for row in rows if row.get("aligned_err_ps") is not None]
     detail = summary["period_alignment"]
     metrics.update({"a_paths": len(aligned), "a_mismatch": detail["counts"]["clock_mismatch"],
@@ -246,6 +250,18 @@ def render(args, results, problems):
             num(m["a_bias"], 9, True), num(m["a_p90"], 8), num(m["a_p99"], 8),
             num(m["a_max"], 9), num(m["a_max_pct"], 7),
             num(m["a_wns_err"], 9, True), num(m["a_wns_pct"], 7), m["a_mismatch"]))
+    head = ("{:<6} {:<5} {:<22} {:>6} {:>8} {:>8} {:>6} {:>7} {:>7} {:>9} {:>9} {:>9} {:>9}").format(
+        "type", "mode", "corner", "paths", "GT_viol", "PT_viol", "hit", "missed", "false", "MAE_viol",
+        "bias_viol", "MAE_met", "bias_met")
+    out.extend(["", "VIOLATIONS (slack < 0; PT judged on period-aligned slack)", head, "-" * len(head)])
+    for run, m in ordered:
+        corner = "{} {}V {}C {}".format(run["process"], fmt(run["v"]), fmt(run["t"]), run["beol"])
+        v = m["viol"]
+        out.append("{:<6} {:<5} {:<22} {:>6} {:>8} {:>8} {:>6} {:>7} {:>7} {} {} {} {}".format(
+            run["analysis"], run["mode"], corner, v["paths"], v["gt_viol"], v["pt_viol"], v["hit"],
+            v["missed"], v["false_alarm"], num(v["viol"]["mae_ps"], 9), num(v["viol"]["bias_ps"], 9, True),
+            num(v["met"]["mae_ps"], 9), num(v["met"]["bias_ps"], 9, True)))
+    out.append("missed = GT fails but PT passes (optimistic); false = GT passes but PT fails (pessimistic).")
     if problems:
         out.extend(["", "NOT COMPARED"])
         for run, reason, candidates in problems:
@@ -253,6 +269,7 @@ def render(args, results, problems):
             for name in candidates[:5]:
                 out.append("      candidate: {}".format(name))
     out.extend(["", "Per-corner details: <output-dir>/<setup|hold>/<scaled report name>/summary.txt",
+                "Per-path error sources: same folder, path_breakdown.txt (one line per path)",
                 "GT_mean = mean GT slack (signed). clock = CLOCK VALIDATION of the raw comparison;",
                 "INVALID with a large capture-edge MAE means the corners' clock periods differ: read the aligned table."])
     return out
