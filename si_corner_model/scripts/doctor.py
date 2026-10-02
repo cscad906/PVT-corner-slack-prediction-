@@ -141,6 +141,31 @@ def main():
         return True, os.path.dirname(os.path.abspath(r.__file__))
     check("import si_model.run", _imp_pkg)
 
+    def _which_module():
+        """The file `python3 -m si_model.run` ACTUALLY loads.
+
+        run.sh cds to the project and runs `-m si_model.run`, so the copy that
+        executes is whichever one the interpreter resolves -- not necessarily
+        the one that was just edited. With three checkouts on a machine, or a
+        PYTHONPATH pointing at a fourth, editing the right file and running the
+        wrong one looks exactly like an edit that did not take: the flag is in
+        the file and still missing from the usage line.
+        """
+        rc, out, err = _run([sys.executable, "-c",
+                             "import si_model.run as r; print(r.__file__)"],
+                            cwd=here)
+        if rc:
+            return False, err.decode(errors="replace").strip().splitlines()[-1:]
+        got = os.path.realpath(out.decode().strip())
+        want = os.path.realpath(os.path.join(here, "si_model", "run.py"))
+        if got != want:
+            return False, ("`-m si_model.run` loads %s, NOT the %s you are "
+                           "editing. Check PYTHONPATH and any installed copy"
+                           % (got, want))
+        has = "--save" in open(want, encoding="utf-8", errors="replace").read()
+        return True, "%s%s" % (got, "" if has else "   (and it has no --save)")
+    check("the copy that actually runs", _which_module)
+
     # ------------------------------------------------------------------- config
     def _config():
         import yaml
