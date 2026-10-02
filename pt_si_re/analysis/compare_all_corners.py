@@ -8,6 +8,8 @@ Usage
 
 Inputs (read-only)
     <RESULT_FOLDER>/restored_scaled_<PROC>_<V>V_<T>C_<BEOL>_<AXIS>_<setup|hold>[_net].rpt
+        (also <RESULT_FOLDER>/setup/ and <RESULT_FOLDER>/hold/ when they exist, so a
+        design folder laid out like the GT folder works too)
     <DESIGN_GT_DIR>/setup/*.rpt and <DESIGN_GT_DIR>/hold/*.rpt
         e.g. PERIC0/setup/SSPG_0p60v_125c_rcmax.rpt
 
@@ -101,20 +103,38 @@ def gt_beol_matches(name, beol):
     return beol.lower() in compact
 
 
+def scaled_folders(scaled_dir):
+    """The folder itself plus its setup/ and hold/ subfolders when present."""
+    folders = [Path(scaled_dir)]
+    for sub in ("setup", "hold"):
+        if (Path(scaled_dir) / sub).is_dir():
+            folders.append(Path(scaled_dir) / sub)
+    return folders
+
+
 def find_runs(scaled_dir, analysis_filter):
     runs = []
-    for entry in sorted(os.listdir(scaled_dir)):
-        match = SCALED_RE.match(entry)
-        if not match or not os.path.isfile(os.path.join(scaled_dir, entry)):
-            continue
-        if analysis_filter and match.group("analysis") != analysis_filter:
-            continue
-        runs.append({
-            "name": entry, "path": Path(scaled_dir) / entry,
+    for folder in scaled_folders(scaled_dir):
+        for entry in sorted(os.listdir(str(folder))):
+            run = parse_scaled(folder, entry, analysis_filter)
+            if run is not None:
+                runs.append(run)
+    return runs
+
+
+def parse_scaled(folder, entry, analysis_filter):
+    match = SCALED_RE.match(entry)
+    if not match or not (folder / entry).is_file():
+        return None
+    if analysis_filter and match.group("analysis") != analysis_filter:
+        return None
+    if folder.name in ("setup", "hold") and folder.name != match.group("analysis"):
+        print("WARNING: {} is in {}/ but its name says {}; using the name".format(
+            entry, folder.name, match.group("analysis")))
+    return {"name": entry, "path": folder / entry,
             "process": match.group("process"), "v": tag_number(match.group("v")),
             "t": tag_number(match.group("t")), "beol": canonical_beol(match.group("beol")),
-            "analysis": match.group("analysis"), "mode": "net" if match.group("net") else "path"})
-    return runs
+            "analysis": match.group("analysis"), "mode": "net" if match.group("net") else "path"}
 
 
 def find_gt(run, gt_dir):
@@ -308,7 +328,8 @@ def main(argv=None):
 
     runs = find_runs(args.scaled_dir, args.analysis)
     if not runs:
-        print("NO SCALED REPORTS: no restored_scaled_*.rpt in {}".format(os.path.abspath(args.scaled_dir)))
+        print("NO SCALED REPORTS: no restored_scaled_*.rpt in {} or its setup/ and hold/".format(
+            os.path.abspath(args.scaled_dir)))
         return 1
     results, problems = [], []
     for index, run in enumerate(runs, 1):

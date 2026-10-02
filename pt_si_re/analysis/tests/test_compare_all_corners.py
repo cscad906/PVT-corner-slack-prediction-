@@ -90,6 +90,21 @@ class BatchTests(unittest.TestCase):
         self.assertIn("process 'SSPG' not in the name", reason)
         self.assertEqual(candidates, ["TT_0p60v_125c_rcmax.rpt"])
 
+    def test_scaled_design_folder_with_setup_and_hold(self):
+        design = Path(self.temp.name) / "scaled_design" / "PERIC0"
+        for sub in ("setup", "hold"):
+            (design / sub).mkdir(parents=True)
+        (self.scaled / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_setup.rpt").rename(
+            design / "setup" / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_setup.rpt")
+        (self.scaled / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_hold.rpt").rename(
+            design / "hold" / "restored_scaled_SSPG_0p6V_125C_RCMAX_V_hold.rpt")
+        runs = BATCH.find_runs(str(design), None)
+        self.assertEqual(sorted(run["analysis"] for run in runs), ["hold", "setup"])
+        code = BATCH.main(["--scaled-dir", str(design), "--gt-dir", str(self.gt), "--output-dir", str(self.out)])
+        self.assertEqual(code, 0)
+        text = (self.out / "summary_all.txt").read_text()
+        self.assertEqual(text.count("SSPG 0.6V 125C RCMAX"), 6)  # setup + hold in three tables
+
     def test_name_tokens(self):
         self.assertEqual(BATCH.gt_tokens("SSPG_0p60v_m40c_rcmax.rpt")[:2], (0.6, -40.0))
         self.assertEqual(BATCH.gt_tokens("SSPG_0p675v_125c_cworst.rpt")[:2], (0.675, 125.0))
