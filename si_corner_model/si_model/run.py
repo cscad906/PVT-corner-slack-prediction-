@@ -1775,9 +1775,10 @@ def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
     the same shape predict writes, so the report writer and scripts/plot.py
     take them unchanged.
 
-    Every corner goes in, with the seen ones flagged: at a seen corner the
-    value is the leave-one-out fit (that corner's own measurement excluded), so
-    it is a prediction there too, and the rank trajectory wants the whole grid.
+    Held-out corners only. At a seen corner the value is the leave-one-out fit,
+    which is a prediction of a kind, but it is not what the base is being judged
+    on and a file that mixes the two invites reading the easy columns as the
+    result.
     """
     import numpy as np
 
@@ -1800,18 +1801,23 @@ def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
     keys = [str(x) for x in ds["path_keys"]]
     pidx = ds.get("path_idx")
     pidx = np.arange(len(keys)) if pidx is None else np.asarray(pidx, np.int64)
+    hid = [ci for ci in range(len(split.corners)) if not split.seen[ci]]
+    if not hid:
+        print("  [SAVE] no held-out corner in this grid -- nothing written",
+              flush=True)
+        return ""
     fp = os.path.join(out_dir, "predictions_base.npz")
     np.savez_compressed(
         fp,
         path_keys=np.asarray(keys), path_idx=pidx,
-        corners=np.asarray([str(c) for c in split.corners]),
-        seen=np.asarray(split.seen, bool),
-        measured=np.asarray(measured, bool),
-        truth_ps=np.asarray(native, float) * 1000.0,
-        model_ps=np.asarray(loo_native, float) * 1000.0,
-        clock_ns=clock, n_cycles=ncyc)
-    print("  [SAVE] %s  (%d paths x %d corners)"
-          % (fp, len(keys), len(split.corners)), flush=True)
+        corners=np.asarray([str(split.corners[c]) for c in hid]),
+        seen=np.zeros(len(hid), bool),
+        measured=np.asarray([bool(measured[c]) for c in hid]),
+        truth_ps=np.asarray(native, float)[:, hid] * 1000.0,
+        model_ps=np.asarray(loo_native, float)[:, hid] * 1000.0,
+        clock_ns=clock[hid], n_cycles=ncyc)
+    print("  [SAVE] %s  (%d paths x %d held-out corners)"
+          % (fp, len(keys), len(hid)), flush=True)
     return fp
 
 

@@ -683,6 +683,81 @@ rank_MFC_Timing_Report_125.png  /  rank_MFC_Timing_Report_125_hidden_from_MIF_..
 
 ---
 
+## 8.5 PrimeTime 스케일링과 비교 — `scripts/compare_scaling.py`
+
+PrimeTime 은 **라이브러리가 없는 코너**도 있는 코너를 스케일해서 리포트할 수 있다.
+그게 이 모델이 답하는 질문의 **다른 답**이다. 두 답을 같은 경로 위에 같이 찍는다.
+
+```csh
+# 반드시 먼저: 파일 이름을 어떤 코너로 읽었는지 확인 (그리지 않는다)
+python3 scripts/compare_scaling.py --scaling pt_si/pt_si_re/example/scaling/PERIC0 --list
+
+# 그리기
+python3 scripts/compare_scaling.py --scaling pt_si/pt_si_re/example/scaling/PERIC0
+python3 scripts/compare_scaling.py --scaling .../scaling/PERIC0 --mode hold
+```
+
+`--scaling` 아래를 **재귀적으로** 뒤지므로 그 밑에 `hold/` `setup/` 이 갈려 있어도 한 번에
+다 처리된다. 회로 이름은 경로에서 추측한다 (`--design` 으로 덮어쓸 수 있다).
+
+**그림** (`<runs>/_all/plots/ptscale_<회로>_<mode>_<온도>_<전압>_<레벨>.png`):
+
+- 위: x = **path index** (`### FIXED_PATH idx=<n>`), y = slack (ps). PT 스케일링 /
+  이 모델 / (측정이 있는 코너면) 실측 세 가지
+- 아래: **PT 스케일링 − 모델**. 경향 차이를 보는 건 여기다 — 한쪽으로 치우쳐
+  있는지, slack 이 클수록 벌어지는지가 점 모양으로 바로 보인다
+- 선이 아니라 **점**이다. x 축은 양이 아니라 식별자라, 이으면 없는 추세가 그려진다
+
+**코너는 파일 이름의 토큰으로 찾는다.** 순서나 대소문자가 달라도 된다:
+
+| | 읽는 형태 |
+|---|---|
+| 전압 | `0p52V` / `0.52V` / `520mV` |
+| 온도 | `125C` / `m25C` / `-40C` / `n40C` |
+| BEOL | `rcmax` `rcmin` `cmax` `cmin` `cnom` `cworst` `cbest` `ctyp` `typical` |
+| 체크 | `hold` / `setup` (파일명에 없으면 상위 폴더 이름으로) |
+
+`restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt` 도, `SSPG-0.52v-RCmax-125c.hold.rpt`
+도 같은 코너로 읽는다. **모델 쪽 코너 라벨(`SSPG_0p52V_RCMAX`)도 같은 함수로
+읽는다** — 한 규칙이라 두 쪽이 어긋나질 수 없다. 못 읽는 이름은 **추측하지 않고**
+건너뛰며 목록에 찍는다. 그래서 `--list` 를 먼저 돌리라는 것 — 코너를 하나 잘못 읽으면
+**다른 코너끼리 비교해 놓고 모델이 틀린 것처럼 보인다.**
+
+**모델 값은 이미 써둔 걸 읽는다:**
+
+```
+runs/<mode>/<회로>/<온도>/predictions_*.npz    base --save / train / predict
+runs/<mode>/_all/predict_<온도>_*.rpt         predict --at / --sweep
+```
+
+스케일링한 코너는 보통 **측정 격자에 없는 코너**라서 (그러니까 스케일링을 한
+것이다) 예측 파일에도 없다. 그럴 땐 **돌릴 명령을 그대로 찍어준다**:
+
+```
+to produce the missing ones:
+  bash scripts/run.sh predict --at 0.52:rcmax --temp 125 --mode hold
+```
+
+그걸 돌리고 다시 실행하면 그 리포트를 읽어서 그린다.
+
+**경로는 idx 로 맞춘다.** 양쪽 다 `### FIXED_PATH idx=` 를 가지고 있으면 idx 로,
+아니면 경로 키로 맞춘다. **줄 순서로는 절대 안 맞춘다** — 두 도구가 개수가 다른
+경로를 내놓을 수 있고, 그럼 서로 다른 경로를 비교하면서 모델 오차처럼 보인다.
+몇 개가 무엇으로 맞았는지 매번 찍는다:
+
+```
+  [matched] 0.520V rcmax   125C hold  : 1842 paths joined on idx (with measurement;
+            PT read as FIXED_PATH; model SSPG_0p52V_RCMAX <- PERIC0/125/predictions_base.npz)
+```
+
+PT 리포트가 `### FIXED_PATH` 없는 **그냥 `report_timing` 출력**이어도 읽는다
+(Startpoint/Endpoint 로 키를 만든다). 그때는 x 축이 idx 가 아니라 리포트 순서고,
+그렇다고 축 라벨에 쓴다.
+
+**matplotlib 이 필요하다.** 없으면 `--list` 만 동작한다 (숫자는 그때도 다 찍힌다).
+
+---
+
 ## 8.6 소요시간 — `_all/runtime.rpt`
 
 실행할 때마다 한 줄씩 덧붙는다. 덮어쓰지 않으므로 이전 기록이 남는다.

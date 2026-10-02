@@ -9,6 +9,8 @@
 #   bash scripts/run.sh train --design cpu  # one circuit / one temperature
 #   bash scripts/run.sh predict --corners all
 #   python3 scripts/plot.py                 # scatter + rank movement -> plots/
+#   python3 scripts/compare_scaling.py --scaling <dir> --list
+#                                           # PT voltage scaling vs this model
 #
 #   bash scripts/run.sh train --config config_extrapolation.yaml
 #                                           # the extrapolation experiment:

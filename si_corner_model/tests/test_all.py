@@ -1534,15 +1534,15 @@ def test_base_save_gives_the_report_and_the_arrays_without_training(
 
     assert run.main(["base", "--design", "boomcore", "--save"]) == 0
     z = np.load(os.path.join(out, "predictions_base.npz"), allow_pickle=False)
-    # every corner, with the fit-on ones flagged: at a seen corner the value is
-    # the leave-one-out fit, so it is a prediction there too
-    assert len(z["corners"]) == 8 and int(z["seen"].sum()) == 6
-    assert z["truth_ps"].shape == z["model_ps"].shape == (12, 8)
+    # held-out corners only: a seen corner's leave-one-out fit is not what the
+    # base is judged on, and mixing them invites reading the easy columns
+    assert len(z["corners"]) == 2 and int(z["seen"].sum()) == 0
+    assert z["truth_ps"].shape == z["model_ps"].shape == (12, 2)
     assert np.isfinite(z["clock_ns"]).all() and (z["n_cycles"] > 0).all()
 
     fp = os.path.join("runs", "setup", "_all", "predict_125_base.rpt")
     labels, paths, summ = _read_report(fp)
-    assert len(labels) == 8 and len(paths) == 12
+    assert len(labels) == 2 and len(paths) == 12
     for row in ("mean measured slack (ps)", "mean absolute error (ps)",
                 "WNS measured (ps)", "WNS error (ps)", "WNS error (%)"):
         assert row in summ, sorted(summ)

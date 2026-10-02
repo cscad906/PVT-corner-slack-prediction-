@@ -81,10 +81,13 @@ def main():
         return True, "%d lines, all of %s present" % (lines, len(feats))
     check("this copy has today's code", _which_copy)
 
-    def _plot():
-        fp = os.path.join(here, "scripts", "plot.py")
-        return os.path.exists(fp), fp if os.path.exists(fp) else "missing"
-    check("scripts/plot.py", _plot, optional=True)
+    def _script(name):
+        def go():
+            fp = os.path.join(here, "scripts", name)
+            return os.path.exists(fp), fp if os.path.exists(fp) else "missing"
+        return go
+    for name in ("plot.py", "compare_scaling.py"):
+        check("scripts/" + name, _script(name), optional=True)
 
     # ------------------------------------------------------------------- git
     def _git():
