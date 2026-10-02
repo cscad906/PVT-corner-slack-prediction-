@@ -702,10 +702,17 @@ python3 scripts/compare_scaling.py --scaling .../scaling/PERIC0 --mode hold
 
 **그림** (`<runs>/_all/plots/ptscale_<회로>_<mode>_<온도>_<전압>_<레벨>.png`):
 
-- 위: x = **path index** (`### FIXED_PATH idx=<n>`), y = slack (ps). PT 스케일링 /
-  이 모델 / (측정이 있는 코너면) 실측 세 가지
-- 아래: **PT 스케일링 − 모델**. 경향 차이를 보는 건 여기다 — 한쪽으로 치우쳐
-  있는지, slack 이 클수록 벌어지는지가 점 모양으로 바로 보인다
+- **그래프 하나, 계열 둘.** x = **path index** (`### FIXED_PATH idx=<n>`),
+  y = slack (ps). **PT 스케일링**과 **이 모델**
+- **실측값은 없다.** 스케일링한 코너는 라이브러리가 없는 코너고, 그게 스케일링을
+  한 이유다. 측정할 수단이 애쓰 없었다는 뜻이라 그릴 게 없다
+- 경향 차이는 **두 계열의 세로 간격**이다 — 한쪽으로 치우쳐 있는지, slack 이
+  클수록 벌어지는지. 그 간격의 요약(평균 / 최악 / 편차)은 **터미널에 찍힌다**:
+
+  ```
+  PT scaling - model: mean +20.0 ps, worst +20.0 ps, spread 0.0 ps
+  ```
+
 - 선이 아니라 **점**이다. x 축은 양이 아니라 식별자라, 이으면 없는 추세가 그려진다
 
 **코너는 파일 이름의 토큰으로 찾는다.** 순서나 대소문자가 달라도 된다:
@@ -746,8 +753,9 @@ to produce the missing ones:
 몇 개가 무엇으로 맞았는지 매번 찍는다:
 
 ```
-  [matched] 0.520V rcmax   125C hold  : 1842 paths joined on idx (with measurement;
-            PT read as FIXED_PATH; model SSPG_0p52V_RCMAX <- PERIC0/125/predictions_base.npz)
+  [matched] 0.520V rcmax   125C hold  : 1842 paths joined on idx
+            (PT read as FIXED_PATH; model SSPG_0p52V_RCMAX <- PERIC0/125/predictions_base.npz)
+            PT scaling - model: mean +20.0 ps, worst +20.0 ps, spread 0.0 ps
 ```
 
 PT 리포트가 `### FIXED_PATH` 없는 **그냥 `report_timing` 출력**이어도 읽는다

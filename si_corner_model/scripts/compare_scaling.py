@@ -11,14 +11,15 @@ comparison worth drawing is the two of them on the same paths:
 
     x = path index -- the n of `### FIXED_PATH idx=<n>`, the report's own
         numbering, so a point can be looked up by hand in either report
-    y = slack in ps -- PT scaling, this model, and the measurement where the
-        corner was measured at all
+    y = slack in ps -- PT scaling and this model. No measurement: a corner
+        reached by scaling has no library to have measured it with
 
 Scatter, not a line: x is an identifier, not a quantity. Neighbouring path
 numbers have nothing to do with each other and joining them would draw a trend
 that does not exist. What a reader looks for is whether one series sits above
 the other across the range, and whether the gap grows with the path's own
-slack -- which the lower panel, the difference, shows directly.
+slack -- both of which are the vertical distance between the two series. The
+summary of that distance is printed to the terminal.
 
 FINDING THE CORNER
 ------------------
@@ -197,11 +198,9 @@ def read_plain(fp):
 def read_npz(runs, design, temp, v, lv):
     """A predictions file's take on one corner, or None.
 
-    Returns (model by idx, model by key, truth by idx, truth by key, label,
-    source). The truth is there because the held-out corners a `base --save`
-    writes WERE measured -- so where the scaling corner happens to be one of
-    them, the plot carries all three series and says which of the two methods
-    is closer, not merely that they differ.
+    Returns (model by idx, model by key, label, source). No measurement: a
+    corner reached by scaling is one with no library, which is the whole reason
+    it was scaled, so there is nothing to have measured it with.
     """
     if not os.path.isdir(runs):
         return None
@@ -230,15 +229,8 @@ def read_npz(runs, design, temp, v, lv):
             mod = np.asarray(z["model_ps"], float)[:, ci]
             ids = ([int(x) for x in np.asarray(z["path_idx"], np.int64)]
                    if "path_idx" in z.files else None)
-            tru = None
-            if "truth_ps" in z.files:
-                col = np.asarray(z["truth_ps"], float)[:, ci]
-                if np.isfinite(col).any():
-                    tru = col
             return (dict(zip(ids, mod)) if ids else {},
                     dict(zip(keys, mod)),
-                    dict(zip(ids, tru)) if (ids and tru is not None) else {},
-                    dict(zip(keys, tru)) if tru is not None else {},
                     labels[ci], os.path.join(dsg, str(temp), f))
     return None
 
@@ -318,13 +310,13 @@ def find_predict_rpt(runs, temp, design, v, lv):
         except Exception:                           # noqa: BLE001
             continue
         if bi or bk:
-            return bi, bk, {}, {}, lab, os.path.relpath(fp, runs)
+            return bi, bk, lab, os.path.relpath(fp, runs)
     return None
 
 
 # ---------------------------------------------------------------------- joining
 def join(pt, mod):
-    """(x, pt, model, truth or None, how) over the paths both sides have.
+    """(x, pt, model, how) over the paths both sides have.
 
     By idx when both carry it, else by path key. Never by row order while a key
     is available: the two tools can report a different number of paths, and
@@ -332,20 +324,17 @@ def join(pt, mod):
     model error.
     """
     pt_idx, pt_key, k2i = pt
-    m_idx, m_key, t_idx, t_key = mod
+    m_idx, m_key = mod
 
-    def _out(common, a, b, t, x, how):
-        tr = np.asarray([t.get(k, np.nan) for k in common], float) if t else None
-        if tr is not None and not np.isfinite(tr).any():
-            tr = None
+    def _out(common, a, b, x, how):
         return (np.asarray(x, float),
                 np.asarray([a[k] for k in common], float),
-                np.asarray([b[k] for k in common], float), tr, how)
+                np.asarray([b[k] for k in common], float), how)
 
     if pt_idx and m_idx:
         common = sorted(set(pt_idx) & set(m_idx))
         if common:
-            return _out(common, pt_idx, m_idx, t_idx, common, "idx")
+            return _out(common, pt_idx, m_idx, common, "idx")
     common = sorted(set(pt_key) & set(m_key))
     if not common:
         return None
@@ -355,35 +344,28 @@ def join(pt, mod):
     if have_idx:
         common.sort(key=lambda k: k2i[k])
     x = [k2i[k] if have_idx else j for j, k in enumerate(common)]
-    return _out(common, pt_key, m_key, t_key, x,
+    return _out(common, pt_key, m_key, x,
                 "path key" if have_idx else "path key, no idx in the report")
 
 
 # --------------------------------------------------------------------- drawing
-def draw(plt, x, pt, mine, truth, title, xlabel, fp):
-    fig, (a, b) = plt.subplots(2, 1, figsize=(9.5, 7.0), sharex=True,
-                               gridspec_kw={"height_ratios": [2.2, 1.0]})
-    if truth is not None:
-        a.scatter(x, truth, s=30, alpha=0.5, color="0.35", edgecolors="none",
-                  label="measured")
+def draw(plt, x, pt, mine, title, xlabel, fp):
+    """One panel, two series.
+
+    The difference between them was its own panel for a while. It is one
+    number per path and the eye already reads it as the vertical gap, so the
+    panel only halved the axis the values are actually read on. Its summary
+    -- mean, worst, spread -- is printed to the terminal instead, where it can
+    be copied into a mail.
+    """
+    fig, a = plt.subplots(1, 1, figsize=(9.5, 5.2))
     a.scatter(x, pt, s=20, alpha=0.75, marker="^", label="PT scaling")
     a.scatter(x, mine, s=20, alpha=0.75, marker="o", label="this model")
+    a.set_xlabel(xlabel)
     a.set_ylabel("Slack (ps)")
     a.set_title(title, fontsize=11)
     a.grid(True, lw=0.5, alpha=0.5)
     a.legend(fontsize=9, frameon=False)
-
-    d = np.asarray(pt, float) - np.asarray(mine, float)
-    b.axhline(0.0, color="r", ls="--", lw=1.0)
-    b.scatter(x, d, s=18, alpha=0.75, color="C3", edgecolors="none")
-    b.set_xlabel(xlabel)
-    b.set_ylabel("PT scaling - model (ps)")
-    b.grid(True, lw=0.5, alpha=0.5)
-    fin = d[np.isfinite(d)]
-    if len(fin):
-        b.set_title("mean %+.1f ps,  worst %+.1f ps,  spread %.1f ps"
-                    % (fin.mean(), fin[np.argmax(np.abs(fin))], fin.std()),
-                    fontsize=9)
     fig.tight_layout()
     fig.savefig(fp, dpi=150)
     plt.close(fig)
@@ -475,26 +457,31 @@ def main(argv=None):
             print("  [no prediction] %.3fV %s %sC %s -- nothing in %s"
                   % (v, lv, t, mode, runs))
             continue
-        m_idx, m_key, t_idx, t_key, label, src = got
+        m_idx, m_key, label, src = got
         pt_idx, pt_key, k2i, how_read = read_pt(fp)
         if not (pt_idx or pt_key):
             print("  [unreadable] %s -- no slack lines found in it"
                   % os.path.basename(fp))
             continue
-        j = join((pt_idx, pt_key, k2i), (m_idx, m_key, t_idx, t_key))
+        j = join((pt_idx, pt_key, k2i), (m_idx, m_key))
         if j is None:
             print("  [no overlap] %.3fV %s %sC : %d PT paths, %d model paths, "
                   "none in common -- different path sets"
                   % (v, lv, t, max(len(pt_idx), len(pt_key)),
                      max(len(m_idx), len(m_key))))
             continue
-        x, y_pt, y_me, tr, how = j
+        x, y_pt, y_me, how = j
         print("  [matched] %.3fV %-7s %sC %-5s : %d paths joined on %s "
-              "(%s; PT read as %s; model %s <- %s)"
-              % (v, lv, t, mode, len(x), how,
-                 "with measurement" if tr is not None else "no measurement",
-                 how_read, label, src))
-        pairs.append((v, t, lv, mode, x, y_pt, y_me, tr, how, len(x)))
+              "(PT read as %s; model %s <- %s)"
+              % (v, lv, t, mode, len(x), how, how_read, label, src))
+        # the one number the difference panel used to carry
+        d = y_pt - y_me
+        d = d[np.isfinite(d)]
+        if len(d):
+            print("            PT scaling - model: mean %+.1f ps, worst "
+                  "%+.1f ps, spread %.1f ps"
+                  % (d.mean(), d[np.argmax(np.abs(d))], d.std()))
+        pairs.append((v, t, lv, mode, x, y_pt, y_me, how, len(x)))
 
     if missing:
         print("\nto produce the missing ones:")
@@ -520,7 +507,7 @@ def main(argv=None):
         return 1
 
     made = []
-    for v, t, lv, mode, x, y_pt, y_me, tr, how, n in pairs:
+    for v, t, lv, mode, x, y_pt, y_me, how, n in pairs:
         out_dir = args.out or os.path.join(args.runs or os.path.join("runs", mode),
                                            "_all", "plots")
         try:
@@ -531,7 +518,7 @@ def main(argv=None):
         name = "ptscale_%s_%s_%s_%gV_%s.png" % (design or "design", mode,
                                                 t or "temp", v, lv)
         fp = os.path.join(out_dir, name)
-        draw(plt, x, y_pt, y_me, tr,
+        draw(plt, x, y_pt, y_me,
              "PT scaling vs model -- %s  %.3fV %s %sC %s   (%d paths)"
              % (design or "", v, lv, t or "?", mode, n),
              "Path (report order)" if "no idx" in how else "Path index",

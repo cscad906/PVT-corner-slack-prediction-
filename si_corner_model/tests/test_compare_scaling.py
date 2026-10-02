@@ -123,18 +123,20 @@ def test_a_plain_report_falls_back_to_the_path_key_not_to_row_order(tmp_path):
     assert got[1]["u_a/reg_0_->u_b/reg_0_"] == 50.0
 
     m = cs.read_npz(runs, "PERIC0", 125, 0.52, "rcmax")
-    j = cs.join((got[0], got[1], got[2]), m[:4])
-    x, y_pt, y_me, tr, how = j
+    j = cs.join((got[0], got[1], got[2]), m[:2])
+    x, y_pt, y_me, how = j
     assert len(x) == 4, "only the paths both reported"
     assert "no idx" in how
     assert list(y_pt) == pt
     assert list(y_me) == [45.0, 55.0, 65.0, 75.0], "paired by key, not shifted"
 
 
-def test_the_measurement_is_drawn_when_the_corner_was_measured(tmp_path):
-    """A held-out corner was measured, so where the scaled corner happens to be
-    one, the figure can say which method is closer rather than only that they
-    differ."""
+def test_nothing_measured_is_drawn_even_when_the_file_carries_a_column(tmp_path):
+    """A corner reached by scaling has no library, so nothing measured it --
+    that is the whole reason it was scaled. A predictions file still carries a
+    truth column (NaN, or a real measurement at some other corner that happens
+    to share the name), and drawing it would put a third series on the figure
+    that is not an answer to the question being asked."""
     sc = tmp_path / "s" / "PERIC0" / "setup"
     sc.mkdir(parents=True)
     truth = np.arange(8, dtype=float) * 12.0
@@ -145,10 +147,38 @@ def test_the_measurement_is_drawn_when_the_corner_was_measured(tmp_path):
          truth=truth[:, None])
 
     m = cs.read_npz(runs, "PERIC0", 125, 0.5, "rcmax")
+    assert len(m) == 4, "model by idx, model by key, label, source -- no truth"
     pt = cs.read_pt(str(sc / "SSPG_0p5V_125C_rcmax_setup.rpt"))
-    x, y_pt, y_me, tr, how = cs.join(pt[:3], m[:4])
-    assert how == "idx" and tr is not None
-    assert np.allclose(tr, truth)
+    out = cs.join(pt[:3], m[:2])
+    assert len(out) == 4, "x, pt, model, how"
+    x, y_pt, y_me, how = out
+    assert how == "idx"
+    assert np.allclose(y_me, truth + 5.0) and np.allclose(y_pt, truth + 40.0)
+
+
+def test_one_panel_with_two_series(tmp_path):
+    """One axes, not two. The difference was its own panel for a while; it is
+    the vertical gap the eye already reads, and the panel only halved the axis
+    the values are read on. Its summary goes to the terminal instead."""
+    plt = pytest.importorskip("matplotlib.pyplot")
+    fig_fp = str(tmp_path / "f.png")
+    cs.draw(plt, np.arange(5), np.arange(5) + 10.0, np.arange(5) + 4.0,
+            "t", "Path index", fig_fp)
+    assert os.path.getsize(fig_fp) > 5000
+
+
+def test_the_difference_summary_is_printed(tmp_path, capsys):
+    sc = tmp_path / "s" / "PERIC0" / "setup"
+    sc.mkdir(parents=True)
+    (sc / "SSPG_0p52V_125C_rcmax_setup.rpt").write_text(
+        _fixed_path_report([100.0] * 8))
+    runs = str(tmp_path / "runs" / "setup")
+    _npz(runs, "PERIC0", 125, ["SSPG_0p52V_RCMAX"], np.full((8, 1), 80.0))
+    assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--runs", runs,
+                    "--list"]) == 0
+    o = capsys.readouterr().out
+    assert "PT scaling - model: mean +20.0 ps" in o
+    assert "measurement" not in o
 
 
 def test_an_unmeasured_corner_is_read_out_of_the_predict_report(tmp_path):
