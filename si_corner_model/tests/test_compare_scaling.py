@@ -101,7 +101,7 @@ def test_a_fixed_path_report_is_joined_on_the_reports_own_idx(tmp_path):
     rc = cs.main(["--scaling", str(tmp_path / "scaling" / "PERIC0"),
                   "--runs", runs, "--mode", "hold", "--out", out])
     assert rc == 0
-    assert os.listdir(out) == ["ptscale_PERIC0_hold_125_0.52V_rcmax.png"]
+    assert os.listdir(out) == ["ptscale_PERIC0_base_hold_125_0.52V_rcmax.png"]
 
 
 def test_a_plain_report_falls_back_to_the_path_key_not_to_row_order(tmp_path):
@@ -177,7 +177,7 @@ def test_the_difference_summary_is_printed(tmp_path, capsys):
     assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--runs", runs,
                     "--list"]) == 0
     o = capsys.readouterr().out
-    assert "PT scaling - model: mean +20.0 ps" in o
+    assert "PT scaling - base: mean +20.0 ps" in o
     assert "measurement" not in o
 
 
@@ -237,7 +237,7 @@ def test_it_says_what_to_run_when_the_corner_is_nowhere(tmp_path, capsys):
     assert rc == 1
     o = capsys.readouterr().out
     assert "predict --at 0.52:rcmax --temp 125 --mode hold" in o
-    assert "[no prediction]" in o
+    assert "[no base]" in o
 
 
 def test_an_unreadable_name_is_listed_and_skipped_not_guessed(tmp_path, capsys):
@@ -301,4 +301,4 @@ def test_it_runs_as_a_script_with_no_package_on_the_path(tmp_path):
     assert r.returncode == 0, r.stderr.decode()
     assert b"1 figure(s)" in r.stdout
     assert os.path.getsize(str(tmp_path / "p" /
-                               "ptscale_PERIC0_setup_125_0.52V_rcmax.png")) > 5000
+                               "ptscale_PERIC0_base_setup_125_0.52V_rcmax.png")) > 5000

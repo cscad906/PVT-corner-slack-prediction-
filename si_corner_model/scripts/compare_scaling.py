@@ -84,6 +84,13 @@ _V_MV = re.compile(r"(\d{3,4})\s*mv", re.I)
 _T = re.compile(r"(?:^|[^a-z0-9])(m|n|-)?(\d{1,3})\s*c(?:[^a-z]|$)", re.I)
 _SUFFIX = re.compile(r"_#\d+$")
 
+# What the second series is called on the figure. The comparison is against the
+# OLS base by default -- `run.sh base --save` -- and saying "this model" of it
+# would name the wrong thing: the base is the closed-form fit, the model is the
+# base plus a trained residual, and they are different claims.
+MINE = {"base": "base (OLS)", "hidden": "model (trained)",
+        "all": "model (trained)"}
+
 
 def tokens(name):
     """(voltage, temp, level, check) from a name. None for anything absent.
@@ -195,12 +202,19 @@ def read_plain(fp):
     return out
 
 
-def read_npz(runs, design, temp, v, lv):
-    """A predictions file's take on one corner, or None.
+def read_npz(runs, design, temp, v, lv, tag="base"):
+    """The OLS base's take on one corner, or None.
 
-    Returns (model by idx, model by key, label, source). No measurement: a
-    corner reached by scaling is one with no library, which is the whole reason
-    it was scaled, so there is nothing to have measured it with.
+    Returns (base by idx, base by key, label, source). No measurement: a corner
+    reached by scaling is one with no library, which is the whole reason it was
+    scaled, so there is nothing to have measured it with.
+
+    `tag` names the file -- predictions_base.npz by default, which is what
+    `run.sh base --save` writes. It used to take whichever predictions_*.npz
+    sorted first, so a directory holding both a base and a trained run compared
+    PrimeTime against whichever one that happened to be, and the figure said
+    only "this model". The two are different claims and the comparison is about
+    the base.
     """
     if not os.path.isdir(runs):
         return None
@@ -212,7 +226,7 @@ def read_npz(runs, design, temp, v, lv):
         if not os.path.isdir(d):
             continue
         for f in sorted(os.listdir(d)):
-            if not (f.startswith("predictions_") and f.endswith(".npz")):
+            if f != "predictions_%s.npz" % tag:
                 continue
             try:
                 z = np.load(os.path.join(d, f), allow_pickle=False)
@@ -296,15 +310,22 @@ def read_predict_rpt(fp, design, v, lv):
     return by_idx, by_key, label
 
 
-def find_predict_rpt(runs, temp, design, v, lv):
-    """The newest predict report that actually carries this corner."""
+def find_predict_rpt(runs, temp, design, v, lv, tag="base"):
+    """The newest report that carries this corner.
+
+    `predict_<temp>_<tag>.rpt` first -- the one `base --save` writes -- then any
+    other predict report, because a corner with no library is usually reachable
+    only through `predict --at`, which names its own file.
+    """
     d = os.path.join(runs, "_all")
     if not os.path.isdir(d):
         return None
     cands = [os.path.join(d, f) for f in os.listdir(d)
              if f.startswith("predict_") and f.endswith(".rpt")
              and (temp is None or ("_%s_" % temp) in f)]
-    for fp in sorted(cands, key=os.path.getmtime, reverse=True):
+    cands.sort(key=lambda f: (not f.endswith("_%s.rpt" % tag),
+                              -os.path.getmtime(f)))
+    for fp in cands:
         try:
             bi, bk, lab = read_predict_rpt(fp, design, v, lv)
         except Exception:                           # noqa: BLE001
@@ -349,7 +370,7 @@ def join(pt, mod):
 
 
 # --------------------------------------------------------------------- drawing
-def draw(plt, x, pt, mine, title, xlabel, fp):
+def draw(plt, x, pt, mine, title, xlabel, fp, mine_label="base (OLS)"):
     """One panel, two series.
 
     The difference between them was its own panel for a while. It is one
@@ -360,7 +381,7 @@ def draw(plt, x, pt, mine, title, xlabel, fp):
     """
     fig, a = plt.subplots(1, 1, figsize=(9.5, 5.2))
     a.scatter(x, pt, s=20, alpha=0.75, marker="^", label="PT scaling")
-    a.scatter(x, mine, s=20, alpha=0.75, marker="o", label="this model")
+    a.scatter(x, mine, s=20, alpha=0.75, marker="o", label=mine_label)
     a.set_xlabel(xlabel)
     a.set_ylabel("Slack (ps)")
     a.set_title(title, fontsize=11)
@@ -388,6 +409,12 @@ def main(argv=None):
                          "--scaling that names one in the runs tree)")
     ap.add_argument("--out", default=None,
                     help="where the .png go (default <runs>/_all/plots)")
+    ap.add_argument("--source", default="base",
+                    help="which of this repo's own numbers to compare against: "
+                         "the tag in predictions_<tag>.npz / "
+                         "predict_<temp>_<tag>.rpt. Default base -- the OLS "
+                         "base, what `run.sh base --save` writes. Use hidden "
+                         "for a trained run")
     ap.add_argument("--list", action="store_true", dest="list_only",
                     help="print what every name was read as and what was found "
                          "for it, and draw nothing. Run this first")
@@ -450,12 +477,14 @@ def main(argv=None):
     for fp, v, t, lv, check in jobs:
         mode = args.mode or check or "setup"
         runs = args.runs or os.path.join("runs", mode)
-        got = (read_npz(runs, design, t, v, lv)
-               or find_predict_rpt(runs, t, design, v, lv))
+        got = (read_npz(runs, design, t, v, lv, args.source)
+               or find_predict_rpt(runs, t, design, v, lv, args.source))
         if got is None:
             missing.append((v, lv, t, mode))
-            print("  [no prediction] %.3fV %s %sC %s -- nothing in %s"
-                  % (v, lv, t, mode, runs))
+            print("  [no %s] %.3fV %s %sC %s -- no predictions_%s.npz nor "
+                  "predict_%s_%s.rpt under %s"
+                  % (args.source, v, lv, t, mode, args.source, t,
+                     args.source, runs))
             continue
         m_idx, m_key, label, src = got
         pt_idx, pt_key, k2i, how_read = read_pt(fp)
@@ -472,23 +501,30 @@ def main(argv=None):
             continue
         x, y_pt, y_me, how = j
         print("  [matched] %.3fV %-7s %sC %-5s : %d paths joined on %s "
-              "(PT read as %s; model %s <- %s)"
-              % (v, lv, t, mode, len(x), how, how_read, label, src))
+              "(PT read as %s; %s %s <- %s)"
+              % (v, lv, t, mode, len(x), how, how_read, args.source, label,
+                 src))
         # the one number the difference panel used to carry
         d = y_pt - y_me
         d = d[np.isfinite(d)]
         if len(d):
-            print("            PT scaling - model: mean %+.1f ps, worst "
+            print("            PT scaling - %s: mean %+.1f ps, worst "
                   "%+.1f ps, spread %.1f ps"
-                  % (d.mean(), d[np.argmax(np.abs(d))], d.std()))
+                  % (args.source, d.mean(), d[np.argmax(np.abs(d))], d.std()))
         pairs.append((v, t, lv, mode, x, y_pt, y_me, how, len(x)))
 
     if missing:
         print("\nto produce the missing ones:")
         for v, lv, t, mode in sorted(set(missing)):
+            md = "" if mode == "setup" else " --mode hold"
+            if args.source == "base":
+                # the base at a corner nobody measured: it is a fit, so it has
+                # a value everywhere -- but only --at writes one out by name
+                print("  bash scripts/run.sh base --save --temp %s%s"
+                      "        # if %g:%s is in the measured grid" % (t, md, v, lv))
             print("  bash scripts/run.sh predict --at %g:%s --temp %s%s"
-                  % (v, lv, t, "" if mode == "setup" else " --mode hold"))
-        print("  then run this again -- it reads the report that writes.")
+                  % (v, lv, t, md))
+        print("  then run this again -- it reads what those write.")
 
     if args.list_only:
         return 0
@@ -515,14 +551,15 @@ def main(argv=None):
         except OSError:
             if not os.path.isdir(out_dir):
                 raise
-        name = "ptscale_%s_%s_%s_%gV_%s.png" % (design or "design", mode,
-                                                t or "temp", v, lv)
+        name = "ptscale_%s_%s_%s_%s_%gV_%s.png" % (
+            design or "design", args.source, mode, t or "temp", v, lv)
         fp = os.path.join(out_dir, name)
         draw(plt, x, y_pt, y_me,
-             "PT scaling vs model -- %s  %.3fV %s %sC %s   (%d paths)"
-             % (design or "", v, lv, t or "?", mode, n),
+             "PT scaling vs %s -- %s  %.3fV %s %sC %s   (%d paths)"
+             % (MINE.get(args.source, args.source), design or "", v, lv,
+                t or "?", mode, n),
              "Path (report order)" if "no idx" in how else "Path index",
-             fp)
+             fp, MINE.get(args.source, args.source))
         made.append(fp)
     for f in made:
         print("wrote %s" % f)

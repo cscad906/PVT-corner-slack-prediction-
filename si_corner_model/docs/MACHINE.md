@@ -730,12 +730,19 @@ python3 scripts/compare_scaling.py --scaling .../scaling/PERIC0 --mode hold
 건너뛰며 목록에 찍는다. 그래서 `--list` 를 먼저 돌리라는 것 — 코너를 하나 잘못 읽으면
 **다른 코너끼리 비교해 놓고 모델이 틀린 것처럼 보인다.**
 
-**모델 값은 이미 써둔 걸 읽는다:**
+**비교 대상은 OLS base 다** (`--source` 로 바꿈). 이미 써둔 걸 읽는다:
 
 ```
-runs/<mode>/<회로>/<온도>/predictions_*.npz    base --save / train / predict
-runs/<mode>/_all/predict_<온도>_*.rpt         predict --at / --sweep
+runs/<mode>/<회로>/<온도>/predictions_base.npz    <- bash scripts/run.sh base --save
+runs/<mode>/_all/predict_<온도>_base.rpt          <- 위와 같은 명령
+runs/<mode>/_all/predict_<온도>_*.rpt             <- predict --at / --sweep
 ```
+
+전에는 `predictions_*.npz` 중 알파벳 순으로 먼저 오는 걸 집어서, 학습된 모델 결과가
+있으면 그걸 비교했다. base 와 model 은 **다른 주장**이다 — base 는 닫힌형 OLS 적합이고
+model 은 거기에 학습된 잔차를 더한 것이라, 그림에 "this model" 이라고 썼으면 틀린 걸 가리킨다.
+지금은 `predictions_base.npz` 만 읽고, 범례에 `base (OLS)` 라고 나온다.
+학습된 모델과 비교하려면 `--source hidden`.
 
 스케일링한 코너는 보통 **측정 격자에 없는 코너**라서 (그러니까 스케일링을 한
 것이다) 예측 파일에도 없다. 그럴 땐 **돌릴 명령을 그대로 찍어준다**:
