@@ -389,7 +389,8 @@ si_corner_model/
     ├── <회로>/<온도>/predictions_hidden.npz   경로별 예측 (merge 입력)
     ├── <회로>/model.pt                        회로당 한 파일 (bundle)
     ├── _all/predict_<온도>_hidden.rpt         홀드아웃 코너 리포트 (predict)
-    ├── _all/runtime.rpt                      단계별 소요시간 (실행마다 한 줄 추가)
+    ├── _all/runtime.rpt                      회로별 소요시간 (실행마다 한 줄 추가)
+    └── plots/                                scripts/plot.py 가 그리는 그림 (별도 실행)
     └── _all/predictions_hidden.npz            전 회로·온도 합본 (merge, 기계용)
     └── _all/summary.json                      코너별 성적표
 ```
@@ -571,6 +572,40 @@ designs:
 
 ---
 
+## 8.4 그림 그리기 — `scripts/plot.py`
+
+발표 자료의 **scatter plot** 과 **rank movement** 그래프를 예측 파일에서 바로 그린다.
+
+```csh
+python3 scripts/plot.py                                   # runs/setup 전부 -> plots/
+python3 scripts/plot.py --runs runs/extrapolation/setup   # 외삽 실험 쪽
+python3 scripts/plot.py --design MFC_Timing_Report --temp 125
+python3 scripts/plot.py --corners all --out plots_all     # seen 까지 전부
+```
+
+나오는 파일:
+
+```
+plots/scatter_<회로>_<온도>_<코너>.png    코너마다 하나. 실측 vs 예측, y=x 점선, MAE·N
+plots/rank_<회로>_<온도>.png              코너를 가로축으로, True / Predicted 순위 궤적 2단
+```
+
+- **scatter**: 대각선에서 떨어진 거리가 오차다. 한쪽 끝에서만 휘면 "범위 가운데는
+  맞고 끝에서 틀리는" 모델인데, MAE 하나로는 안 보인다
+- **rank movement**: 추적할 경로는 **첫 코너 → 마지막 코너에서 순위가 가장 많이
+  움직인 것** 5개를 자동으로 고른다 (`--track` 로 개수 변경). 순위가 그대로인 경로는
+  수천 개 중 거의 전부라 아무것도 말해주지 않는다. 왼쪽이 실측 순위, 오른쪽이 예측
+  순위이고, **모양이 같으면 그 모델로 critical path 를 골라도 된다**는 뜻이다. ps 오차가
+  조금 있어도 순서가 살아있으면 쓸모가 있다
+- 코너가 많아야 궤적이 보인다. **`predict --corners all`** 로 돌리면 seen 까지 전부
+  들어가서 제일 풍부하다. 측정값 없는 코너(query)는 scatter 에서 빠진다
+
+**matplotlib 이 필요하다.** 파이프라인의 다른 부분은 쓰지 않으므로, 없는 장비에서는
+이 스크립트만 안 되고 그렇다고 한 줄로 알려준다 (`pip install matplotlib`). 디스플레이가
+없어도 되게 Agg 백엔드로 고정돼 있다.
+
+---
+
 ## 8.6 단계별 소요시간 — `_all/runtime.rpt`
 
 실행할 때마다 **단계마다 한 줄**이 덧붙는다. 덮어쓰지 않으므로 이전 기록이 남는다.
@@ -578,15 +613,21 @@ designs:
 ```
 # si_corner_model runtime -- one line per stage, appended. wall/cpu: cpu > wall means threads.
 date             stage    circuit                  temp   paths corners      wall       cpu  thr host
-2026-10-02 12:43 build    MFC_Timing_Report        125      12       8     3h12m    41h02m   16 knuee-srv5
-2026-10-02 15:55 train    MFC_Timing_Report        125      12       8    28m04s   3h40m    16 knuee-srv5  epochs=40
-2026-10-02 16:23 predict  MFC_Timing_Report        125      12       8      4.1s     9.2s    16 knuee-srv5  corners=hidden
-2026-10-02 16:23 report   -                        -         -       -      8.3s    12.1s    16 knuee-srv5  corners=hidden
-2026-10-02 16:23 merge    -                        -         -       -      1.2s     1.4s    16 knuee-srv5  corners=hidden
+2026-10-02 12:43 build    MFC_Timing_Report        setup      2    12      20     3h12m    41h02m   16 knuee-srv5
+2026-10-02 15:55 train    MFC_Timing_Report        setup      2    12      20    28m04s   3h40m    16 knuee-srv5  epochs=40
+2026-10-02 16:23 predict  MFC_Timing_Report        setup      2    12      20      4.1s     9.2s    16 knuee-srv5  corners=hidden
+2026-10-02 16:23 report   -                        setup      -     -       -      8.3s    12.1s    16 knuee-srv5  corners=hidden
+2026-10-02 16:23 merge    -                        setup      -     -       -      1.2s     1.4s    16 knuee-srv5  corners=hidden
 ```
+
+- **회로마다 한 줄**이고, 그 회로의 **온도는 합산**된다 (`temps` 가 몇 개였는지).
+  온도는 내부 분할이고, 묻는 건 "이 회로 setup 이 얼마 걸렸나" 이기 때문이다.
+  `mode` 열이 setup/hold 를 구분한다
 
 - **`wall`** 은 실제 경과, **`cpu`** 는 쓴 CPU 시간 합. `cpu > wall` 이면 스레드를
   쓰고 있다는 뜻이고, `cpu ≈ wall` 이면 한 코어로 기다리고 있다는 뜻이다
+- 그 회로의 **마지막 온도가 끝날 때** 쓴다. 세 회로짜리 build 가 세 번째에서 죽어도
+  앞의 두 줄은 남는다
 - **`paths` / `corners`** 가 같이 적힌다. 이게 없으면 "3시간"이 빠른지 느린지 알 수
   없다 — 경로 12개의 3시간과 4000개의 3시간은 다른 측정이다
 - **`thr` / `host`** 도 적힌다. 같은 build 가 16스레드에 3시간, 4스레드에 하루다

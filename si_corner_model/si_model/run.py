@@ -1151,14 +1151,19 @@ def _scale_of(m: dict) -> "tuple":
 
 
 def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
-                  cpu: float, extra: str = "") -> None:
-    """Append one line per stage to runs/<tag>/<mode>/_all/runtime.rpt.
+                  cpu: float, extra: str = "", temps: int = 1) -> None:
+    """Append one line per (stage, circuit) to runs/<tag>/<mode>/_all/runtime.rpt.
 
-    Appended, never rewritten, because the question it answers is "how long
-    does this pipeline take" and that only has an answer across runs. One file
-    for the whole tree rather than a field in summary.json: `predict`, `base`
-    and `build` write no summary.json, so a field there would record the two
-    stages nobody asks about and miss the one that takes hours.
+    One line per CIRCUIT, not per temperature: the question asked of it is "how
+    long did setup take for this circuit, and how long hold", and a temperature
+    is an internal split of that. The temperatures of one circuit are summed and
+    their count is a column; the mode is a column because setup and hold are
+    separate runs of the same work.
+
+    Appended, never rewritten, because the question only has an answer across
+    runs. One file for the whole tree rather than a field in summary.json:
+    `predict`, `base` and `build` write no summary.json, so a field there would
+    record the two stages nobody asks about and miss the one that takes hours.
 
     The scale and the machine are on the line with the duration. A wall time
     without the thread count, the host and the path count is not a measurement
@@ -1173,27 +1178,32 @@ def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
         os.makedirs(d, exist_ok=True)
         fp = os.path.join(d, "runtime.rpt")
         new = not os.path.exists(fp)
-        n_paths, n_corners = _scale_of(m) if m else (None, None)
+        n_paths, n_corners = (m.get("_scale") or _scale_of(m)) if m else (None, None)
         with open(fp, "a", encoding="utf-8") as f:
             if new:
                 f.write("# si_corner_model runtime -- one line per stage, "
                         "appended. wall/cpu: cpu > wall means threads.\n")
-                f.write("%-16s %-8s %-24s %-5s %6s %7s %9s %9s %4s %s\n"
-                        % ("date", "stage", "circuit", "temp", "paths",
-                           "corners", "wall", "cpu", "thr", "host"))
-            f.write("%-16s %-8s %-24s %-5s %6s %7s %9s %9s %4s %s%s\n"
+                f.write("%-16s %-8s %-24s %-6s %5s %6s %7s %9s %9s %4s %s\n"
+                        % ("date", "stage", "circuit", "mode", "temps",
+                           "paths", "corners", "wall", "cpu", "thr", "host"))
+            f.write("%-16s %-8s %-24s %-6s %5s %6s %7s %9s %9s %4s %s%s\n"
                     % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                        stage,
                        (m["design"] if m else "-")[:24],
-                       str(m["temp"]) if m else "-",
+                       str(p.get("mode") or "setup"),
+                       temps if m else "-",
                        "-" if n_paths is None else n_paths,
                        "-" if n_corners is None else n_corners,
                        _hms(wall), _hms(cpu),
                        os.environ.get("OMP_NUM_THREADS", "-"),
                        socket.gethostname(),
                        ("  " + extra) if extra else ""))
-    except OSError:
-        pass          # a timing note is never worth failing a run over
+    except Exception:            # noqa: BLE001 -- see below
+        # Deliberately everything, not just OSError. This writes a note about a
+        # run that already succeeded; a read-only directory, a hostname lookup
+        # that fails, a locale that cannot encode -- none of them are a reason
+        # to lose four hours of build.
+        pass
 
 
 def _runs_root(p: dict) -> str:
@@ -3221,6 +3231,17 @@ def stage_merge(models: list, p: dict, corners: str) -> str:
                 and os.path.getmtime(fp) < os.path.getmtime(ckpt)):
             stale.append(m["name"])
         z = np.load(fp, allow_pickle=False)
+        have = set(z.files)
+        if not ({"path_keys", "corners"} <= have
+                and ({"truth_ps", "model_ps"} <= have
+                     or {"truth_ns", "model_ns"} <= have)):
+            # A file written by an older version, or by hand. Skipping it with
+            # a reason beats a KeyError three frames down that names a column.
+            print(f"  (!) {fp} has {sorted(have)}, not a prediction file this "
+                  f"version wrote -- skipping. Re-run predict for "
+                  f"{m['name']}.", flush=True)
+            missing.append(m["name"])
+            continue
         keys = [str(x) for x in z["path_keys"]]
         cn = [str(x) for x in z["corners"]]
         # The slack task stores ps, the slew task ns. The merged table is in ps
@@ -3476,6 +3497,37 @@ def main(argv=None):
             _runtime_note(p, stage, m, time.time() - t0,
                           memlog.cpu_seconds() - c0, extra)
 
+    # Per-circuit accumulator for the stages that run per model. The line is
+    # written when that circuit's last temperature finishes, not at the end of
+    # the run: a build killed in the third circuit still records the first two,
+    # which is the case the timings are wanted for.
+    acc = {}
+
+    def timed_model(stage, m, fn, extra=""):
+        t0, c0 = time.time(), memlog.cpu_seconds()
+        try:
+            return fn()
+        finally:
+            a = acc.setdefault((stage, m["design"]),
+                               {"wall": 0.0, "cpu": 0.0, "temps": 0,
+                                "paths": None, "corners": 0, "extra": extra})
+            a["wall"] += time.time() - t0
+            a["cpu"] += memlog.cpu_seconds() - c0
+            a["temps"] += 1
+            n_paths, n_corners = _scale_of(m)
+            if n_paths is not None:
+                a["paths"] = max(a["paths"] or 0, n_paths)
+                a["corners"] += n_corners or 0
+
+    def flush_models(stage, design):
+        a = acc.pop((stage, design), None)
+        if a is None:
+            return
+        note = dict(a)
+        _runtime_note(p, stage, {"design": design, "temp": "-",
+                                 "_scale": (note["paths"], note["corners"])},
+                      note["wall"], note["cpu"], note["extra"], note["temps"])
+
     for stage in stages:
         if stage == "bundle":
             print(f"\n===== bundle: one weight file per circuit =====", flush=True)
@@ -3508,17 +3560,20 @@ def main(argv=None):
                     req, only = _split_request(models, args.corners)
                     # the per-model CSV/npz as well: `merge` reads those, and
                     # they carry the per-path truth and error the report sums up
-                    for m in models:
+                    for i, m in enumerate(models):
                         try:
-                            timed("predict", m,
-                                  lambda m=m: stage_predict(m, args.corners,
-                                                            args.weights),
-                                  _timing_note(args))
+                            timed_model("predict", m,
+                                        lambda m=m: stage_predict(
+                                            m, args.corners, args.weights),
+                                        _timing_note(args))
                         except Exception as e:
                             failed.append((f"predict:{m['name']}", repr(e)))
                             traceback.print_exc()
                             print(f"!!!!! FAILED predict: {m['name']} -- "
                                   f"continuing", flush=True)
+                        if (i + 1 == len(models)
+                                or models[i + 1]["design"] != m["design"]):
+                            flush_models("predict", m["design"])
                 name = args.name or _default_predict_name(
                     args.design, args.temp, args.at, args.sweep, args.level, req,
                     args.weights, args.period, args.freq,
@@ -3533,22 +3588,25 @@ def main(argv=None):
                 failed.append(("predict", repr(e)))
                 traceback.print_exc()
             continue
-        for m in models:
+        for i, m in enumerate(models):
             print(f"\n===== {stage}: {m['name']} =====", flush=True)
             try:
                 if stage == "build":
-                    timed("build", m, lambda: stage_build(m))
+                    timed_model("build", m, lambda: stage_build(m))
                 elif stage == "base":
-                    timed("base", m, lambda: stage_base(m))
+                    timed_model("base", m, lambda: stage_base(m))
                 elif stage == "train":
-                    timed("train", m, lambda: stage_train(m),
-                          "epochs=%s" % m["cfg"]["train"].get("epochs"))
+                    timed_model("train", m, lambda: stage_train(m),
+                                "epochs=%s" % m["cfg"]["train"].get("epochs"))
                 elif stage == "sweep":
-                    timed("sweep", m, lambda: stage_sweep(m))
+                    timed_model("sweep", m, lambda: stage_sweep(m))
             except Exception as e:
                 failed.append((f"{stage}:{m['name']}", repr(e)))
                 traceback.print_exc()
                 print(f"!!!!! FAILED {stage}: {m['name']} -- continuing", flush=True)
+            # this circuit's last temperature in this stage -> write its line
+            if i + 1 == len(models) or models[i + 1]["design"] != m["design"]:
+                flush_models(stage, m["design"])
 
     print("\n" + "=" * 60)
     if failed:

@@ -8,6 +8,7 @@
 #   bash scripts/run.sh base                # OLS base check (numpy only, no GPU)
 #   bash scripts/run.sh train --design cpu  # one circuit / one temperature
 #   bash scripts/run.sh predict --corners all
+#   python3 scripts/plot.py                 # scatter + rank movement -> plots/
 #
 #   bash scripts/run.sh train --config config_extrapolation.yaml
 #                                           # the extrapolation experiment:

@@ -1528,25 +1528,29 @@ def test_every_stage_records_how_long_it_took(real_tree, tmp_path, monkeypatch):
     monkeypatch.setenv("SI_STAGE", "")
     monkeypatch.setattr(run, "REPO_ROOT", str(tmp_path))
     monkeypatch.setattr(run, "load_project", lambda *a, **k: project())
-    assert run.main(["base", "--design", "boomcore", "--temp", "m25"]) == 0
+    assert run.main(["base", "--design", "boomcore"]) == 0
 
     fp = os.path.join("runs", "setup", "_all", "runtime.rpt")
     first = open(fp).read().splitlines()
     assert first[0].startswith("#")
-    assert first[1].split()[:3] == ["date", "stage", "circuit"]
+    assert first[1].split()[:4] == ["date", "stage", "circuit", "mode"]
     row = first[2].split()
-    assert row[2] == "base" and row[3] == "boomcore" and row[4] == "m25"
+    # ONE line for the circuit, both temperatures summed into it -- a
+    # temperature is an internal split, and the question is how long setup took
+    assert row[2] == "base" and row[3] == "boomcore" and row[4] == "setup"
+    assert int(row[5]) == 2                                     # temperatures
     # the scale, so the duration can be compared with another drop's
-    assert int(row[5]) == 12 and int(row[6]) == 12
-    assert row[7].endswith("s") and row[8].endswith("s")        # wall, cpu
-    assert row[9] == "3", row                                   # threads
-    assert len(first) == 3
+    assert int(row[6]) == 12 and int(row[7]) == 8 + 12          # paths, corners
+    assert row[8].endswith("s") and row[9].endswith("s")        # wall, cpu
+    assert row[10] == "3", row                                  # threads
+    assert len(first) == 3, first
 
     # a second run APPENDS -- the previous timing is the thing being compared
     assert run.main(["base", "--design", "boomcore", "--temp", "125"]) == 0
     again = open(fp).read().splitlines()
     assert again[:3] == first
     assert len(again) == 4 and again[3].split()[2] == "base"
+    assert int(again[3].split()[5]) == 1                        # just the one
 
 
 def test_blind_hidden_keeps_every_choice_off_the_held_out_corners(
