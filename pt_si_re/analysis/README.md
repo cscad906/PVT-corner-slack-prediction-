@@ -55,6 +55,25 @@ python3 analysis/plot_ground_truth_slack.py ground_truth/ \
     --output-dir results/ground_truth_slack
 ```
 
+### 디자인 전체 코너를 한 번에 (`compare_all_corners.py`)
+
+```bash
+python3 analysis/compare_all_corners.py --scaled-dir <RESULT_FOLDER> --gt-dir <.../PERIC0>
+```
+
+`RESULT_FOLDER` 의 `restored_scaled_*.rpt` 를 전부 찾아, `<gt-dir>/setup/` 과
+`<gt-dir>/hold/` 에서 이름의 공정·전압(숫자로 비교, `0p6`=`0p60`)·온도·BEOL 이 같은
+`.rpt` 하나와 짝지어 비교합니다. 짝이 없거나 여럿이면 비교하지 않고 `NOT COMPARED` 에
+후보와 함께 적습니다. 계산은 `compare_scaling_mae.py` 함수를 그대로 쓰므로 코너 하나씩
+돌린 것과 같고, 코너별 상세 파일도 그대로 남습니다. `--analysis setup|hold` 를 주지 않으면
+둘 다 합니다.
+
+결과는 화면과 `<output-dir>/summary_all.txt`(있으면 `_runN`) 하나입니다. 표 두 개:
+- `RAW`: 경로 수, GT slack 평균, MAE·MAE%, max err·max%, GT/PT WNS·WNS 오차·WNS%, clock 상태
+- `PERIOD-ALIGNED`: 경로마다 자기 클럭 edge 차이를 뺀 MAE·MAE%·bias·max·WNS 오차(아래 `--align-period` 와 같은 계산)
+
+퍼센트: `MAE%`, `max%` = 값 / mean(|GT slack|) x 100, `WNS%` = |WNS 오차| / |GT WNS| x 100.
+
 ### 코너별 클럭 주기가 다를 때 (`--align-period`)
 
 스케일링 run 은 링크 코너 세션의 SDC 주기를, GT 는 목표 코너의 주기를 씁니다. 둘이
