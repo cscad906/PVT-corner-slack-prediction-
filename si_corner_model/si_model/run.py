@@ -1831,6 +1831,34 @@ def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
     return fp
 
 
+def _recolumn(entry, cols: list):
+    """One circuit's arrays laid out on a shared column list.
+
+    Missing columns are NaN and kind `n/a`, which is what blanks the cell in
+    both the path rows and the summary -- see `_summary_rows`.
+    """
+    import numpy as np
+
+    m, keys, pidx, vals, kinds, ncyc, clock, truth, mine = entry
+    at = {c: i for i, c in enumerate(mine)}
+    N, C = vals.shape[0], len(cols)
+    v2 = np.full((N, C), np.nan)
+    t2 = np.full((N, C), np.nan)
+    k2 = ["n/a"] * C
+    c2 = [float("nan")] * C
+    for j, c in enumerate(cols):
+        i = at.get(c)
+        if i is None:
+            continue
+        v2[:, j] = vals[:, i]
+        t2[:, j] = truth[:, i]
+        k2[j] = kinds[i]
+        if clock is not None:
+            c2[j] = clock[i]
+    return (m, keys, pidx, v2, k2, ncyc,
+            None if clock is None else c2, t2)
+
+
 def _report_from_saved(p: dict, models: list, tag: str) -> list:
     """Build the per-temperature .rpt from prediction arrays already on disk.
 
@@ -1871,10 +1899,23 @@ def _report_from_saved(p: dict, models: list, tag: str) -> list:
             temps.append(str(e[0]["temp"]))
     fps = _predict_files(p, tag, temps)
     for t in temps:
-        grp = [e[:8] for e in loaded if str(e[0]["temp"]) == t]
-        cols = [e[8] for e in loaded if str(e[0]["temp"]) == t][0]
-        keep = list(range(len(cols)))
-        _write_predict_report(fps[t], cols, keep, grp, t, None, None, f1)
+        here = [e for e in loaded if str(e[0]["temp"]) == t]
+        # The UNION of what each circuit held out, not the first circuit's list.
+        # The split is per model -- `hidden_corners` is declared per temperature
+        # and circuits need not agree -- so taking one circuit's corners as the
+        # header printed every other circuit's numbers under labels belonging to
+        # that first one. Columns a circuit does not have are left EMPTY, the
+        # same way `predict --corners hidden` leaves them: a corner one circuit
+        # held out can be a seen corner for another, and the two are not the
+        # same number.
+        cols = []
+        for e in here:
+            for c in e[8]:
+                if c not in cols:
+                    cols.append(c)
+        grp = [_recolumn(e, cols) for e in here]
+        _write_predict_report(fps[t], cols, list(range(len(cols))), grp, t,
+                              None, None, f1)
         print("  [SAVE] %s" % fps[t], flush=True)
         out.append(fps[t])
     return out

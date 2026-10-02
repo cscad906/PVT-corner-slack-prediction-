@@ -2450,3 +2450,56 @@ def test_merge_summary_agrees_with_the_per_model_arrays(real_tree, tmp_path,
     assert set(str(x) for x in g["temp"]) == {"m25"}
     assert sorted(set(str(x) for x in g["corner"])) == sorted(corners)
     assert not os.path.exists("runs/setup/_all/predictions_hidden.csv")
+
+
+def test_the_base_report_uses_each_circuits_own_hidden_corners(tmp_path,
+                                                               monkeypatch):
+    """`hidden_corners` is declared PER temperature and circuits need not
+    agree, so the base report's columns are the union of what each circuit held
+    out -- and a circuit that did not hold a corner out leaves that cell empty.
+
+    It used to take the FIRST circuit's corner list as the header for every
+    circuit at that temperature. Every other circuit's numbers were then
+    printed under labels belonging to that first one: a corner one circuit held
+    out can be a seen corner for another, and the two are not the same number.
+    """
+    import si_model.run as run
+
+    monkeypatch.chdir(tmp_path)
+    keys = ["a->b_#%d" % i for i in range(5)]
+    models, want = [], {}
+    # two circuits at one temperature, holding out DIFFERENT corners
+    for design, corners, val in (("cpuA", ["V1_rcmax", "V2_cmax"], 10.0),
+                                 ("cpuB", ["V2_cmax", "V3_rcmin"], 20.0)):
+        out = os.path.join("runs", "setup", design, "125")
+        os.makedirs(out)
+        np.savez_compressed(
+            os.path.join(out, "predictions_base.npz"),
+            path_keys=np.asarray(keys), path_idx=np.arange(5),
+            corners=np.asarray(corners), seen=np.zeros(len(corners), bool),
+            measured=np.ones(len(corners), bool),
+            truth_ps=np.full((5, len(corners)), val),
+            model_ps=np.full((5, len(corners)), val + 1.0),
+            clock_ns=np.full(len(corners), 2.0), n_cycles=np.ones(5))
+        models.append({"design": design, "temp": "125",
+                       "cfg": {"train": {"out_dir": out}}})
+        want[design] = (corners, val + 1.0)
+
+    p = {"mode": "setup", "out": {"runs": "runs"}}
+    written = run._report_from_saved(p, models, "base")
+    assert len(written) == 1
+    txt = open(written[0]).read()
+
+    # every corner either circuit held out is a column, each named once
+    hdr = [l for l in txt.splitlines() if l.startswith("Corners")][0]
+    assert hdr.split(":", 1)[1].split() == \
+        ["V1_rcmax,", "V2_cmax,", "V3_rcmin"], hdr
+
+    # and each circuit's block fills only its own
+    for design, (corners, v) in want.items():
+        blk = txt.split("Design: " + design, 1)[1].split("Design: ")[0]
+        row = [l for l in blk.splitlines()
+               if "mean predicted slack" in l][0].split()
+        cells = [x for x in row if x.replace(".", "").replace("-", "").isdigit()]
+        assert len(cells) == len(corners), (design, row)
+        assert all(abs(float(x) - v) < 0.05 for x in cells), (design, row)
