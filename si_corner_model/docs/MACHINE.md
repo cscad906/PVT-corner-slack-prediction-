@@ -641,37 +641,42 @@ rank_MFC_Timing_Report_125.png  /  rank_MFC_Timing_Report_125_hidden_from_MIF_..
 
 ---
 
-## 8.6 단계별 소요시간 — `_all/runtime.rpt`
+## 8.6 소요시간 — `_all/runtime.rpt`
 
-실행할 때마다 **단계마다 한 줄**이 덧붙는다. 덮어쓰지 않으므로 이전 기록이 남는다.
+실행할 때마다 한 줄씩 덧붙는다. 덮어쓰지 않으므로 이전 기록이 남는다.
 
 ```
 # si_corner_model runtime -- one line per stage, appended. wall/cpu: cpu > wall means threads.
-date             stage    circuit                  temp   paths corners      wall       cpu  thr host
-2026-10-02 12:43 build    MFC_Timing_Report        setup      2    12      20     3h12m    41h02m   16 knuee-srv5
-2026-10-02 15:55 train    MFC_Timing_Report        setup      2    12      20    28m04s   3h40m    16 knuee-srv5  epochs=40
-2026-10-02 16:23 predict  MFC_Timing_Report        setup      2    12      20      4.1s     9.2s    16 knuee-srv5  corners=hidden
-2026-10-02 16:23 report   -                        setup      -     -       -      8.3s    12.1s    16 knuee-srv5  corners=hidden
-2026-10-02 16:23 merge    -                        setup      -     -       -      1.2s     1.4s    16 knuee-srv5  corners=hidden
+date             stage     circuit                  mode   temps  paths corners      wall       cpu  thr host
+2026-10-02 12:43 build     MFC_Timing_Report        setup      2     12      20     3h12m    41h02m   16 knuee-srv5
+2026-10-02 15:55 train     MFC_Timing_Report        setup      2     12      20    28m04s   3h40m    16 knuee-srv5  epochs=40
+2026-10-02 16:23 inference -                        setup      -      -       -     13.6s    22.7s   16 knuee-srv5  bundle corners=hidden merge
 ```
 
-- **회로마다 한 줄**이고, 그 회로의 **온도는 합산**된다 (`temps` 가 몇 개였는지).
-  온도는 내부 분할이고, 묻는 건 "이 회로 setup 이 얼마 걸렸나" 이기 때문이다.
-  `mode` 열이 setup/hold 를 구분한다
+**단계는 세 개만 기록한다:**
 
+- **`build`** 리포트 파싱 → `dataset.npz`
+- **`train`** OLS base 적합을 **포함**한다. 따로 안 쪼갠다 — 학습 한 번의 시간이다
+- **`inference`** 학습 뒤에 결과물을 만드는 전부 (predict · 리포트 · bundle · merge)
+  를 합친 것
+- `base` 와 `sweep` 은 **기록하지 않는다.** 진단용이고 초 단위다
+
+읽는 법:
+
+- **`build` · `train` 은 회로마다 한 줄**이고 그 회로의 **온도는 합산**된다 (`temps`
+  가 몇 개였는지). 온도는 내부 분할이고, 묻는 건 "이 회로 setup 이 얼마 걸렸나" 다.
+  `mode` 열이 setup/hold 를 구분한다
+- **`inference` 는 실행당 한 줄**이다 (회로 `-`). 회로별로 나눌 수 없는 단계(리포트,
+  merge)가 섞여 있고 어차피 전부 초 단위다
 - **`wall`** 은 실제 경과, **`cpu`** 는 쓴 CPU 시간 합. `cpu > wall` 이면 스레드를
-  쓰고 있다는 뜻이고, `cpu ≈ wall` 이면 한 코어로 기다리고 있다는 뜻이다
+  쓰는 중, `cpu ≈ wall` 이면 한 코어로 기다리는 중이다
+- **`paths` / `corners`** 가 없으면 "3시간"이 빠른지 느린지 알 수 없다 — 경로 12개의
+  3시간과 4000개의 3시간은 다른 측정이다
+- **`thr` / `host`** 도 같은 이유다. 같은 build 가 16스레드에 3시간, 4스레드에 하루다
+- 마지막 칸은 그 실행의 스위치 (`epochs=40`, `corners=hidden`, `from=MIF_...`,
+  `freq=950`)
 - 그 회로의 **마지막 온도가 끝날 때** 쓴다. 세 회로짜리 build 가 세 번째에서 죽어도
   앞의 두 줄은 남는다
-- **`paths` / `corners`** 가 같이 적힌다. 이게 없으면 "3시간"이 빠른지 느린지 알 수
-  없다 — 경로 12개의 3시간과 4000개의 3시간은 다른 측정이다
-- **`thr` / `host`** 도 적힌다. 같은 build 가 16스레드에 3시간, 4스레드에 하루다
-- 마지막 칸에 그 실행의 스위치 (`epochs=40`, `corners=hidden`, `from=MIF_...`,
-  `freq=950`) 가 붙어서, 조건이 다른 실행끼리 비교할 수 있다
-- 단계가 **끝날 때마다** 쓴다. 네 시간 돌다 죽은 build 도 그때까지의 줄이 남는다
-
-`merge` 는 `-` 로 나온다 (회로 하나가 아니라 전부를 묶는 단계라서), `report` 는
-`.rpt` 를 쓰는 단계다.
 
 ---
 
