@@ -700,8 +700,22 @@ python3 scripts/compare_scaling.py
 python3 scripts/compare_scaling.py --mode hold
 ```
 
-기본값은 `pt_si/pt_si_re/example/scaling/PERIC0`, 0.52 V, `rcmax`, `125`C 이고
-`--scaling` / `--volt` / `--design` / `--temp` 로 덮을 수 있다.
+기본값은 **0.52 V, `rcmax`, `125`C, PERIC0** 이고 `--scaling` / `--volt` / `--design` /
+`--temp` 로 덮을 수 있다.
+
+리포트 폴더는 **찾는다.** `pt_si` / `pt_si_re` 는 `si_corner_model` 의 **형제**이고
+(자식이 아니다) 그 밑 중첩은 장비마다 다르므로, 후보를 순서대로 본 뒤
+`<...>/scaling/PERIC0` 를 깊이 제한 탐색으로 찾는다:
+
+```
+<root>/pt_si/pt_si_re/example/scaling/PERIC0
+<root>/pt_si_re/example/scaling/PERIC0
+<root>/pt_si/example/scaling/PERIC0          (<root> = si_corner_model 의 부모)
+```
+
+어디를 썼는지 첫 줄에 찍는다 (`scaling : <경로>`). 못 찾으면 봤던 곳을 전부
+나열한다. **어느 디렉토리에서 돌려도 된다** — `runs/` 도 같은 이유로
+si_corner_model 밑을 본다 (run.sh 가 거기로 `cd` 해서 쓰므로).
 
 `--scaling` 아래를 **재귀적으로** 뒤지므로 그 밑에 `hold/` `setup/` 이 갈려 있어도 한 번에
 다 처리된다. 회로 이름은 경로에서 추측한다 (`--design` 으로 덮어쓸 수 있다).

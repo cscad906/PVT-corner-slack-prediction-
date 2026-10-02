@@ -329,3 +329,34 @@ def test_it_runs_as_a_script_with_no_package_on_the_path(tmp_path):
     assert b"1 figure(s)" in r.stdout
     assert os.path.getsize(str(tmp_path / "p" /
                                "ptscale_PERIC0_base_setup_125_0.52V_rcmax.png")) > 5000
+
+
+def test_the_scaling_directory_is_found_beside_si_corner_model(tmp_path,
+                                                               monkeypatch):
+    """pt_si and pt_si_re are SIBLINGS of si_corner_model, not children, and
+    the nesting under them differs between machines. So the default is a list
+    of candidates and then a bounded search, not one path -- and it must not
+    depend on the directory the script was started from, which is what had
+    plot.py reporting no predictions while the files were there."""
+    root = tmp_path / "proj"
+    (root / "si_corner_model" / "scripts").mkdir(parents=True)
+    want = root / "pt_si_re" / "example" / "scaling" / "PERIC0" / "hold"
+    want.mkdir(parents=True)
+    (want / "restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt").write_text(
+        _fixed_path_report([1.0]))
+
+    monkeypatch.setattr(cs, "REPO", str(root / "si_corner_model"))
+    for cwd in (root, root / "si_corner_model", tmp_path):
+        monkeypatch.chdir(cwd)
+        got, looked = cs.find_scaling_dir()
+        assert got == str(want.parent), (cwd, got, looked)
+
+    # an explicit --scaling still wins, and a missing one is reported with
+    # every place that was tried rather than as a bare "no such directory"
+    assert cs.find_scaling_dir(str(want))[0] == str(want)
+    empty = tmp_path / "empty"
+    (empty / "si_corner_model").mkdir(parents=True)
+    monkeypatch.chdir(empty)
+    monkeypatch.setattr(cs, "REPO", str(empty / "si_corner_model"))
+    got, looked = cs.find_scaling_dir()
+    assert got is None and len(looked) >= 3 and all("PERIC0" in l for l in looked)

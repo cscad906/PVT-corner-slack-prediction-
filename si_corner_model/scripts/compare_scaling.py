@@ -84,9 +84,19 @@ if REPO not in sys.path:
 # corner of one circuit, asked for by name, and a generic search over a
 # directory of hand-named files is how a wrong corner gets compared without
 # anyone noticing. Everything here is still overridable from the command line.
-SCALING_DIR = os.path.join("pt_si", "pt_si_re", "example", "scaling", "PERIC0")
 DESIGN = "PERIC0"
 VOLT = 0.52
+# Where the scaling reports live, in the order they are tried. pt_si and
+# pt_si_re are SIBLINGS of si_corner_model, not children of it, and the exact
+# nesting below them differs between machines -- so this is a list and not a
+# path, and a bounded search follows it. Printed either way, because a path
+# that silently resolved somewhere unexpected is the same bug as a wrong corner.
+_TAIL = os.path.join("example", "scaling", DESIGN)
+SCALING_CANDIDATES = (
+    os.path.join("pt_si", "pt_si_re", _TAIL),
+    os.path.join("pt_si_re", _TAIL),
+    os.path.join("pt_si", _TAIL),
+)
 # Used when the file name does not say. The names are typed by hand, so a name
 # that cannot be read is NOT a reason to skip the file -- there is only one
 # corner here and skipping it leaves nothing to draw. What was assumed is
@@ -107,6 +117,48 @@ _SUFFIX = re.compile(r"_#\d+$")
 # base plus a trained residual, and they are different claims.
 MINE = {"base": "base (OLS)", "hidden": "model (trained)",
         "all": "model (trained)"}
+
+
+def _walk_for_scaling(base, max_depth=5):
+    """Any <...>/scaling/<DESIGN> under `base`, within max_depth."""
+    base = os.path.abspath(base)
+    for root, dirs, _ in os.walk(base):
+        depth = root[len(base):].count(os.sep)
+        if depth >= max_depth:
+            dirs[:] = []
+            continue
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        if os.path.basename(root) == "scaling" and DESIGN in dirs:
+            return os.path.join(root, DESIGN)
+    return None
+
+
+def find_scaling_dir(explicit=None):
+    """(directory, where it was looked for). Either may be None.
+
+    si_corner_model's PARENT is the project root -- `root: auto` in config.yaml
+    is the same directory -- and pt_si / pt_si_re sit beside it there. Tried in
+    order, then a bounded walk, so a different nesting on another machine is
+    found rather than reported as missing.
+    """
+    if explicit:
+        return (explicit if os.path.isdir(explicit) else None), [explicit]
+    bases = []
+    for b in (os.path.dirname(REPO), os.getcwd(), REPO):
+        if b not in bases:
+            bases.append(b)
+    looked = []
+    for b in bases:
+        for c in SCALING_CANDIDATES:
+            fp = os.path.join(b, c)
+            looked.append(fp)
+            if os.path.isdir(fp):
+                return fp, looked
+    for b in bases:
+        hit = _walk_for_scaling(b)
+        if hit:
+            return hit, looked
+    return None, looked
 
 
 def tokens(name):
@@ -437,10 +489,11 @@ def draw(plt, x, pt, mine, title, xlabel, fp, mine_label="base (OLS)"):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="PrimeTime voltage scaling against this model, path by path.")
-    ap.add_argument("--scaling", default=SCALING_DIR,
+    ap.add_argument("--scaling", default=None,
                     help="directory of PT scaling reports, searched "
                          "recursively -- hold/ and setup/ below it are fine. "
-                         "Default: " + SCALING_DIR)
+                         "Default: found beside si_corner_model, at one of "
+                         + " / ".join(SCALING_CANDIDATES))
     ap.add_argument("--volt", type=float, default=VOLT,
                     help="the scaled voltage. Default %g -- the one corner "
                          "this is for. A report whose name says a DIFFERENT "
@@ -466,9 +519,16 @@ def main(argv=None):
                          "for it, and draw nothing. Run this first")
     args = ap.parse_args(argv)
 
-    if not os.path.isdir(args.scaling):
-        print("no such directory: %s" % args.scaling, file=sys.stderr)
+    scaling, looked = find_scaling_dir(args.scaling)
+    if scaling is None:
+        print("no scaling reports found. Looked at:\n  %s\nand searched for "
+              "a <...>/scaling/%s under %s and %s.\nPass the directory with "
+              "--scaling."
+              % ("\n  ".join(looked), DESIGN, os.path.dirname(REPO),
+                 os.getcwd()), file=sys.stderr)
         return 1
+    args.scaling = scaling
+    print("scaling : %s" % scaling)
     found = []
     for root, _, files in os.walk(args.scaling):
         for f in sorted(files):
@@ -531,10 +591,23 @@ def main(argv=None):
               "other than %g" % (args.scaling, args.volt), file=sys.stderr)
         return 1
 
+    def _runs_for(mode):
+        """Where this repo's own output is.
+
+        run.sh cds to the project before writing, so `runs/` is under
+        si_corner_model and not under whatever directory this script was
+        started from -- which is exactly the confusion that had plot.py
+        reporting no predictions while the files existed.
+        """
+        if args.runs:
+            return args.runs
+        here = os.path.join("runs", mode)
+        return here if os.path.isdir(here) else os.path.join(REPO, "runs", mode)
+
     pairs, missing = [], []
     for fp, v, t, lv, check, _ in jobs:
         mode = args.mode or check or "setup"
-        runs = args.runs or os.path.join("runs", mode)
+        runs = _runs_for(mode)
         got = (read_npz(runs, design, t, v, lv, args.source)
                or find_predict_rpt(runs, t, design, v, lv, args.source))
         if got is None:
@@ -602,8 +675,7 @@ def main(argv=None):
 
     made = []
     for v, t, lv, mode, x, y_pt, y_me, how, n in pairs:
-        out_dir = args.out or os.path.join(args.runs or os.path.join("runs", mode),
-                                           "_all", "plots")
+        out_dir = args.out or os.path.join(_runs_for(mode), "_all", "plots")
         try:
             os.makedirs(out_dir)
         except OSError:
