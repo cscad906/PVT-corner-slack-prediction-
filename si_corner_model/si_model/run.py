@@ -1831,6 +1831,19 @@ def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
     return fp
 
 
+def _corner_sort_key(label: str, cfg: dict):
+    """(voltage, level coordinate) for a corner label; unparseable ones last,
+    in their original order (sort is stable)."""
+    from si_model.parsing.keys import parse_corner
+    from si_model.training.loo import _level_map
+    try:
+        v, a = parse_corner(str(label), _level_map(cfg),
+                            cfg["data"].get("corner_prefix", "TT"))
+        return (0, float(v), float(a))
+    except Exception:                                   # noqa: BLE001
+        return (1, 0.0, 0.0)
+
+
 def _recolumn(entry, cols: list):
     """One circuit's arrays laid out on a shared column list.
 
@@ -1865,31 +1878,59 @@ def _report_from_saved(p: dict, models: list, tag: str) -> list:
     The same report the predict stage writes, from whichever arrays are named
     -- so a base-only run gets the per-corner block (measured, MAE, WNS and its
     error) without a model existing yet.
+
+    ONE file per temperature, rewritten every time:
+    runs/<tag>/<mode>/_all/predict_<temp>_<tag>.rpt. It used to go through the
+    predict stage's never-overwrite naming, so each run added a _2, _3 beside
+    the first -- and the file with the plainest name, the one anybody opens, was
+    the OLDEST, written by whatever code ran first. A report that is a pure
+    function of the arrays on disk has nothing to protect by not overwriting.
+
+    And EVERY circuit that has saved arrays at that temperature, not only the
+    ones selected for this run: `base --save --design PERIC0` refreshes
+    PERIC0's arrays, and the report should then still show MFC and MIF from
+    theirs instead of shrinking to one circuit.
+
+    Seen columns are dropped on the way in. The current writer saves held-out
+    corners only, but an array from an earlier version carried every corner,
+    and its seen columns would otherwise come back as report columns.
     """
+    import glob
+
     import numpy as np
 
     def f1(x):
         return "%.1f" % x if np.isfinite(x) else ""
 
+    want = {str(m["temp"]) for m in models}
+    try:
+        pool = [m for m in expand(p) if str(m["temp"]) in want]
+    except Exception:                                   # noqa: BLE001
+        pool = list(models)
     loaded = []
-    for m in models:
+    for m in pool:
         fp = os.path.join(m["cfg"]["train"]["out_dir"], "predictions_%s.npz" % tag)
         if not os.path.exists(fp):
             continue
         z = np.load(fp, allow_pickle=False)
-        corners = [str(x) for x in z["corners"]]
-        meas = (np.asarray(z["measured"], bool) if "measured" in z.files
-                else np.ones(len(corners), bool))
-        truth = np.asarray(z["truth_ps"], float).copy()
+        seen = (np.asarray(z["seen"], bool) if "seen" in z.files
+                else np.zeros(len(z["corners"]), bool))
+        k = np.where(~seen)[0]
+        if not len(k):
+            continue
+        corners = [str(z["corners"][i]) for i in k]
+        meas = (np.asarray(z["measured"], bool)[k] if "measured" in z.files
+                else np.ones(len(k), bool))
+        truth = np.asarray(z["truth_ps"], float)[:, k].copy()
         truth[:, ~meas] = np.nan            # no measurement -> no comparison
         loaded.append((m, [str(x) for x in z["path_keys"]],
                        np.asarray(z["path_idx"], np.int64)
                        if "path_idx" in z.files else np.arange(len(z["path_keys"])),
-                       np.asarray(z["model_ps"], float),
-                       ["seen" if b else "hidden"
-                        for b in np.asarray(z["seen"], bool)],
+                       np.asarray(z["model_ps"], float)[:, k],
+                       ["hidden"] * len(k),
                        np.asarray(z["n_cycles"], float) if "n_cycles" in z.files else None,
-                       [float(x) for x in z["clock_ns"]] if "clock_ns" in z.files else None,
+                       [float(z["clock_ns"][i]) for i in k]
+                       if "clock_ns" in z.files else None,
                        truth, corners))
     if not loaded:
         return []
@@ -1897,7 +1938,9 @@ def _report_from_saved(p: dict, models: list, tag: str) -> list:
     for e in loaded:
         if str(e[0]["temp"]) not in temps:
             temps.append(str(e[0]["temp"]))
-    fps = _predict_files(p, tag, temps)
+    out_dir = os.path.join(_runs_root(p), "_all")
+    os.makedirs(out_dir, exist_ok=True)
+    fps = {t: os.path.join(out_dir, "predict_%s_%s.rpt" % (t, tag)) for t in temps}
     for t in temps:
         here = [e for e in loaded if str(e[0]["temp"]) == t]
         # The UNION of what each circuit held out, not the first circuit's list.
@@ -1913,9 +1956,20 @@ def _report_from_saved(p: dict, models: list, tag: str) -> list:
             for c in e[8]:
                 if c not in cols:
                     cols.append(c)
+        # Voltage, then level. In order of first appearance the columns came out
+        # in whatever order the circuits happened to be listed -- 0.76 V before
+        # 0.6 V at 125C on the company grid -- which reads as a scrambled table.
+        cols.sort(key=lambda c: _corner_sort_key(c, here[0][0]["cfg"]))
         grp = [_recolumn(e, cols) for e in here]
         _write_predict_report(fps[t], cols, list(range(len(cols))), grp, t,
                               None, None, f1)
+        stale = sorted(glob.glob(fps[t][:-4] + "_[0-9]*.rpt"))
+        if stale:
+            # numbered copies from the old never-overwrite naming: stale, and
+            # easy to open by mistake, so they are named rather than left quiet
+            print("  [SAVE] note: %s are older copies from before this file was "
+                  "rewritten in place -- stale, safe to delete"
+                  % ", ".join(os.path.basename(x) for x in stale), flush=True)
         print("  [SAVE] %s" % fps[t], flush=True)
         out.append(fps[t])
     return out

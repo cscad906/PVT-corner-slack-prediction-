@@ -2503,3 +2503,65 @@ def test_the_base_report_uses_each_circuits_own_hidden_corners(tmp_path,
         cells = [x for x in row if x.replace(".", "").replace("-", "").isdigit()]
         assert len(cells) == len(corners), (design, row)
         assert all(abs(float(x) - v) < 0.05 for x in cells), (design, row)
+
+
+def test_the_base_report_is_one_file_rewritten_in_order(tmp_path, monkeypatch,
+                                                        capsys):
+    """runs/<mode>/_all/predict_<temp>_base.rpt: one file, rewritten each run,
+    columns in voltage-then-level order, held-out corners only.
+
+    Each of these was a way the _all folder looked wrong on real data:
+      * it went through predict's never-overwrite naming, so every run added a
+        _2, _3 -- and the plainest name, the file anybody opens, was the
+        OLDEST, from whatever code ran first;
+      * columns came in order of first appearance across circuits, so 0.76 V
+        sat before 0.6 V;
+      * an array written by an earlier version carried seen corners too, and
+        they came back as report columns.
+    """
+    import si_model.run as run
+
+    monkeypatch.chdir(tmp_path)
+    cfg_common = {"data": {"corner_prefix": "SSPG"},
+                  "base": {"axes": [{"name": "v"},
+                                    {"name": "lv", "levels": {
+                                        "rcmin": -1, "cmax": 0, "rcmax": 1}}]}}
+    keys = ["a->b_#%d" % i for i in range(4)]
+    models = []
+    for design, corners, seen in (
+            ("MFC", ["SSPG_0p76V_cmax", "SSPG_0p5V_cmax"], [False, False]),
+            # an old-format array: every corner, seen ones included
+            ("PERIC0", ["SSPG_0p6V_cmax", "SSPG_0p685V_cmax", "SSPG_0p54V_rcmax"],
+             [False, True, False])):
+        out = os.path.join("runs", "setup", design, "125")
+        os.makedirs(out)
+        C = len(corners)
+        np.savez_compressed(
+            os.path.join(out, "predictions_base.npz"),
+            path_keys=np.asarray(keys), path_idx=np.arange(4),
+            corners=np.asarray(corners), seen=np.asarray(seen),
+            measured=np.ones(C, bool), truth_ps=np.full((4, C), 5.0),
+            model_ps=np.full((4, C), 6.0), clock_ns=np.full(C, 2.0),
+            n_cycles=np.ones(4))
+        cfg = dict(cfg_common, train={"out_dir": out})
+        models.append({"design": design, "temp": "125", "cfg": cfg})
+
+    p = {"mode": "setup", "out": {"runs": "runs"}}
+    all_dir = os.path.join(run._runs_root(p), "_all")
+    first = run._report_from_saved(p, models, "base")
+    again = run._report_from_saved(p, models, "base")
+    assert first == again == [os.path.join(all_dir, "predict_125_base.rpt")]
+    assert sorted(os.listdir(all_dir)) == ["predict_125_base.rpt"], \
+        "rewritten in place, no _2"
+
+    hdr = [l for l in open(first[0]).read().splitlines()
+           if l.startswith("Corners")][0].split(":", 1)[1]
+    assert [c.strip() for c in hdr.split(",")] == [
+        "SSPG_0p5V_cmax", "SSPG_0p54V_rcmax", "SSPG_0p6V_cmax",
+        "SSPG_0p76V_cmax"], hdr                  # sorted; 0p685V (seen) gone
+
+    # copies left by the old naming are named, not silently kept
+    open(first[0][:-4] + "_2.rpt", "w").write("old")
+    capsys.readouterr()
+    run._report_from_saved(p, models, "base")
+    assert "predict_125_base_2.rpt are older copies" in capsys.readouterr().out
