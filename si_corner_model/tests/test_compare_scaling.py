@@ -174,7 +174,7 @@ def test_one_panel_with_two_series(tmp_path):
     assert os.path.getsize(fig_fp) > 5000
 
 
-def test_the_difference_summary_is_printed(tmp_path, capsys):
+def test_only_the_mean_predicted_slack_is_printed(tmp_path, capsys):
     sc = tmp_path / "s" / "PERIC0" / "setup"
     sc.mkdir(parents=True)
     (sc / "SSPG_0p52V_125C_rcmax_setup.rpt").write_text(
@@ -184,8 +184,11 @@ def test_the_difference_summary_is_printed(tmp_path, capsys):
     assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--runs", runs,
                     "--list"]) == 0
     o = capsys.readouterr().out
-    assert "PT scaling - base: mean +20.0 ps" in o
-    assert "measurement" not in o
+    # this corner has no library and so no measurement: there is no error to
+    # quote, and statistics about the gap between two PREDICTIONS read like
+    # accuracy when neither side is known to be right
+    assert "mean predicted slack:  PT scaling    100.0 ps    base     80.0 ps" in o
+    assert "measurement" not in o and "worst" not in o and "spread" not in o
 
 
 def test_an_unmeasured_corner_is_read_out_of_the_predict_report(tmp_path):
@@ -243,7 +246,7 @@ def test_it_says_what_to_run_when_the_corner_is_nowhere(tmp_path, capsys):
                   "--mode", "hold", "--out", str(tmp_path / "p")])
     assert rc == 1
     o = capsys.readouterr().out
-    assert "predict --at 0.52:rcmax --temp 125 --mode hold" in o
+    assert "base --save --at 0.52:rcmax --temp 125 --mode hold" in o
     assert "[no base]" in o
 
 

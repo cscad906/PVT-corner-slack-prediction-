@@ -406,3 +406,53 @@ def test_every_corner_shows_its_base_including_one_never_measured(
     # and it is excluded from the scores, which are errors against a
     # measurement it does not have
     assert "[hidden mean]" in out and "[seen-LOO   ]" in out
+
+
+def test_base_predicts_a_corner_that_was_never_measured(tmp_path, monkeypatch,
+                                                        capsys):
+    """`base --at 0.52:rcmax`: the OLS base answers for a corner with no
+    library.
+
+    This is the deliverable case, not a convenience. A corner reached by
+    PrimeTime voltage scaling has no library and therefore no measurement
+    anywhere in the grid -- there is nothing to hold out, so `hidden_corners`
+    cannot reach it and `predict --at` would need a trained model first. The
+    base can answer, because a fit is defined wherever its coordinates are and
+    fit_base already evaluates at every corner of the design matrix.
+
+    It joins the grid exactly as a config `data.query_corners` entry does --
+    NaN measurement, measured=False, forced hidden, out of every score -- but
+    without a rebuild, which on this data is hours.
+    """
+    import numpy as np
+    from si_model.run import stage_base
+
+    levels = ["rcmax", "cmax"]
+    m = _run(tmp_path, monkeypatch, levels, [[0.54, "rcmax"]])
+    capsys.readouterr()
+    stage_base(m, save=True, at=[(0.52, "rcmax")])
+    out = capsys.readouterr().out
+
+    assert "[AT] predicting 1 unmeasured corner(s): SSPG_0p52V_rcmax" in out
+    row = [l.split() for l in out.splitlines()
+           if l.strip().startswith("SSPG_0p52V_rcmax")]
+    assert row and "no" in row[0] and "truth" in row[0], out
+    base_v = float(row[0][2])
+    # a real extrapolation below the measured grid, on the same curve: the
+    # planted field rises with voltage, so 0.52 V must sit below 0.54 V
+    at54 = [float(l.split()[2]) for l in out.splitlines()
+            if l.strip().startswith("SSPG_0p54V_rcmax")][0]
+    assert 0 < base_v < at54, (base_v, at54)
+
+    z = np.load(os.path.join("runs", "setup", "D_Timing_Report", "t",
+                             "predictions_base.npz"), allow_pickle=False)
+    labels = [str(x) for x in z["corners"]]
+    i = labels.index("SSPG_0p52V_rcmax")
+    assert not z["measured"][i], "no measurement behind it"
+    assert np.isfinite(z["model_ps"][:, i]).all(), "but a prediction for it"
+    assert not np.isfinite(z["truth_ps"][:, i]).any()
+
+    # a corner the grid already HAS is left alone -- replacing it with a NaN
+    # column would throw away the data the fit is built on
+    stage_base(m, at=[(0.54, "rcmax")])
+    assert "already in the grid" in capsys.readouterr().out

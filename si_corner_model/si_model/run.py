@@ -1880,7 +1880,57 @@ def _report_from_saved(p: dict, models: list, tag: str) -> list:
     return out
 
 
-def stage_base(m: dict, save: bool = False) -> None:
+def _append_query_corners(ds: dict, req: list, cfg: dict) -> list:
+    """Add unmeasured corners to the in-memory cache. Returns their labels.
+
+    Exactly what build does for ``data.query_corners`` -- NaN measurements,
+    measured=False, forced hidden by make_split, excluded from every metric --
+    but without a rebuild. The corner this exists for, 0.52 V, has no library
+    and so no measurement anywhere in the grid: the base can still answer for
+    it, because a fit is defined wherever its coordinates are, and `fit_base`
+    already evaluates at every corner of the design matrix rather than only at
+    the seen ones.
+
+    A corner the grid already has is left alone: it is measured, and replacing
+    it with a NaN column would throw away the data the fit is built on.
+    """
+    import numpy as np
+    from si_model.parsing.keys import corner_label, parse_corner
+    from si_model.training.loo import _level_map
+
+    prefix = cfg["data"].get("corner_prefix", "TT")
+    levels = _level_map(cfg)
+    have = {str(c) for c in ds["corners"]}
+    labs = []
+    for v, lv in req:
+        lab = corner_label(float(v), lv, prefix)
+        if lab in have or lab in labs:
+            print("  [AT] %s is already in the grid -- using the measured one"
+                  % lab, flush=True)
+            continue
+        labs.append(lab)
+    if not labs:
+        return []
+    Q = len(labs)
+    qvt = np.asarray([parse_corner(l, levels, prefix) for l in labs], np.float32)
+    for k in ("slack", "slew", "cycle_gap", "si_label"):
+        a = ds.get(k)
+        if a is None or np.ndim(a) != 2:
+            continue
+        pad = np.full((a.shape[0], Q), np.nan, a.dtype)
+        ds[k] = np.concatenate([a, pad], axis=1)
+    C = len(ds["corners"])
+    meas = (np.asarray(ds["measured"], bool) if "measured" in ds
+            else np.ones(C, bool))
+    ds["corners"] = np.asarray(list(ds["corners"]) + labs)
+    ds["vt"] = np.concatenate([np.asarray(ds["vt"], np.float32), qvt], 0)
+    ds["measured"] = np.concatenate([meas, np.zeros(Q, bool)])
+    print("  [AT] predicting %d unmeasured corner(s): %s"
+          % (Q, ", ".join(labs)), flush=True)
+    return labs
+
+
+def stage_base(m: dict, save: bool = False, at: list = None) -> None:
     """OLS-base-only error per hidden corner. numpy only -- no torch, no GPU.
 
     This is the ONLY place base numbers are printed: training logs, summaries and
@@ -1893,6 +1943,8 @@ def stage_base(m: dict, save: bool = False) -> None:
 
     cfg = m["cfg"]
     ds = dict(np.load(cfg["data"]["cache"]))
+    if at:
+        _append_query_corners(ds, at, cfg)
     field = "slack" if "slack" in ds else "slew"
     native = ds[field]
     measured = (np.asarray(ds["measured"], bool) if "measured" in ds
@@ -3546,8 +3598,10 @@ def main(argv=None):
                     help="report file to inspect in the check stage "
                          "(omit to use the first file from the config)")
     ap.add_argument("--at", default=None,
-                    help="predict: these corners, measured or not, e.g. "
-                         "0.57:cmax,0.62:rcmax")
+                    help="predict / base: these corners, measured or not, e.g. "
+                         "0.57:cmax,0.62:rcmax. On `base` they join the grid "
+                         "unmeasured, so the OLS base predicts them with no "
+                         "training and no rebuild")
     ap.add_argument("--sweep", default=None,
                     help="predict: voltages start:stop:step, e.g. 0.48:0.70:0.02 "
                          "(measured voltages inside the range are added)")
@@ -3579,8 +3633,13 @@ def main(argv=None):
                     help="predict: output file name "
                          "(default: made from the request)")
     args = ap.parse_args(argv)
-    if (args.at or args.sweep) and args.stage != "predict":
-        ap.error("--at / --sweep only apply to the predict stage")
+    if args.sweep and args.stage != "predict":
+        ap.error("--sweep only applies to the predict stage")
+    if args.at and args.stage not in ("predict", "base"):
+        # base takes --at too: a corner with no library has no measurement
+        # anywhere in the grid, and the OLS base can answer for it without a
+        # training run -- a fit is defined wherever its coordinates are.
+        ap.error("--at applies to the predict and base stages")
     if args.at and args.sweep:
         ap.error("use --at or --sweep, not both")
     if args.weights and args.stage not in ("predict", "all"):
@@ -3756,12 +3815,13 @@ def main(argv=None):
                 if stage == "build":
                     timed_model("build", m, lambda: stage_build(m))
                 elif stage == "base":
+                    at_req = (_parse_at(args.at) if args.at else None)
                     # a diagnostic, measured in seconds: deliberately NOT in
                     # runtime.rpt, which records the stages measured in hours.
                     # Said out loud because looking for a base line in that file
                     # and not finding one is indistinguishable from the logging
                     # being broken.
-                    stage_base(m, save=args.save)
+                    stage_base(m, save=args.save, at=at_req)
                 elif stage == "train":
                     timed_model("train", m, lambda: stage_train(m),
                                 "epochs=%s" % m["cfg"]["train"].get("epochs"))

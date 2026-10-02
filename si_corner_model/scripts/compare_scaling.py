@@ -635,13 +635,14 @@ def main(argv=None):
               "(PT read as %s; %s %s <- %s)"
               % (v, lv, t, mode, len(x), how, how_read, args.source, label,
                  src))
-        # the one number the difference panel used to carry
-        d = y_pt - y_me
-        d = d[np.isfinite(d)]
-        if len(d):
-            print("            PT scaling - %s: mean %+.1f ps, worst "
-                  "%+.1f ps, spread %.1f ps"
-                  % (args.source, d.mean(), d[np.argmax(np.abs(d))], d.std()))
+        # Mean predicted slack, and nothing else. This corner has no library
+        # and so no measurement: there is no error to quote, and a screen full
+        # of statistics about the GAP between two predictions reads like
+        # accuracy when neither side is known to be right. The two means are
+        # the comparison; the shape of it is the figure.
+        print("            mean predicted slack:  PT scaling %8.1f ps    "
+              "%s %8.1f ps"
+              % (float(np.nanmean(y_pt)), args.source, float(np.nanmean(y_me))))
         pairs.append((v, t, lv, mode, x, y_pt, y_me, how, len(x)))
 
     if missing:
@@ -649,12 +650,14 @@ def main(argv=None):
         for v, lv, t, mode in sorted(set(missing)):
             md = "" if mode == "setup" else " --mode hold"
             if args.source == "base":
-                # the base at a corner nobody measured: it is a fit, so it has
-                # a value everywhere -- but only --at writes one out by name
-                print("  bash scripts/run.sh base --save --temp %s%s"
-                      "        # if %g:%s is in the measured grid" % (t, md, v, lv))
-            print("  bash scripts/run.sh predict --at %g:%s --temp %s%s"
-                  % (v, lv, t, md))
+                # the corner has no library, so it is in no measured grid --
+                # `base --at` adds it unmeasured and the OLS base predicts it,
+                # with no training and no rebuild
+                print("  bash scripts/run.sh base --save --at %g:%s --temp %s%s"
+                      % (v, lv, t, md))
+            else:
+                print("  bash scripts/run.sh predict --at %g:%s --temp %s%s"
+                      % (v, lv, t, md))
         print("  then run this again -- it reads what those write.")
 
     if args.list_only:
