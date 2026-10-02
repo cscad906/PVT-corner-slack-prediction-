@@ -28,7 +28,7 @@ VOLTS = [0.5, 0.54, 0.6, 0.685]
 TRUE = {"cmax": -1.0, "rcmin": -0.345, "rcmax": 1.0}
 
 
-def _write_cache(fp, levels):
+def _write_cache(fp, levels, unmeasured=()):
     pairs = [(v, l) for v in VOLTS for l in levels]
     rng = np.random.RandomState(0)
     y = np.asarray([[1.5 + 0.9 * (v - 0.685) + 1.2 * (v - 0.685) ** 2
@@ -44,7 +44,7 @@ def _write_cache(fp, levels):
         vt=np.asarray([[v, {"rcmin": -1.0, "cmax": 0.0, "rcmax": 1.0}[l]]
                        for v, l in pairs], np.float32),
         slack=slack, si_label=np.zeros_like(slack),
-        measured=np.ones(len(pairs), bool),
+        measured=np.asarray([(v, l) not in unmeasured for v, l in pairs], bool),
         path_keys=np.asarray(["p%d" % i for i in range(300)]))
 
 
@@ -65,7 +65,8 @@ def _project(root, levels, hidden):
     }
 
 
-def _run(tmp_path, monkeypatch, levels, hidden, env=None, base=None):
+def _run(tmp_path, monkeypatch, levels, hidden, env=None, base=None,
+         unmeasured=()):
     p = _project(tmp_path, levels, hidden)
     if base:
         p["base"].update(base)
@@ -78,7 +79,7 @@ def _run(tmp_path, monkeypatch, levels, hidden, env=None, base=None):
     monkeypatch.setenv("SI_STAGE", "base")
     monkeypatch.chdir(tmp_path)
     m = expand(load_project(str(cfg_fp)))[0]
-    _write_cache(m["cfg"]["data"]["cache"], levels)
+    _write_cache(m["cfg"]["data"]["cache"], levels, unmeasured)
     stage_base(m)
     return m
 
@@ -261,9 +262,10 @@ def test_period_normalisation_makes_the_clock_plan_irrelevant(tmp_path, monkeypa
     # and the numbers printed are the slack each corner really has: the 0.5 V
     # row was measured at 3.0 ns, so its mean measured slack must be ~1 ns
     # HIGHER than the flat-plan version, not normalised away
-    hid_lines = [l for l in out.splitlines() if l.strip().startswith("hidden SSPG")]
+    hid_lines = [l.split() for l in out.splitlines()
+                 if l.strip().startswith("SSPG") and " hidden " in l]
     assert hid_lines, out
-    meas = [float(l.split()[5]) for l in hid_lines]
+    meas = [float(f[3]) for f in hid_lines]
     assert all(mv > 1000.0 for mv in meas), hid_lines
     assert "clock 3.0000 ns" in out and "clock 2.0000 ns" in out
     assert "NOT THE SAME AT EVERY VOLTAGE" in out
@@ -320,8 +322,8 @@ def test_compute_base_returns_native_slack_not_the_rebased_fit(tmp_path, monkeyp
 
 
 def test_base_prints_the_curve_it_is_asked_to_follow(tmp_path, monkeypatch, capsys):
-    """The base stage must print the measured value and the fitted value at each
-    held-out corner, and the measured field against voltage.
+    """The base stage must print the base value and the measured value at EVERY
+    corner, and the measured field against voltage.
 
     Without them an error is a dead end: 1490 ps at every candidate order could
     be a fit that misses a curve, a corner measured under different conditions
@@ -336,32 +338,35 @@ def test_base_prints_the_curve_it_is_asked_to_follow(tmp_path, monkeypatch, caps
     _run(tmp_path, monkeypatch, levels, hidden)
     out = capsys.readouterr().out
 
-    hid = [l for l in out.splitlines() if l.strip().startswith("hidden SSPG")]
-    assert hid, out
-    for line in hid:
-        assert "measured" in line and "base" in line, line
+    # one row per corner in the grid, seen and held-out alike -- the base is one
+    # surface over the whole grid, and a seen corner's value is a number someone
+    # asks for too
+    rows = [l.split() for l in out.splitlines()
+            if l.strip().startswith("SSPG") and len(l.split()) >= 5]
+    assert len(rows) == len(VOLTS) * len(levels), rows
+    assert {r[1] for r in rows} == {"seen", "hidden"}, rows
+    hid = [r for r in rows if r[1] == "hidden"]
+    assert len(hid) == len(hidden), hid
+    for f in rows:
         # The error is the mean of the per-path gaps; the two printed numbers
         # are means. Per-path gaps of opposite sign cancel in the means, so the
         # gap between them can only be SMALLER -- never larger. A fitted value
         # further from the measured one than the reported error would mean the
         # three numbers do not come from the same corner.
-        f = line.split()
-        e, meas, fit = float(f[2]), float(f[5]), float(f[7])
-        assert abs(fit - meas) <= e + 0.05, line
-        assert meas > 0, line              # the planted field is positive
+        fit, meas, e = float(f[2]), float(f[3]), float(f[4])
+        assert abs(fit - meas) <= e + 0.05, f
+        assert meas > 0, f                 # the planted field is positive
 
-    block = [l for l in out.splitlines() if l.strip().endswith("V")
-             or " V " in l and "measured slack" not in l]
-    rows = [l for l in out.splitlines()
-            if l.strip()[:1].isdigit() and " V " in l]
-    assert len(rows) == len(VOLTS), rows
-    vals = [float(x.rstrip("*")) for l in rows for x in l.split("V")[1].split()]
-    assert all(v > 0 for v in vals), rows
+    vrows = [l for l in out.splitlines()
+             if l.strip()[:1].isdigit() and " V " in l]
+    assert len(vrows) == len(VOLTS), vrows
+    vals = [float(x.rstrip("*")) for l in vrows for x in l.split("V")[1].split()]
+    assert all(v > 0 for v in vals), vrows
     # the planted curve rises with voltage, so the printed means must
-    firsts = [float(l.split("V")[1].split()[0].rstrip("*")) for l in rows]
+    firsts = [float(l.split("V")[1].split()[0].rstrip("*")) for l in vrows]
     assert firsts == sorted(firsts), firsts
     # the held-out row is the one marked, and only it
-    marked = [l for l in rows if "*" in l]
+    marked = [l for l in vrows if "*" in l]
     assert len(marked) == len({v for v, _ in hidden}), marked
     for l in marked:
         assert ("%.3f" % hidden[0][0]) in l or ("%.3f" % hidden[1][0]) in l, l
@@ -370,3 +375,34 @@ def test_base_prints_the_curve_it_is_asked_to_follow(tmp_path, monkeypatch, caps
 def test_unknown_base_key_is_an_error(tmp_path, monkeypatch):
     with pytest.raises(AssertionError, match="unknown base key"):
         _run(tmp_path, monkeypatch, *THREE, base={"min_loo_doff": 2})
+
+
+def test_every_corner_shows_its_base_including_one_never_measured(
+        tmp_path, monkeypatch, capsys):
+    """A corner with no measurement still has a base, and that value is the
+    answer to the only question such a corner can be asked -- "what does this
+    say at a corner nobody ran". It used to be a name in a footnote: the one
+    corner whose number cannot be got any other way was the one corner the
+    stage declined to print.
+    """
+    levels = ["rcmax", "cmax"]
+    _run(tmp_path, monkeypatch, levels, [[0.54, "rcmax"]],
+         unmeasured=[(0.6, "cmax")])
+    out = capsys.readouterr().out
+
+    rows = {l.split()[0]: l.split() for l in out.splitlines()
+            if l.strip().startswith("SSPG")}
+    assert len(rows) == len(VOLTS) * len(levels), rows
+
+    q = rows["SSPG_0p6V_cmax"]
+    assert "no truth" in " ".join(q), q
+    base_v = float(q[2])
+    # it is a real prediction, on the same curve as the rest -- between the
+    # neighbouring voltages' values, not a placeholder
+    lo = float(rows["SSPG_0p54V_cmax"][2])
+    hi = float(rows["SSPG_0p685V_cmax"][2])
+    assert lo < base_v < hi, (lo, base_v, hi)
+
+    # and it is excluded from the scores, which are errors against a
+    # measurement it does not have
+    assert "[hidden mean]" in out and "[seen-LOO   ]" in out

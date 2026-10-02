@@ -1941,28 +1941,48 @@ def stage_base(m: dict, save: bool = False) -> None:
 
     unit = "ps" if field == "slack" else "%"
     hid = [int(i) for i in split.hidden_idx if measured[i]]
-    for ci in hid:
-        # The measured and fitted values, not only their difference. An error
-        # alone cannot say WHICH of these is happening, and they need opposite
-        # fixes: a fit that misses a curve, or a corner whose measurement does
-        # not belong on the same curve as the rest (a different clock period or
-        # derate shifts every path by a constant, and then every basis is wrong
-        # by the same amount). Measured on the company drop: the whole candidate
-        # table came out at ~1490 ps, which no choice of order can explain.
+    # EVERY corner, not only the held-out ones. The base is one surface over the
+    # whole grid, and until now only the corners it was scored on showed a
+    # number: a seen corner was a contribution to one mean, and a corner with no
+    # measurement was a name in a footnote. Both have a base value, and the
+    # question "what does the base say at this corner" was not answerable from
+    # this screen for most of the grid.
+    #
+    # The measured value sits beside it rather than only their difference. An
+    # error alone cannot say WHICH of two things is happening, and they need
+    # opposite fixes: a fit that misses a curve, or a corner whose measurement
+    # does not belong on the same curve as the rest (a different clock period or
+    # derate shifts every path by a constant, and then every basis is wrong by
+    # the same amount). Measured on the company drop: the whole candidate table
+    # came out at ~1490 ps, which no choice of order can explain.
+    sc = 1000.0 if field == "slack" else 1.0
+    w = max([len(str(c)) for c in split.corners] + [6])
+    print(f"    [per corner]  base = the OLS value this stage fits. At a SEEN "
+          f"corner it is the leave-one-out value, so no corner is scored "
+          f"against a fit that saw it.")
+    print(f"    {'corner':{w}s}  {'kind':6s} {'mean base':>12s} "
+          f"{'mean measured':>14s} {'mean error':>12s}")
+    print(f"    {'-' * w}  {'-' * 6} {'-' * 12} {'-' * 14} {'-' * 12}")
+    for ci in range(len(split.corners)):
         t, q = native[:, ci], loo_native[:, ci]
-        sc = 1000.0 if field == "slack" else 1.0
-        print(f"    hidden {split.corners[ci]:22s} {err(ci):8.3f} {unit}"
-              f"   measured {float(np.nanmean(t)) * sc:10.1f}"
-              f"   base {float(np.nanmean(q)) * sc:10.1f}")
+        kind = "seen" if split.seen[ci] else "hidden"
+        base_v = float(np.nanmean(q)) * sc
+        if not measured[ci]:
+            # A query corner: predicted, never measured, so there is no error to
+            # quote. It still has a base, which is the number someone asking
+            # "what does this say at 0.45 V" is after.
+            print(f"    {str(split.corners[ci]):{w}s}  {kind:6s} "
+                  f"{base_v:12.1f} {'no truth':>14s} {'':>12s}")
+            continue
+        print(f"    {str(split.corners[ci]):{w}s}  {kind:6s} "
+              f"{base_v:12.1f} {float(np.nanmean(t)) * sc:14.1f} "
+              f"{err(ci):9.3f} {unit}")
     if hid:
         v = np.array([err(c) for c in hid])
         print(f"    [hidden mean] {v.mean():8.3f} {unit}  (worst {v.max():.3f})")
     sv = np.array([err(int(c)) for c in split.seen_idx])
     print(f"    [seen-LOO   ] {sv.mean():8.3f} {unit}  (worst {sv.max():.3f})")
     _print_seen_fit(y, phi, split, field, unit)
-    skipped = [split.corners[int(i)] for i in split.hidden_idx if not measured[i]]
-    if skipped:
-        print(f"    (skipped, no ground truth: {skipped})")
     if save:
         _save_base_predictions(m, ds, split, native, loo_native, measured)
     _print_slack_vs_voltage(native, split, measured, field,
