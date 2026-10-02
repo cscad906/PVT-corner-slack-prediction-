@@ -246,7 +246,7 @@ def test_it_says_what_to_run_when_the_corner_is_nowhere(tmp_path, capsys):
                   "--mode", "hold", "--out", str(tmp_path / "p")])
     assert rc == 1
     o = capsys.readouterr().out
-    assert "base --save --at 0.52:rcmax --temp 125 --mode hold" in o
+    assert "base --save --at 0.52:rcmax --design PERIC0_Timing_Report --temp 125 --mode hold" in o
     assert "[no base]" in o
 
 
@@ -363,3 +363,46 @@ def test_the_scaling_directory_is_found_beside_si_corner_model(tmp_path,
     monkeypatch.setattr(cs, "REPO", str(empty / "si_corner_model"))
     got, looked = cs.find_scaling_dir()
     assert got is None and len(looked) >= 3 and all("PERIC0" in l for l in looked)
+
+
+def test_the_short_circuit_name_finds_the_configured_long_one(tmp_path, capsys):
+    """The scaling directory is called PERIC0; config.yaml declares, and run.sh
+    writes the runs tree under, PERIC0_Timing_Report. Matching them exactly
+    found nothing on real data: the base had been run and saved and the
+    comparison still printed [no base]. A prefix match up to a separator --
+    so PERIC0 does not also claim PERIC01_x."""
+    assert cs.same_design("PERIC0", "PERIC0_Timing_Report")
+    assert cs.same_design("peric0", "PERIC0_Timing_Report")
+    assert not cs.same_design("PERIC0", "PERIC01_x")
+    assert not cs.same_design("PERIC0", "MFC_Timing_Report")
+
+    sc = tmp_path / "s" / "PERIC0" / "hold"
+    sc.mkdir(parents=True)
+    (sc / "restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt").write_text(
+        _fixed_path_report([100.0] * 8))
+    runs = str(tmp_path / "runs" / "hold")
+    _npz(runs, "PERIC0_Timing_Report", 125, ["SSPG_0p52V_rcmax"],
+         np.full((8, 1), 80.0))
+    _npz(runs, "MFC_Timing_Report", 125, ["SSPG_0p52V_rcmax"],
+         np.full((8, 1), -999.0))                 # must NOT be picked up
+    assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--runs", runs,
+                    "--list"]) == 0
+    o = capsys.readouterr().out
+    assert "PERIC0_Timing_Report/125/predictions_base.npz" in o
+    assert "base     80.0 ps" in o and "-999" not in o
+
+
+def test_the_printed_command_uses_the_name_run_sh_accepts(tmp_path, capsys,
+                                                          monkeypatch):
+    """run.sh --design takes only the exact declared name. A suggested command
+    carrying the short one fails on the first try."""
+    monkeypatch.setattr(cs, "full_design",
+                        lambda short: "PERIC0_Timing_Report")
+    sc = tmp_path / "s" / "PERIC0" / "hold"
+    sc.mkdir(parents=True)
+    (sc / "restored_scaled_SSPG_0p52V_125C_RCMAX_V_hold.rpt").write_text(
+        _fixed_path_report([1.0]))
+    cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"),
+             "--runs", str(tmp_path / "runs" / "hold"), "--list"])
+    assert ("base --save --at 0.52:rcmax --design PERIC0_Timing_Report "
+            "--temp 125 --mode hold") in capsys.readouterr().out

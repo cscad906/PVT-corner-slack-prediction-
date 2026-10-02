@@ -295,6 +295,40 @@ def read_plain(fp):
     return out
 
 
+def same_design(want, have):
+    """`PERIC0` names `PERIC0_Timing_Report`.
+
+    The short name is what the scaling directory is called and what a person
+    types; the long one is what config.yaml declares and what run.sh writes the
+    runs tree under. Matching them exactly found nothing on real data -- the
+    base had been run and saved, and the comparison still reported it missing.
+    A prefix match, but only up to a separator, so `PERIC0` does not also claim
+    `PERIC01_...`.
+    """
+    if not want:
+        return True
+    a, b = str(want).lower(), str(have).lower()
+    if a == b:
+        return True
+    return b.startswith(a) and len(b) > len(a) and not b[len(a)].isalnum()
+
+
+def full_design(short):
+    """The config's own spelling of a circuit, for commands printed to run.
+
+    run.sh --design accepts only the exact declared name, so a suggested
+    command carrying the short one would fail on the first try.
+    """
+    try:
+        from si_model.run import expand, load_project
+        names = sorted({m["design"] for m in expand(load_project(
+            os.path.join(REPO, "config.yaml")))})
+    except Exception:                               # noqa: BLE001
+        return short
+    hit = [n for n in names if same_design(short, n)]
+    return hit[0] if len(hit) == 1 else short
+
+
 def read_npz(runs, design, temp, v, lv, tag="base"):
     """The OLS base's take on one corner, or None.
 
@@ -311,10 +345,9 @@ def read_npz(runs, design, temp, v, lv, tag="base"):
     """
     if not os.path.isdir(runs):
         return None
-    designs = [design] if design else sorted(os.listdir(runs))
+    designs = [d for d in sorted(os.listdir(runs))
+               if d != "_all" and same_design(design, d)]
     for dsg in designs:
-        if dsg == "_all":
-            continue
         d = os.path.join(runs, dsg, str(temp))
         if not os.path.isdir(d):
             continue
@@ -384,7 +417,7 @@ def read_predict_rpt(fp, design, v, lv):
             continue
         if spans is None or col is None:
             continue
-        if want and cur != want:
+        if want and not same_design(want, cur):
             continue
         raw_i = line[idx_s[0]:idx_s[1]].strip()
         if not raw_i.lstrip("-").isdigit():
@@ -649,15 +682,17 @@ def main(argv=None):
         print("\nto produce the missing ones:")
         for v, lv, t, mode in sorted(set(missing)):
             md = "" if mode == "setup" else " --mode hold"
+            dn = full_design(design)
+            ds = (" --design %s" % dn) if dn else ""
             if args.source == "base":
                 # the corner has no library, so it is in no measured grid --
                 # `base --at` adds it unmeasured and the OLS base predicts it,
                 # with no training and no rebuild
-                print("  bash scripts/run.sh base --save --at %g:%s --temp %s%s"
-                      % (v, lv, t, md))
+                print("  bash scripts/run.sh base --save --at %g:%s%s --temp %s%s"
+                      % (v, lv, ds, t, md))
             else:
-                print("  bash scripts/run.sh predict --at %g:%s --temp %s%s"
-                      % (v, lv, t, md))
+                print("  bash scripts/run.sh predict --at %g:%s%s --temp %s%s"
+                      % (v, lv, ds, t, md))
         print("  then run this again -- it reads what those write.")
 
     if args.list_only:
