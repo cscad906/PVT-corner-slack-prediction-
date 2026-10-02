@@ -71,7 +71,7 @@ def _find(runs, corners, design=None, temp=None):
 
 
 def scatter(plt, keys, corners, seen, truth, model, circuit, temp, out_dir,
-            include_seen=False):
+            include_seen=False, tag=""):
     """One figure per HELD-OUT corner: predicted against measured, with y = x.
 
     Seen corners are skipped. The model was fit on them, so the scatter shows
@@ -109,8 +109,8 @@ def scatter(plt, keys, corners, seen, truth, model, circuit, temp, out_dir,
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, lw=0.5, alpha=0.5)
         fig.tight_layout()
-        fp = os.path.join(out_dir, "scatter_%s_%s_%s.png"
-                          % (circuit, temp, corner.replace("/", "_")))
+        fp = os.path.join(out_dir, "scatter_%s_%s_%s%s.png"
+                          % (circuit, temp, corner.replace("/", "_"), tag))
         fig.savefig(fp, dpi=150)
         plt.close(fig)
         made.append(fp)
@@ -136,7 +136,7 @@ def _ranks(y):
 
 
 def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
-                  out_dir, n_track=5):
+                  out_dir, n_track=5, include_seen=False, tag=""):
     """True and predicted rank trajectories, side by side.
 
     The tracked paths are the ones whose TRUE rank moves most, measured as the
@@ -151,13 +151,16 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
     The two panels share a y axis so a difference in shape is the difference
     between the model and the measurement, not between two scalings.
 
-    Every corner is on the axis, seen ones included: a rank is a position
-    within one ordering, and dropping corners out of the middle would draw a
-    trajectory that never existed. The corners the model was fit on are marked
-    on the tick labels so what is held out stays visible.
+    Seen corners are left off the axis like everywhere else. A rank is computed
+    within one corner's ordering and does not depend on the other columns, so
+    dropping them changes none of the ranks that remain -- the line simply
+    joins the held-out corners directly. `--include-seen` puts them back, and
+    then the tick labels say which is which.
     """
     ok_cols = [ci for ci in range(len(corners))
-               if np.isfinite(truth[:, ci]).any() and np.isfinite(model[:, ci]).any()]
+               if (include_seen or not seen[ci])
+               and np.isfinite(truth[:, ci]).any()
+               and np.isfinite(model[:, ci]).any()]
     if len(ok_cols) < 2:
         return []
     cn = [corners[ci] for ci in ok_cols]
@@ -188,7 +191,7 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
         ax.set_title(title, fontsize=12)
         ax.set_xticks(range(len(cn)))
         ax.set_xticklabels([c + (" (seen)" if seen[ok_cols[i]] else "")
-                            for i, c in enumerate(cn)],
+                            for i, c in enumerate(cn)] if include_seen else cn,
                            rotation=45, ha="right", fontsize=8)
         ax.grid(True, lw=0.5, alpha=0.5)
     axes[0].set_ylabel("Rank position  (1 = worst slack)")
@@ -197,7 +200,7 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
     fig.legend(loc="upper center", bbox_to_anchor=(0.5, 0.93), ncol=2, fontsize=8,
                frameon=False)
     fig.tight_layout(rect=(0, 0, 1, 0.84))
-    fp = os.path.join(out_dir, "rank_%s_%s.png" % (circuit, temp))
+    fp = os.path.join(out_dir, "rank_%s_%s%s.png" % (circuit, temp, tag))
     fig.savefig(fp, dpi=150)
     plt.close(fig)
     return [fp]
@@ -220,7 +223,7 @@ def main(argv=None):
     ap.add_argument("--track", type=int, default=5,
                     help="how many paths the rank figure follows (default 5)")
     ap.add_argument("--include-seen", action="store_true",
-                    help="scatter the corners the model was fit on too. Off: "
+                    help="draw the corners the model was fit on too. Off: "
                          "those show the fit against its own data")
     ap.add_argument("--only", choices=["scatter", "rank"], default=None,
                     help="draw just one kind. --corners all gives one scatter "
@@ -256,15 +259,21 @@ def main(argv=None):
     out_dir = args.out or os.path.join(args.runs, "_all", "plots")
     args.out = out_dir
     os.makedirs(out_dir, exist_ok=True)
+    # Which prediction file these came from, in the name. A borrowed model
+    # writes predictions_hidden_from_<circuit>.npz, and without this its
+    # figures would land on the own-model ones -- same circuit, same
+    # temperature, same corner -- and replace them.
+    tag = "" if args.corners == "hidden" else "_" + args.corners
     made = []
     for circuit, temp, fp in found:
         keys, corners, seen, truth, model = _load(fp)
         if args.only != "rank":
             made += scatter(plt, keys, corners, seen, truth, model, circuit,
-                            temp, args.out, args.include_seen)
+                            temp, out_dir, args.include_seen, tag)
         if args.only != "scatter":
             made += rank_movement(plt, keys, corners, seen, truth, model,
-                                  circuit, temp, args.out, args.track)
+                                  circuit, temp, out_dir, args.track,
+                                  args.include_seen, tag)
     for fp in made:
         print("wrote %s" % fp)
     print("%d figures in %s/" % (len(made), args.out))

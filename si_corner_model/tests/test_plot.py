@@ -56,10 +56,38 @@ def test_scatter_skips_the_corners_the_model_was_fit_on(tmp_path):
                       "--include-seen"]) == 0
     assert len(os.listdir(out2)) == 4
 
-    # the rank figure keeps every corner and marks which were fit on
+    # the rank figure leaves them off too -- a rank is computed within one
+    # corner's ordering, so the columns that remain are unchanged by it
     out3 = str(tmp_path / "c")
     assert plot.main(["--runs", runs, "--out", out3, "--only", "rank"]) == 0
     assert os.listdir(out3) == ["rank_cpu_125.png"]
+
+
+def test_a_borrowed_model_does_not_overwrite_the_circuits_own_figures(tmp_path):
+    """predict --weights writes predictions_hidden_from_<circuit>.npz, and its
+    figures are of the same circuit, temperature and corners. Without the
+    source in the file name the second run replaces the first and nothing says
+    which model the surviving picture is of."""
+    pytest.importorskip("matplotlib")
+    import plot
+
+    runs = str(tmp_path / "runs" / "setup")
+    truth = np.arange(24, dtype=float).reshape(8, 3)
+    _write(runs, "cpu", "125", ["A", "B", "C"], truth, truth + 0.5)
+    d = os.path.join(runs, "cpu", "125")
+    os.rename(os.path.join(d, "predictions_hidden.npz"),
+              os.path.join(d, "predictions_hidden_from_gpu.npz"))
+    _write(runs, "cpu", "125", ["A", "B", "C"], truth, truth + 2.0)
+
+    out = str(tmp_path / "p")
+    assert plot.main(["--runs", runs, "--out", out]) == 0
+    assert plot.main(["--runs", runs, "--out", out,
+                      "--corners", "hidden_from_gpu"]) == 0
+    made = sorted(os.listdir(out))
+    assert "rank_cpu_125.png" in made
+    assert "rank_cpu_125_hidden_from_gpu.png" in made
+    assert "scatter_cpu_125_A.png" in made
+    assert "scatter_cpu_125_A_hidden_from_gpu.png" in made
 
 
 def test_plot_writes_a_scatter_per_corner_and_one_rank_figure(tmp_path):

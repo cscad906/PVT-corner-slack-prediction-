@@ -612,13 +612,28 @@ runs/extrapolation/setup/_all/plots/...                  외삽 실험은 자기
   그러면 회로마다 **자기 격자 전체**가 궤적이 된다 (PERIC0 8/12, MFC 10/15,
   MIF 14/21 코너). seen 코너도 예측값이다 — 자기 토큰을 가린 LOO 방식이라
   외운 값이 아니다
-- **seen 코너는 scatter 를 안 그린다.** 모델이 그 위에서 적합된 코너라, 자기 데이터에
-  대고 그린 그림이고 당연히 붙어 있다. `--corners all` 로 돌려도 **홀드아웃 코너만**
-  나온다 (`--include-seen` 으로 켤 수는 있다). 측정값 없는 코너(query)도 빠진다
-- **rank 는 모든 코너를 쓴다.** 순위는 한 줄세우기 안에서의 위치라, 중간 코너를 빼면
-  있지도 않은 궤적이 그려진다. 대신 **x축 라벨에 `(seen)`** 이 붙어서 어디가 홀드아웃인지
-  보인다
+- **seen 코너는 아예 안 그린다** (scatter 도 rank 도). 모델이 그 위에서 적합된 코너라
+  자기 데이터에 대고 그린 그림이다. `--corners all` 로 돌려도 **홀드아웃만** 나온다.
+  순위는 코너 하나 안에서의 위치라, seen 을 빼도 남은 코너의 순위는 그대로다 —
+  선이 홀드아웃 코너끼리 바로 이어질 뿐이다. 측정값 없는 코너(query)도 빠진다
+- `--include-seen` 으로 켤 수는 있다 (그때는 x축 라벨에 `(seen)` 이 붙는다)
 - `--only rank` / `--only scatter` 로 한 종류만 그릴 수 있다
+
+**다른 회로의 가중치로 예측한 결과도 똑같이 그린다:**
+
+```csh
+bash scripts/run.sh predict --design MFC_Timing_Report --temp 125 \
+     --weights runs/setup/MIF_Timing_Report/model.pt
+python3 scripts/plot.py --corners hidden_from_MIF_Timing_Report
+```
+
+파일 이름 끝에 출처가 붙어서 자기 모델 그림과 **섞이지 않는다**:
+
+```
+scatter_MFC_Timing_Report_125_SSPG_0p5V_cmax.png                          자기 모델
+scatter_MFC_Timing_Report_125_SSPG_0p5V_cmax_hidden_from_MIF_...png       MIF 가중치
+rank_MFC_Timing_Report_125.png  /  rank_MFC_Timing_Report_125_hidden_from_MIF_...png
+```
 
 **matplotlib 이 필요하다.** 파이프라인의 다른 부분은 쓰지 않으므로, 없는 장비에서는
 이 스크립트만 안 되고 그렇다고 한 줄로 알려준다 (`pip install matplotlib`). 디스플레이가
