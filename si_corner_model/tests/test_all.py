@@ -1242,10 +1242,14 @@ def test_predict_writes_the_report_for_the_declared_hidden_corners(
     assert len(said) == 1, said
     assert "inference boomcore (125,m25):" in said[0], said
     assert ", cpu" not in said[0], "one number on screen; cpu is in the file"
+    # and what it covered: EVERY path, at the corners actually predicted --
+    # each temperature's own two held-out corners, not the cache's 8 + 12
+    assert "for 12 paths x 4 corners" in said[0], said
     rt = [l.split() for l in open(os.path.join("runs", "setup", "_all",
                                                 "runtime.rpt")).read().splitlines()
           if " inference " in l]
     assert len(rt) == 1 and rt[0][3] == "boomcore" and rt[0][5] == "2", rt
+    assert rt[0][6] == "12" and rt[0][7] == "4", rt
 
     req, only = _split_request(models, "hidden")
     for m in models:

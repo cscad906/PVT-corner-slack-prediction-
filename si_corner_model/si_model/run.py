@@ -1219,10 +1219,14 @@ def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
         who = (m["design"] if m else "-")
         if m and str(m.get("temp", "-")) != "-":
             who += " (%s)" % m["temp"]
-        # one number on screen -- the elapsed time; cpu and the scale are in
-        # the file, where they can be compared across runs
-        print("  [TIME] %s %s: %s -> %s" % (stage, who, _hms(wall), fp),
-              flush=True)
+        # One number on screen -- the elapsed time -- and what it covered.
+        # "0.033s" alone was read as per path or as something partial; it is
+        # every path of the circuit at every corner counted, in one go.
+        # cpu stays in the file, where it can be compared across runs.
+        scope = ("  for %s paths x %s corners" % (n_paths, n_corners)
+                 if n_paths is not None and n_corners else "")
+        print("  [TIME] %s %s: %s%s -> %s"
+              % (stage, who, _hms(wall), scope, fp), flush=True)
     except Exception as e:       # noqa: BLE001 -- see below
         # Deliberately everything, not just OSError. This writes a note about a
         # run that already succeeded; a read-only directory, a hostname lookup
@@ -3835,10 +3839,15 @@ def main(argv=None):
     # which is the case the timings are wanted for.
     acc = {}
 
-    def timed_model(stage, m, fn, extra=""):
+    def timed_model(stage, m, fn, extra="", corners_of=None):
+        """`corners_of(result)`: how many corners this call actually produced,
+        where that is not the cache's grid size -- a prediction covers the
+        requested corners, not all of them."""
         t0, c0 = time.time(), memlog.cpu_seconds()
+        res = None
         try:
-            return fn()
+            res = fn()
+            return res
         finally:
             a = acc.setdefault((stage, m["design"]),
                                {"wall": 0.0, "cpu": 0.0, "temps": 0, "tags": [],
@@ -3848,6 +3857,8 @@ def main(argv=None):
             a["temps"] += 1
             a["tags"].append(str(m["temp"]))
             n_paths, n_corners = _scale_of(m)
+            if corners_of is not None and res is not None:
+                n_corners = corners_of(res)
             if n_paths is not None:
                 a["paths"] = max(a["paths"] or 0, n_paths)
                 a["corners"] += n_corners or 0
@@ -3915,9 +3926,20 @@ def main(argv=None):
                 # instead, so both flows time the same thing.
                 for t in dict.fromkeys(m.get("task", "slack") for m in models):
                     _trainer_class(t)
+                def n_pred(m):
+                    # the corners this model answered for: the requested ones
+                    # it has, and under --corners hidden only its own holdout
+                    sel = None if only is None else only.get(m["name"], set())
+
+                    def count(res):
+                        return sum(1 for kd, vl in zip(res[3], req)
+                                   if kd != "n/a" and (sel is None or vl in sel))
+                    return count
+
                 _, fails = stage_predict_at(
                     models, p, req, name, args.weights, args.period, only,
-                    timer=lambda m, fn: timed_model("inference", m, fn, note))
+                    timer=lambda m, fn: timed_model("inference", m, fn, note,
+                                                    corners_of=n_pred(m)))
                 failed += fails
                 # one line per circuit, its temperatures summed -- the same
                 # shape as build and train

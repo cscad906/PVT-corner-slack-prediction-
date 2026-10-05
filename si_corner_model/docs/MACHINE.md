@@ -809,14 +809,18 @@ PT 리포트가 `### FIXED_PATH` 없는 **그냥 `report_timing` 출력**이어�
 date             stage     circuit                  mode   temps  paths corners      wall       cpu  thr host
 2026-10-02 12:43 build     MFC_Timing_Report        setup      2     12      20     3h12m    41h02m   16 knuee-srv5
 2026-10-02 15:55 train     MFC_Timing_Report        setup      2     12      20    28m04s   3h40m    16 knuee-srv5  epochs=40
-2026-10-05 19:17 inference PERIC0_Timing_Report     setup      1     12       8    0.033s    0.628s   16 knuee-srv5  corners=hidden
+2026-10-05 19:17 inference PERIC0_Timing_Report     setup      1     12       2    0.033s    0.628s   16 knuee-srv5  corners=hidden
 ```
 
 화면에는 시간 **하나만** 찍힌다 (cpu 는 파일에만):
 
 ```
-  [TIME] inference PERIC0_Timing_Report (125): 0.033s -> runs/setup/_all/runtime.rpt
+  [TIME] inference PERIC0_Timing_Report (125): 0.033s  for 12 paths x 2 corners -> runs/setup/_all/runtime.rpt
 ```
+
+**그 회로·온도의 경로 전부 × 예측한 코너 전부**를 한 번에 계산한 시간이다 (경로당 시간이
+아니다). 코너는 기본이 그 회로의 히든 코너, `--at` 이면 요청한 코너다. 파일의 `corners`
+칸도 inference 줄에서는 **예측한 코너 수**다 (build · train 줄은 격자 코너 수).
 
 **단계는 세 개만 기록한다:**
 
