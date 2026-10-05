@@ -60,7 +60,7 @@ def test_scatter_skips_the_corners_the_model_was_fit_on(tmp_path):
     # corner's ordering, so the columns that remain are unchanged by it
     out3 = str(tmp_path / "c")
     assert plot.main(["--runs", runs, "--out", out3, "--only", "rank"]) == 0
-    assert os.listdir(out3) == ["rank_cpu_125.png"]
+    assert os.listdir(out3) == ["rank_cpu.png"]
 
 
 def test_a_borrowed_model_does_not_overwrite_the_circuits_own_figures(tmp_path):
@@ -84,8 +84,8 @@ def test_a_borrowed_model_does_not_overwrite_the_circuits_own_figures(tmp_path):
     assert plot.main(["--runs", runs, "--out", out,
                       "--corners", "hidden_from_gpu"]) == 0
     made = sorted(os.listdir(out))
-    assert "rank_cpu_125.png" in made
-    assert "rank_cpu_125_hidden_from_gpu.png" in made
+    assert "rank_cpu.png" in made
+    assert "rank_cpu_hidden_from_gpu.png" in made
     assert "scatter_cpu_125_A.png" in made
     assert "scatter_cpu_125_A_hidden_from_gpu.png" in made
 
@@ -102,7 +102,7 @@ def test_plot_writes_a_scatter_per_corner_and_one_rank_figure(tmp_path):
     out = str(tmp_path / "plots")
     assert plot.main(["--runs", runs, "--out", out]) == 0
     made = sorted(os.listdir(out))
-    assert made == ["rank_cpu_125.png", "scatter_cpu_125_A.png",
+    assert made == ["rank_cpu.png", "scatter_cpu_125_A.png",
                     "scatter_cpu_125_B.png", "scatter_cpu_125_C.png"], made
     assert all(os.path.getsize(os.path.join(out, f)) > 5000 for f in made)
 
@@ -160,7 +160,7 @@ def test_plot_runs_as_a_script(tmp_path):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     assert r.returncode == 0, r.stderr.decode()
     assert b"figures in" in r.stdout
-    assert os.path.exists(str(tmp_path / "plots" / "rank_cpu_125.png"))
+    assert os.path.exists(str(tmp_path / "plots" / "rank_cpu.png"))
 
 
 def test_figures_use_the_short_circuit_name(tmp_path):
@@ -182,8 +182,8 @@ def test_figures_use_the_short_circuit_name(tmp_path):
     out = str(tmp_path / "p")
     assert plot.main(["--runs", runs, "--out", out, "--only", "rank"]) == 0
     assert sorted(os.listdir(out)) == [
-        "rank_MFC_125.png", "rank_MIF_Timing_Report_125.png",
-        "rank_MIF_report_125.png", "rank_PERIC0_125.png"]
+        "rank_MFC.png", "rank_MIF_Timing_Report.png",
+        "rank_MIF_report.png", "rank_PERIC0.png"]
 
     # --design takes the short name too
     out2 = str(tmp_path / "q")
@@ -223,4 +223,55 @@ def test_the_rank_figure_spans_every_held_out_corner(tmp_path, monkeypatch):
     monkeypatch.setattr(mplt.Axes, "set_xticklabels", ticks)
     assert plot.main(["--runs", runs, "--out", str(tmp_path / "p"),
                       "--only", "rank"]) == 0
-    assert xt and all(t == ["U", "W", "X", "Z"] for t in xt), xt
+    assert xt and all(t == ["-25C U", "-25C W", "-25C X", "-25C Z"] for t in xt), xt
+
+
+def test_one_rank_figure_per_circuit_across_its_temperatures(tmp_path, capsys):
+    """Asked for: rank NOT split by temperature. One figure per circuit, its
+    trajectory running through every held-out corner of every temperature.
+
+    Each temperature is its own prediction file, so paths are joined by key
+    with the per-report `_#<n>` ordinal removed -- it need not agree between
+    the two reports, and here it deliberately does not. A path only one
+    temperature has is left out, since a rank is a position among one set of
+    paths. Corner names carry the temperature, because both temperatures can
+    hold out the same (voltage, level)."""
+    pytest.importorskip("matplotlib")
+    import matplotlib.pyplot as mplt
+    import plot
+
+    runs = str(tmp_path / "runs" / "setup")
+    rng = np.random.RandomState(5)
+    t125 = rng.rand(20, 2) * 300.0
+    tm25 = rng.rand(21, 3) * 300.0
+    _write(runs, "PERIC0_Timing_Report", "125", ["SSPG_0p54V_rcmax", "SSPG_0p6V_cmax"],
+           t125, t125 + 1.0, keys=["p%d_#%d" % (i, i) for i in range(20)])
+    # same paths, different ordinals, plus one path only m25 has
+    _write(runs, "PERIC0_Timing_Report", "m25",
+           ["SSPG_0p5V_cmax", "SSPG_0p54V_rcmax", "SSPG_0p685V_rcmin"],
+           tm25, tm25 + 1.0,
+           keys=["p%d_#%d" % (i, 100 + i) for i in range(20)] + ["only_m25_#7"])
+
+    ticks = []
+    real = mplt.Axes.set_xticklabels
+
+    def spy(self, labels, *a, **k):
+        ticks.append([str(l) for l in labels])
+        return real(self, labels, *a, **k)
+    mplt.Axes.set_xticklabels = spy
+    try:
+        out = str(tmp_path / "p")
+        assert plot.main(["--runs", runs, "--out", out, "--only", "rank"]) == 0
+    finally:
+        mplt.Axes.set_xticklabels = real
+    assert os.listdir(out) == ["rank_PERIC0.png"]
+    assert ticks[0] == ["125C SSPG_0p54V_rcmax", "125C SSPG_0p6V_cmax",
+                        "-25C SSPG_0p5V_cmax", "-25C SSPG_0p54V_rcmax",
+                        "-25C SSPG_0p685V_rcmin"], ticks[0]
+    assert "20 paths common to all temperatures (of 20/21)" in capsys.readouterr().out
+
+    # one temperature asked for: that temperature, and its name in the file
+    out2 = str(tmp_path / "q")
+    assert plot.main(["--runs", runs, "--out", out2, "--only", "rank",
+                      "--temp", "125"]) == 0
+    assert os.listdir(out2) == ["rank_PERIC0_125.png"]

@@ -629,21 +629,27 @@ python3 scripts/plot.py --corners all --only rank         # seen 까지, rank �
 
 ```
 runs/setup/_all/plots/scatter_<회로>_<온도>_<코너>.png   코너마다 하나. 실측 vs 예측, y=x, MAE·N
-runs/setup/_all/plots/rank_<회로>_<온도>.png             True / Predicted 순위 궤적 2단
+runs/setup/_all/plots/rank_<회로>.png                    True / Prediction 순위 궤적 2단 (온도 합침)
 runs/extrapolation/setup/_all/plots/...                  외삽 실험은 자기 폴더로
 ```
 
 회로 이름은 **짧게** 나온다 — `PERIC0_Timing_Report` 가 그림 제목과 파일 이름에서는
 `PERIC0` (`--design PERIC0` 도 된다). 짧게 하면 두 회로 이름이 겹치는 경우만 원래 이름을 쓴다.
 
-rank 는 **그 회로 · 온도의 히든 코너 전부**를 전압 순으로 잇는다 (MIF m25 면 4개). seen
-코너와 실측 없는 코너(`--at 0.52` 같은)는 빠진다 — 실측 순위가 없으니 왼쪽 패널을 그릴 수 없다.
+rank 는 **회로마다 한 장, 온도를 나누지 않는다.** 그 회로의 **모든 온도의 히든 코너 전부**
+를 한 궤적으로 잇는다 — 125C 코너들 다음에 -25C 코너들, 각 온도 안은 전압 순 (MIF 면
+125C 3개 + -25C 4개 = 7개). 축 라벨에 온도가 붙는다 (`125C SSPG_0p54V_cmax`) — 두 온도가
+같은 (전압, 레벨)을 숨길 수 있어서다. 경로는 두 온도에 **둘 다 있는 것만** 쓰고 키로 맞춘다
+(키 끝 `_#번호` 는 리포트마다 매기는 순번이라 떼고 맞춘다). 빠진 경로가 있으면 몇 개
+남았는지 찍는다. `--temp 125` 를 주면 그 온도만, 파일 이름에 `_125` 가 붙는다.
+seen 코너와 실측 없는 코너(`--at 0.52` 같은)는 빠진다 — 실측 순위가 없으니 왼쪽 패널을
+그릴 수 없다.
 
 제목과 축 (모델이든 `--corners base` 든 **똑같다**):
 
 ```
 scatter  제목  <회로(짧게)>  <코너>  /  MAE=..ps   N=..        x: True Slack (ps)   y: Prediction Slack (ps)
-rank     제목  <회로(짧게)> <온도> - rank movement over N corners (start <첫 코너>)
+rank     제목  <회로(짧게)> - rank movement over N corners (start <첫 코너>)
          왼쪽 True rank trajectory  /  오른쪽 Prediction rank trajectory
          범례  p1: start 12, end True/Prediction 12/12, |err| 0.1 ps
 ```

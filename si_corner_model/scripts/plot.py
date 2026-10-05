@@ -8,13 +8,15 @@
 
 Reads ``<runs>/<circuit>/<temp>/predictions_<corners>.npz`` -- path_keys,
 corners, truth_ps, model_ps, which is what train and predict write -- and
-produces, per model:
+produces:
 
-  scatter_<circuit>_<temp>_<corner>.png   true vs predicted slack at one corner,
-                                          with y = x and the corner's MAE
-  rank_<circuit>_<temp>.png               where each tracked path sits in the
-                                          slack ordering at every corner, true
-                                          beside predicted
+  scatter_<circuit>_<temp>_<corner>.png   one per held-out corner: true vs
+                                          predicted slack, y = x, the MAE
+  rank_<circuit>.png                      one per CIRCUIT, every temperature on
+                                          one trajectory: where each tracked
+                                          path sits in the slack ordering at
+                                          every held-out corner, true beside
+                                          predicted
 
 The rank figure is the one that answers "would this model have picked the same
 critical paths": slack error in ps says how close the numbers are, and says
@@ -51,6 +53,65 @@ def _load(fp):
         model = np.asarray(z["model_ns"], float) * 1000.0
     return keys, corners, seen, truth, model
 
+
+
+_IDX = re.compile(r"_?#\d+$")
+
+
+def temp_label(t):
+    """`125` -> `125C`, `m25` -> `-25C`: how a temperature reads on an axis."""
+    t = str(t)
+    if t[:1] in ("m", "n") and t[1:].isdigit():
+        return "-%sC" % t[1:]
+    return t + "C" if t.lstrip("-").isdigit() else t
+
+
+def combine_temps(loaded):
+    """One rank matrix for a circuit over EVERY temperature it was run at.
+
+    Asked for: one rank figure per circuit, not one per temperature. Each
+    temperature is its own model and its own prediction file, so the paths are
+    joined by KEY, with the trailing `_#<n>` taken off -- that is a per-report
+    ordinal, not part of a path's identity, and it need not agree between two
+    temperatures' reports. Only paths present at every temperature are kept
+    (a rank is a position among the SAME set of paths, column to column), and a
+    key that is ambiguous once the ordinal is gone is left out rather than
+    joined to the wrong path.
+
+    Corners are labelled with their temperature: two temperatures can hold out
+    the same (voltage, level), and without it the axis would show the same name
+    twice for two different measurements. Temperatures in the order given,
+    each with its corners in grid order, so each temperature's sweep stays
+    together.
+
+    Returns (keys, corners, seen, truth, model, note) or None.
+    """
+    from collections import Counter
+
+    if len(loaded) == 1:
+        t, keys, corners, seen, truth, model = loaded[0]
+        return (keys, ["%s %s" % (temp_label(t), c) for c in corners],
+                np.asarray(seen, bool), truth, model, "")
+    maps = []
+    for t, keys, corners, seen, truth, model in loaded:
+        nk = [_IDX.sub("", k) for k in keys]
+        cnt = Counter(nk)
+        maps.append({k: i for i, k in enumerate(nk) if cnt[k] == 1})
+    common = [k for k in maps[0] if all(k in m for m in maps[1:])]
+    if not common:
+        return None
+    cs, ss, T, M = [], [], [], []
+    for (t, keys, corners, seen, truth, model), m in zip(loaded, maps):
+        rows = [m[k] for k in common]
+        T.append(np.asarray(truth)[rows])
+        M.append(np.asarray(model)[rows])
+        cs += ["%s %s" % (temp_label(t), c) for c in corners]
+        ss += [bool(x) for x in seen]
+    sizes = [len(x[1]) for x in loaded]
+    note = ("" if all(n == len(common) for n in sizes) else
+            "%d paths common to all temperatures (of %s)"
+            % (len(common), "/".join(str(n) for n in sizes)))
+    return common, cs, np.asarray(ss, bool), np.hstack(T), np.hstack(M), note
 
 _TAIL = re.compile(r"(?:[_-]?timing)?(?:[_-]?reports?)$", re.I)
 
@@ -224,12 +285,14 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
                            rotation=45, ha="right", fontsize=8)
         ax.grid(True, lw=0.5, alpha=0.5)
     axes[0].set_ylabel("Rank position  (1 = worst slack)")
-    fig.suptitle("%s %s - rank movement over %d corners (start %s)"
-                 % (circuit, temp, len(cn), cn[0]), fontsize=12)
+    who = " ".join(x for x in (circuit, temp) if x)
+    fig.suptitle("%s - rank movement over %d corners (start %s)"
+                 % (who, len(cn), cn[0]), fontsize=12)
     fig.legend(loc="upper center", bbox_to_anchor=(0.5, 0.93), ncol=2, fontsize=8,
                frameon=False)
     fig.tight_layout(rect=(0, 0, 1, 0.84))
-    fp = os.path.join(out_dir, "rank_%s_%s%s.png" % (circuit, temp, tag))
+    fp = os.path.join(out_dir, "rank_%s%s.png"
+                      % ("_".join(x for x in (circuit, temp) if x), tag))
     fig.savefig(fp, dpi=150)
     plt.close(fig)
     return [fp]
@@ -300,18 +363,40 @@ def main(argv=None):
     shorts = {}
     for circuit, _, _ in found:
         shorts.setdefault(short_name(circuit), set()).add(circuit)
-    made = []
+    by_circuit = {}
     for circuit, temp, fp in found:
-        keys, corners, seen, truth, model = _load(fp)
+        by_circuit.setdefault(circuit, []).append((temp, fp))
+    made = []
+    for circuit, items in by_circuit.items():
         sn = short_name(circuit)
-        circuit = sn if len(shorts[sn]) == 1 else circuit
-        if args.only != "rank":
-            made += scatter(plt, keys, corners, seen, truth, model, circuit,
-                            temp, out_dir, args.include_seen, tag)
-        if args.only != "scatter":
-            made += rank_movement(plt, keys, corners, seen, truth, model,
-                                  circuit, temp, out_dir, args.track,
-                                  args.include_seen, tag)
+        name = sn if len(shorts[sn]) == 1 else circuit
+        loaded = []
+        for temp, fp in items:
+            keys, corners, seen, truth, model = _load(fp)
+            loaded.append((temp, keys, corners, seen, truth, model))
+            # a scatter is one corner, so it stays per temperature
+            if args.only != "rank":
+                made += scatter(plt, keys, corners, seen, truth, model, name,
+                                temp, out_dir, args.include_seen, tag)
+        if args.only == "scatter":
+            continue
+        # ONE rank figure per circuit, across its temperatures
+        comb = combine_temps(loaded)
+        if comb is None:
+            print("  (!) %s: no path is common to %s by key -- rank drawn per "
+                  "temperature instead" % (name, ", ".join(t for t, _ in items)),
+                  file=sys.stderr)
+            for temp, keys, corners, seen, truth, model in loaded:
+                made += rank_movement(plt, keys, corners, seen, truth, model,
+                                      name, temp, out_dir, args.track,
+                                      args.include_seen, tag)
+            continue
+        keys, corners, seen, truth, model, note = comb
+        if note:
+            print("  %s rank: %s" % (name, note))
+        made += rank_movement(plt, keys, corners, seen, truth, model, name,
+                              args.temp or "", out_dir, args.track,
+                              args.include_seen, tag)
     for fp in made:
         print("wrote %s" % fp)
     print("%d figures in %s/" % (len(made), args.out))
