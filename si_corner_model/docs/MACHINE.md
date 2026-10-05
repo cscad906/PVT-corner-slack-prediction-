@@ -633,6 +633,17 @@ runs/setup/_all/plots/rank_<회로>_<온도>.png             True / Predicted �
 runs/extrapolation/setup/_all/plots/...                  외삽 실험은 자기 폴더로
 ```
 
+제목과 축 (모델이든 `--corners base` 든 **똑같다**):
+
+```
+scatter  제목  <회로>  <코너>  /  MAE=..ps   N=..        x: True Slack (ps)   y: Prediction Slack (ps)
+rank     제목  <회로> <온도> - rank movement over N corners (start <첫 코너>)
+         왼쪽 True rank trajectory  /  오른쪽 Prediction rank trajectory
+         범례  p1: start 12, end True/Prediction 12/12, |err| 0.1 ps
+```
+
+`start` 는 첫 코너에서의 순위다 (전에는 `base` 라고 써서 OLS base 로 읽혔다).
+
 실행한 위치에 `plots/` 를 만들지 않는다. 그러면 setup 과 외삽 실험을 차례로 그릴 때
 **회로·온도·코너가 같아서 같은 파일 이름으로 덮어쓴다.**
 
@@ -765,11 +776,11 @@ runs/<mode>/_all/predict_<온도>_base.rpt          <- 위와 같은 명령
 runs/<mode>/_all/predict_<온도>_*.rpt             <- predict --at / --sweep
 ```
 
-전에는 `predictions_*.npz` 중 알파벳 순으로 먼저 오는 걸 집어서, 학습된 모델 결과가
-있으면 그걸 비교했다. base 와 model 은 **다른 주장**이다 — base 는 닫힌형 OLS 적합이고
-model 은 거기에 학습된 잔차를 더한 것이라, 그림에 "this model" 이라고 썼으면 틀린 걸 가리킨다.
-지금은 `predictions_base.npz` 만 읽고, 범례에 `base (OLS)` 라고 나온다.
-학습된 모델과 비교하려면 `--source hidden`.
+기본은 `predictions_base.npz` (base 만으로 예측) 이고, 학습된 모델과 비교하려면
+`--source hidden`. **어느 쪽이든 그림 범례 · 제목 · 화면에는 `Prediction` 으로 나온다**
+(`PT scaling vs Prediction -- ...`). 어느 걸로 그렸는지는 **파일 이름**에만 들어간다
+(`ptscale_PERIC0_base_...` / `ptscale_PERIC0_hidden_...`) — 그래야 둘이 서로 덮어쓰지
+않는다.
 
 스케일링한 코너는 보통 **측정 격자에 없는 코너**라서 (그러니까 스케일링을 한
 것이다) 예측 파일에도 없다. 그럴 땐 **돌릴 명령을 그대로 찍어준다**:

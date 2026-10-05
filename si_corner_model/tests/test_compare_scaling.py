@@ -187,7 +187,7 @@ def test_only_the_mean_predicted_slack_is_printed(tmp_path, capsys):
     # this corner has no library and so no measurement: there is no error to
     # quote, and statistics about the gap between two PREDICTIONS read like
     # accuracy when neither side is known to be right
-    assert "mean predicted slack:  PT scaling    100.0 ps    base     80.0 ps" in o
+    assert "mean predicted slack:  PT scaling    100.0 ps    prediction     80.0 ps" in o
     assert "measurement" not in o and "worst" not in o and "spread" not in o
 
 
@@ -247,7 +247,7 @@ def test_it_says_what_to_run_when_the_corner_is_nowhere(tmp_path, capsys):
     assert rc == 1
     o = capsys.readouterr().out
     assert "base --save --at 0.52:rcmax --design PERIC0_Timing_Report --temp 125 --mode hold" in o
-    assert "[no base]" in o
+    assert "[no prediction]" in o
 
 
 def test_a_name_that_says_nothing_is_still_compared_and_says_so(tmp_path, capsys):
@@ -389,7 +389,7 @@ def test_the_short_circuit_name_finds_the_configured_long_one(tmp_path, capsys):
                     "--list"]) == 0
     o = capsys.readouterr().out
     assert "PERIC0_Timing_Report/125/predictions_base.npz" in o
-    assert "base     80.0 ps" in o and "-999" not in o
+    assert "prediction     80.0 ps" in o and "-999" not in o
 
 
 def test_the_printed_command_uses_the_name_run_sh_accepts(tmp_path, capsys,
@@ -406,3 +406,42 @@ def test_the_printed_command_uses_the_name_run_sh_accepts(tmp_path, capsys,
              "--runs", str(tmp_path / "runs" / "hold"), "--list"])
     assert ("base --save --at 0.52:rcmax --design PERIC0_Timing_Report "
             "--temp 125 --mode hold") in capsys.readouterr().out
+
+
+def test_the_series_is_called_prediction_whatever_made_it(tmp_path, capsys):
+    """The figure and the screen say "Prediction" for the base alone and for a
+    trained model alike -- asked for in those words. The internal method is a
+    distinction for the file name, where it keeps the two from overwriting
+    each other, not for the reader of the figure."""
+    pytest.importorskip("matplotlib")
+    sc = tmp_path / "s" / "PERIC0" / "setup"
+    sc.mkdir(parents=True)
+    (sc / "SSPG_0p52V_125C_rcmax_setup.rpt").write_text(
+        _fixed_path_report([100.0] * 8))
+    runs = str(tmp_path / "runs" / "setup")
+    _npz(runs, "PERIC0", 125, ["SSPG_0p52V_RCMAX"], np.full((8, 1), 80.0))
+    os.rename(os.path.join(runs, "PERIC0", "125", "predictions_base.npz"),
+              os.path.join(runs, "PERIC0", "125", "predictions_hidden.npz"))
+    _npz(runs, "PERIC0", 125, ["SSPG_0p52V_RCMAX"], np.full((8, 1), 70.0))
+    out = str(tmp_path / "p")
+    seen_labels = []
+    import matplotlib.pyplot as plt
+    real = plt.Axes.legend
+
+    def spy(self, *a, **k):
+        seen_labels.extend(t for t in self.get_legend_handles_labels()[1])
+        return real(self, *a, **k)
+    plt.Axes.legend = spy
+    try:
+        for src in ("base", "hidden"):
+            assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"),
+                            "--runs", runs, "--out", out, "--source", src]) == 0
+    finally:
+        plt.Axes.legend = real
+    o = capsys.readouterr().out
+    assert "OLS" not in o and "base (" not in o
+    assert o.count("prediction     80.0 ps") == 1 and o.count("prediction     70.0 ps") == 1
+    assert set(seen_labels) == {"PT scaling", "Prediction"}, seen_labels
+    assert sorted(os.listdir(out)) == [
+        "ptscale_PERIC0_base_setup_125_0.52V_rcmax.png",
+        "ptscale_PERIC0_hidden_setup_125_0.52V_rcmax.png"]

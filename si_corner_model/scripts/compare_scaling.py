@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PrimeTime voltage scaling against the OLS base, for PERIC0 at 0.52 V.
+"""PrimeTime voltage scaling against this project's prediction, PERIC0 at 0.52 V.
 
     python3 scripts/compare_scaling.py --list      # look first, draw nothing
     python3 scripts/compare_scaling.py
@@ -111,12 +111,14 @@ LEVELS = ("rcworst", "rcbest", "rcmax", "rcmin", "rctyp", "cworst", "cbest",
 
 _SUFFIX = re.compile(r"_#\d+$")
 
-# What the second series is called on the figure. The comparison is against the
-# OLS base by default -- `run.sh base --save` -- and saying "this model" of it
-# would name the wrong thing: the base is the closed-form fit, the model is the
-# base plus a trained residual, and they are different claims.
-MINE = {"base": "base (OLS)", "hidden": "model (trained)",
-        "all": "model (trained)"}
+# What the second series is called, on the figure and on screen: "Prediction",
+# whichever numbers it is -- the OLS base alone (`base --save`, the default) or
+# a trained model (`--source hidden`). Asked for in exactly those words: the
+# figure is about PrimeTime scaling against this project's prediction, and
+# naming the internal method on it ("base (OLS)") is a distinction for the
+# file name, not for the reader. The source still goes into the file name, so
+# the two cannot overwrite each other.
+LABEL = "Prediction"
 
 
 def _walk_for_scaling(base, max_depth=5):
@@ -496,7 +498,7 @@ def join(pt, mod):
 
 
 # --------------------------------------------------------------------- drawing
-def draw(plt, x, pt, mine, title, xlabel, fp, mine_label="base (OLS)"):
+def draw(plt, x, pt, mine, title, xlabel, fp, mine_label="Prediction"):
     """One panel, two series.
 
     The difference between them was its own panel for a while. It is one
@@ -645,10 +647,9 @@ def main(argv=None):
                or find_predict_rpt(runs, t, design, v, lv, args.source))
         if got is None:
             missing.append((v, lv, t, mode))
-            print("  [no %s] %.3fV %s %sC %s -- no predictions_%s.npz nor "
+            print("  [no prediction] %.3fV %s %sC %s -- no predictions_%s.npz nor "
                   "predict_%s_%s.rpt under %s"
-                  % (args.source, v, lv, t, mode, args.source, t,
-                     args.source, runs))
+                  % (v, lv, t, mode, args.source, t, args.source, runs))
             continue
         m_idx, m_key, label, src = got
         pt_idx, pt_key, k2i, how_read = read_pt(fp)
@@ -666,7 +667,7 @@ def main(argv=None):
         x, y_pt, y_me, how = j
         print("  [matched] %.3fV %-7s %sC %-5s : %d paths joined on %s "
               "(PT read as %s; %s %s <- %s)"
-              % (v, lv, t, mode, len(x), how, how_read, args.source, label,
+              % (v, lv, t, mode, len(x), how, how_read, LABEL.lower(), label,
                  src))
         # Mean predicted slack, and nothing else. This corner has no library
         # and so no measurement: there is no error to quote, and a screen full
@@ -675,7 +676,7 @@ def main(argv=None):
         # the comparison; the shape of it is the figure.
         print("            mean predicted slack:  PT scaling %8.1f ps    "
               "%s %8.1f ps"
-              % (float(np.nanmean(y_pt)), args.source, float(np.nanmean(y_me))))
+              % (float(np.nanmean(y_pt)), LABEL.lower(), float(np.nanmean(y_me))))
         pairs.append((v, t, lv, mode, x, y_pt, y_me, how, len(x)))
 
     if missing:
@@ -724,10 +725,9 @@ def main(argv=None):
         fp = os.path.join(out_dir, name)
         draw(plt, x, y_pt, y_me,
              "PT scaling vs %s -- %s  %.3fV %s %sC %s   (%d paths)"
-             % (MINE.get(args.source, args.source), design or "", v, lv,
-                t or "?", mode, n),
+             % (LABEL, design or "", v, lv, t or "?", mode, n),
              "Path (report order)" if "no idx" in how else "Path index",
-             fp, MINE.get(args.source, args.source))
+             fp, LABEL)
         made.append(fp)
     for f in made:
         print("wrote %s" % f)

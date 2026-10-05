@@ -103,7 +103,7 @@ def scatter(plt, keys, corners, seen, truth, model, circuit, temp, out_dir,
         ax.set_title("%s  %s\nMAE=%.2f ps   N=%d" % (circuit, corner, mae, len(t)),
                      fontsize=11, fontweight="bold")
         ax.set_xlabel("True Slack (ps)")
-        ax.set_ylabel("Pred Slack (ps)")
+        ax.set_ylabel("Prediction Slack (ps)")
         ax.set_xlim(lo - pad, hi + pad)
         ax.set_ylim(lo - pad, hi + pad)
         ax.set_aspect("equal", adjustable="box")
@@ -180,14 +180,16 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
     for pi, p in enumerate(track):
         c = colors[pi % len(colors)]
         err = float(np.nanmean(np.abs(model[p, ok_cols] - truth[p, ok_cols])))
-        lab = ("p%d: base %d, end T/P %d/%d, |err| %.1f ps"
+        # "start", not "base": with --corners base the figure is OF the base,
+        # and a legend saying "base 12" read as the OLS base's rank
+        lab = ("p%d: start %d, end True/Prediction %d/%d, |err| %.1f ps"
                % (pi + 1, rt[p, 0], rt[p, -1], rp[p, -1], err))
         axes[0].plot(range(len(cn)), rt[p], "-o", color=c, ms=5, label=lab)
         axes[1].plot(range(len(cn)), rp[p], "-o", color=c, ms=5)
         for ax, r in ((axes[0], rt), (axes[1], rp)):
             ax.annotate("p%d" % (pi + 1), (0, r[p, 0]), textcoords="offset points",
                         xytext=(-16, -4), color=c, fontsize=9)
-    for ax, title in zip(axes, ("True rank trajectory", "Predicted rank trajectory")):
+    for ax, title in zip(axes, ("True rank trajectory", "Prediction rank trajectory")):
         ax.set_title(title, fontsize=12)
         ax.set_xticks(range(len(cn)))
         ax.set_xticklabels([c + (" (seen)" if seen[ok_cols[i]] else "")
@@ -195,7 +197,7 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
                            rotation=45, ha="right", fontsize=8)
         ax.grid(True, lw=0.5, alpha=0.5)
     axes[0].set_ylabel("Rank position  (1 = worst slack)")
-    fig.suptitle("%s %s - rank movement over %d corners (baseline %s)"
+    fig.suptitle("%s %s - rank movement over %d corners (start %s)"
                  % (circuit, temp, len(cn), cn[0]), fontsize=12)
     fig.legend(loc="upper center", bbox_to_anchor=(0.5, 0.93), ncol=2, fontsize=8,
                frameon=False)
