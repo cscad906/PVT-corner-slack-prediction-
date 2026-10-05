@@ -27,6 +27,7 @@ the whole pipeline and only loses this script, which says so and exits.
 """
 import argparse
 import os
+import re
 import sys
 
 import numpy as np
@@ -51,6 +52,32 @@ def _load(fp):
     return keys, corners, seen, truth, model
 
 
+_TAIL = re.compile(r"(?:[_-]?timing)?(?:[_-]?reports?)$", re.I)
+
+
+def short_name(name):
+    """`PERIC0_Timing_Report` -> `PERIC0`, for titles and file names.
+
+    The configured circuit name is the report directory's name, and on the
+    company drop that carries a `_Timing_Report` tail which says nothing about
+    the circuit and doubled the length of every title. Asked for: take it off.
+    A name that is nothing BUT such a tail is left as it is.
+    """
+    s = _TAIL.sub("", str(name)).rstrip("_-")
+    return s or str(name)
+
+
+def same_design(want, have):
+    """`PERIC0` names `PERIC0_Timing_Report`: a prefix match up to a
+    separator, so --design takes the short name or the configured one."""
+    if not want:
+        return True
+    a, b = str(want).lower(), str(have).lower()
+    if a == b:
+        return True
+    return b.startswith(a) and len(b) > len(a) and not b[len(a)].isalnum()
+
+
 def _find(runs, corners, design=None, temp=None):
     """[(circuit, temp, path)] for every prediction file under `runs`."""
     out = []
@@ -59,7 +86,7 @@ def _find(runs, corners, design=None, temp=None):
     for d in sorted(os.listdir(runs)):
         if d == "_all" or not os.path.isdir(os.path.join(runs, d)):
             continue
-        if design and d != design:
+        if design and not same_design(design, d):
             continue
         for t in sorted(os.listdir(os.path.join(runs, d))):
             if temp and t != str(temp):
@@ -216,7 +243,8 @@ def main(argv=None):
     ap.add_argument("--corners", default="hidden",
                     help="which prediction file: hidden (default), seen, all, "
                          "or hidden_from_<circuit> for a borrowed model")
-    ap.add_argument("--design", default=None, help="this circuit only")
+    ap.add_argument("--design", default=None,
+                    help="this circuit only (PERIC0 or PERIC0_Timing_Report)")
     ap.add_argument("--temp", default=None, help="this temperature only")
     ap.add_argument("--out", default=None,
                     help="where the .png go (default <runs>/_all/plots, so the "
@@ -266,9 +294,17 @@ def main(argv=None):
     # figures would land on the own-model ones -- same circuit, same
     # temperature, same corner -- and replace them.
     tag = "" if args.corners == "hidden" else "_" + args.corners
+    # Short names on the figures and in their file names -- unless two
+    # circuits would collapse to the same one, which would make one overwrite
+    # the other; those keep the configured name.
+    shorts = {}
+    for circuit, _, _ in found:
+        shorts.setdefault(short_name(circuit), set()).add(circuit)
     made = []
     for circuit, temp, fp in found:
         keys, corners, seen, truth, model = _load(fp)
+        sn = short_name(circuit)
+        circuit = sn if len(shorts[sn]) == 1 else circuit
         if args.only != "rank":
             made += scatter(plt, keys, corners, seen, truth, model, circuit,
                             temp, out_dir, args.include_seen, tag)

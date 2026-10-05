@@ -633,11 +633,17 @@ runs/setup/_all/plots/rank_<회로>_<온도>.png             True / Predicted �
 runs/extrapolation/setup/_all/plots/...                  외삽 실험은 자기 폴더로
 ```
 
+회로 이름은 **짧게** 나온다 — `PERIC0_Timing_Report` 가 그림 제목과 파일 이름에서는
+`PERIC0` (`--design PERIC0` 도 된다). 짧게 하면 두 회로 이름이 겹치는 경우만 원래 이름을 쓴다.
+
+rank 는 **그 회로 · 온도의 히든 코너 전부**를 전압 순으로 잇는다 (MIF m25 면 4개). seen
+코너와 실측 없는 코너(`--at 0.52` 같은)는 빠진다 — 실측 순위가 없으니 왼쪽 패널을 그릴 수 없다.
+
 제목과 축 (모델이든 `--corners base` 든 **똑같다**):
 
 ```
-scatter  제목  <회로>  <코너>  /  MAE=..ps   N=..        x: True Slack (ps)   y: Prediction Slack (ps)
-rank     제목  <회로> <온도> - rank movement over N corners (start <첫 코너>)
+scatter  제목  <회로(짧게)>  <코너>  /  MAE=..ps   N=..        x: True Slack (ps)   y: Prediction Slack (ps)
+rank     제목  <회로(짧게)> <온도> - rank movement over N corners (start <첫 코너>)
          왼쪽 True rank trajectory  /  오른쪽 Prediction rank trajectory
          범례  p1: start 12, end True/Prediction 12/12, |err| 0.1 ps
 ```

@@ -315,6 +315,15 @@ def same_design(want, have):
     return b.startswith(a) and len(b) > len(a) and not b[len(a)].isalnum()
 
 
+_TAIL = re.compile(r"(?:[_-]?timing)?(?:[_-]?reports?)$", re.I)
+
+
+def short_name(name):
+    """`PERIC0_Timing_Report` -> `PERIC0`, for the title and the file name."""
+    s = _TAIL.sub("", str(name)).rstrip("_-")
+    return s or str(name)
+
+
 def full_design(short):
     """The config's own spelling of a circuit, for commands printed to run.
 
@@ -721,11 +730,11 @@ def main(argv=None):
             if not os.path.isdir(out_dir):
                 raise
         name = "ptscale_%s_%s_%s_%s_%gV_%s.png" % (
-            design or "design", args.source, mode, t or "temp", v, lv)
+            short_name(design or "design"), args.source, mode, t or "temp", v, lv)
         fp = os.path.join(out_dir, name)
         draw(plt, x, y_pt, y_me,
              "PT scaling vs %s -- %s  %.3fV %s %sC %s   (%d paths)"
-             % (LABEL, design or "", v, lv, t or "?", mode, n),
+             % (LABEL, short_name(design or ""), v, lv, t or "?", mode, n),
              "Path (report order)" if "no idx" in how else "Path index",
              fp, LABEL)
         made.append(fp)

@@ -161,3 +161,66 @@ def test_plot_runs_as_a_script(tmp_path):
     assert r.returncode == 0, r.stderr.decode()
     assert b"figures in" in r.stdout
     assert os.path.exists(str(tmp_path / "plots" / "rank_cpu_125.png"))
+
+
+def test_figures_use_the_short_circuit_name(tmp_path):
+    """`PERIC0_Timing_Report` is the report directory's name, and the
+    `_Timing_Report` tail says nothing about the circuit -- asked for: take it
+    off the titles and the file names. Two circuits that would collapse to the
+    same short name keep their configured names, or one would overwrite the
+    other."""
+    pytest.importorskip("matplotlib")
+    import plot
+
+    runs = str(tmp_path / "runs" / "setup")
+    rng = np.random.RandomState(2)
+    truth = rng.rand(30, 3) * 300.0
+    for d in ("PERIC0_Timing_Report", "MFC_Timing_Report",
+              "MIF_Timing_Report", "MIF_report"):
+        _write(runs, d, "125", ["A", "B", "C"], truth, truth + rng.randn(30, 3))
+
+    out = str(tmp_path / "p")
+    assert plot.main(["--runs", runs, "--out", out, "--only", "rank"]) == 0
+    assert sorted(os.listdir(out)) == [
+        "rank_MFC_125.png", "rank_MIF_Timing_Report_125.png",
+        "rank_MIF_report_125.png", "rank_PERIC0_125.png"]
+
+    # --design takes the short name too
+    out2 = str(tmp_path / "q")
+    assert plot.main(["--runs", runs, "--out", out2, "--design", "PERIC0",
+                      "--only", "scatter"]) == 0
+    assert sorted(os.listdir(out2)) == ["scatter_PERIC0_125_A.png",
+                                        "scatter_PERIC0_125_B.png",
+                                        "scatter_PERIC0_125_C.png"]
+
+
+def test_the_rank_figure_spans_every_held_out_corner(tmp_path, monkeypatch):
+    """Every held-out corner of the circuit and temperature is a point on the
+    trajectory -- four held out, four points -- and seen ones are not."""
+    pytest.importorskip("matplotlib")
+    import plot
+
+    runs = str(tmp_path / "runs" / "setup")
+    rng = np.random.RandomState(4)
+    truth = rng.rand(40, 6) * 300.0
+    _write(runs, "MIF_Timing_Report", "m25", list("UVWXYZ"), truth,
+           truth + rng.randn(40, 6),
+           seen=[False, True, False, False, True, False])
+    got = {}
+    real = plot.rank_movement
+
+    def spy(plt, keys, corners, seen, *a, **k):
+        got["cols"] = [c for c, s in zip(corners, seen) if not s]
+        return real(plt, keys, corners, seen, *a, **k)
+    monkeypatch.setattr(plot, "rank_movement", spy)
+    import matplotlib.pyplot as mplt
+    xt = []
+    real_ticks = mplt.Axes.set_xticklabels
+
+    def ticks(self, labels, *a, **k):
+        xt.append([str(l) for l in labels])
+        return real_ticks(self, labels, *a, **k)
+    monkeypatch.setattr(mplt.Axes, "set_xticklabels", ticks)
+    assert plot.main(["--runs", runs, "--out", str(tmp_path / "p"),
+                      "--only", "rank"]) == 0
+    assert xt and all(t == ["U", "W", "X", "Z"] for t in xt), xt
