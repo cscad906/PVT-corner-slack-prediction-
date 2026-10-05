@@ -809,15 +809,23 @@ PT 리포트가 `### FIXED_PATH` 없는 **그냥 `report_timing` 출력**이어�
 date             stage     circuit                  mode   temps  paths corners      wall       cpu  thr host
 2026-10-02 12:43 build     MFC_Timing_Report        setup      2     12      20     3h12m    41h02m   16 knuee-srv5
 2026-10-02 15:55 train     MFC_Timing_Report        setup      2     12      20    28m04s   3h40m    16 knuee-srv5  epochs=40
-2026-10-02 16:23 inference -                        setup      -      -       -     13.6s    22.7s   16 knuee-srv5  bundle corners=hidden merge
+2026-10-05 19:17 inference PERIC0_Timing_Report     setup      1     12       8    0.033s    0.628s   16 knuee-srv5  corners=hidden
+```
+
+화면에는 시간 **하나만** 찍힌다 (cpu 는 파일에만):
+
+```
+  [TIME] inference PERIC0_Timing_Report (125): 0.033s -> runs/setup/_all/runtime.rpt
 ```
 
 **단계는 세 개만 기록한다:**
 
 - **`build`** 리포트 파싱 → `dataset.npz`
 - **`train`** OLS base 적합을 **포함**한다. 따로 안 쪼갠다 — 학습 한 번의 시간이다
-- **`inference`** 학습 뒤에 결과물을 만드는 전부 (predict · 리포트 · bundle · merge)
-  를 합친 것
+- **`inference`** **예측 한 번에 걸린 시간.** 모델 띄우기(캐시 · 경로별 base 적합 ·
+  가중치)와 요청한 코너 계산까지. 리포트 쓰기, bundle, merge, 그리고 predict 가 merge
+  용 npz 를 쓰려고 **같은 예측을 한 번 더 도는 패스는 안 넣는다.** python/torch import
+  (~0.8 s) 도 프로세스 시작 비용이라 뺀다
 - `base` 와 `sweep` 은 **기록하지 않는다.** 진단용이고 초 단위다
 
 읽는 법:
@@ -825,8 +833,8 @@ date             stage     circuit                  mode   temps  paths corners 
 - **`build` · `train` 은 회로마다 한 줄**이고 그 회로의 **온도는 합산**된다 (`temps`
   가 몇 개였는지). 온도는 내부 분할이고, 묻는 건 "이 회로 setup 이 얼마 걸렸나" 다.
   `mode` 열이 setup/hold 를 구분한다
-- **`inference` 는 실행당 한 줄**이다 (회로 `-`). 회로별로 나눌 수 없는 단계(리포트,
-  merge)가 섞여 있고 어차피 전부 초 단위다
+- **`inference` 도 회로마다 한 줄**, 온도 합산이다 (build · train 과 같은 모양).
+  `predict --design PERIC0_Timing_Report --temp 125` 면 그 회로 그 온도 한 줄이다
 - **`wall`** 은 실제 경과, **`cpu`** 는 쓴 CPU 시간 합. `cpu > wall` 이면 스레드를
   쓰는 중, `cpu ≈ wall` 이면 한 코어로 기다리는 중이다
 - **`paths` / `corners`** 가 없으면 "3시간"이 빠른지 느린지 알 수 없다 — 경로 12개의

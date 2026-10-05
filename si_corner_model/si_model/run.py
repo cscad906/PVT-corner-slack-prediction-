@@ -1125,7 +1125,13 @@ def _timing_note(args) -> str:
 
 
 def _hms(sec: float) -> str:
-    """A duration a person can read at a glance: 12.3s, 4m05s, 3h12m."""
+    """A duration a person can read at a glance: 0.032s, 12.3s, 4m05s, 3h12m.
+
+    Milliseconds under a second: a prediction on a small circuit takes tens of
+    them, and rounding that to "0.0s" read as a timer that did not run.
+    """
+    if sec < 1:
+        return "%.3fs" % sec
     if sec < 60:
         return "%.1fs" % sec
     if sec < 3600:
@@ -1155,10 +1161,10 @@ def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
     """Append one line to runs/<tag>/<mode>/_all/runtime.rpt.
 
     Three stages are recorded and no others: `build`, `train` and `inference`
-    (everything after training that produces the deliverable -- predict, the
-    report, bundle, merge -- summed, because each is seconds and which of them
-    wrote which file is a question about this program rather than about the
-    work). `base` and `sweep` are diagnostics and are not recorded.
+    (the time one prediction takes: bringing the model up -- cache, per-path
+    base fit, weights -- and computing the requested corners; writing the
+    report, bundle and merge are file handling and are not counted). `base` and
+    `sweep` are diagnostics and are not recorded.
 
     One line per CIRCUIT, not per temperature: the question asked of it is "how
     long did setup take for this circuit, and how long hold", and a temperature
@@ -1209,8 +1215,13 @@ def _runtime_note(p: dict, stage: str, m: "dict | None", wall: float,
         # not -- and the path is relative to the working directory, which is
         # the other half of "it did not get created". Asked for after a run
         # with --design and --temp appeared to record nothing.
-        print("  [TIME] %s %s: wall %s, cpu %s -> %s"
-              % (stage, (m["design"] if m else "-"), _hms(wall), _hms(cpu), fp),
+        # the temperatures on screen too: a run with --temp 125 should say 125
+        who = (m["design"] if m else "-")
+        if m and str(m.get("temp", "-")) != "-":
+            who += " (%s)" % m["temp"]
+        # one number on screen -- the elapsed time; cpu and the scale are in
+        # the file, where they can be compared across runs
+        print("  [TIME] %s %s: %s -> %s" % (stage, who, _hms(wall), fp),
               flush=True)
     except Exception as e:       # noqa: BLE001 -- see below
         # Deliberately everything, not just OSError. This writes a note about a
@@ -2630,12 +2641,16 @@ def _print_weighting_comparison(y, phi, split, coords, cfg, hid) -> None:
                       for ci in hid])
         print(f"       {w:9s} {e.mean():8.3f} ps  (worst {e.max():7.3f})"
               f"{'  <- in effect' if w == cur else ''}")
-def _trainer(m: dict):
-    if m["task"] == "slew":
+def _trainer_class(task: str):
+    if task == "slew":
         from si_model.tasks.slew.train_slew import Trainer
     else:
         from si_model.tasks.slack.train import Trainer
-    return Trainer(m["cfg"])
+    return Trainer
+
+
+def _trainer(m: dict):
+    return _trainer_class(m["task"])(m["cfg"])
 
 
 def stage_train(m: dict) -> None:
@@ -3385,7 +3400,8 @@ def _write_predict_report(fp, labels, keep, grp, temp, period, weights, f1) -> N
 def stage_predict_at(models: list, p: dict, req: list, name: str,
                      weights: "str | None" = None,
                      period: "float | None" = None,
-                     only: "dict | None" = None) -> "tuple[str, list]":
+                     only: "dict | None" = None,
+                     timer=None) -> "tuple[str, list]":
     """Predict every model at the requested corners and write ONE FILE PER
     TEMPERATURE: runs/<mode>/_all/predict_<temp>_<request>.rpt.
 
@@ -3405,6 +3421,9 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
     answer for, used by `predict --corners hidden`, where the held-out set is
     per model. Cells outside it are left empty -- a corner one circuit held out
     can be a seen corner for another, and the two are not the same number.
+
+    `timer(m, fn)` wraps the one call that produces a model's numbers, so the
+    caller can record how long a prediction takes -- see main().
     """
     import numpy as np
 
@@ -3418,7 +3437,8 @@ def stage_predict_at(models: list, p: dict, req: list, name: str,
             continue
         try:
             (keys, pidx, vals, kinds, (vmin, vmax), n_cycles, truth,
-             per_T) = _predict_one_model(m, req, weights)
+             per_T) = (timer(m, lambda: _predict_one_model(m, req, weights))
+                       if timer else _predict_one_model(m, req, weights))
             sel = None if only is None else only.get(m["name"], set())
             if sel is not None and not sel:
                 # e.g. `--corners hidden` where this model holds nothing out
@@ -3798,24 +3818,16 @@ def main(argv=None):
     # internal stage wrote which file is a question about this program, not
     # about how long the work takes, and a line per stage buried the two that
     # are measured in hours among four that are measured in seconds.
-    inf = {"wall": 0.0, "cpu": 0.0, "what": []}
-
-    def timed_inference(fn, what):
-        t0, c0 = time.time(), memlog.cpu_seconds()
-        try:
-            return fn()
-        finally:
-            inf["wall"] += time.time() - t0
-            inf["cpu"] += memlog.cpu_seconds() - c0
-            if what not in inf["what"]:
-                inf["what"].append(what)
-
-    def flush_inference():
-        if inf["wall"] <= 0:
-            return
-        _runtime_note(p, "inference", None, inf["wall"], inf["cpu"],
-                      " ".join(inf["what"]))
-        inf["wall"], inf["cpu"], inf["what"] = 0.0, 0.0, []
+    #
+    # `inference` is the time ONE prediction takes for a circuit: bring up the
+    # model (the cache, the per-path base fit, the weights) and compute the
+    # requested corners. Measured around that call and nothing else. It used to
+    # be everything after training summed into one line with no circuit on it
+    # -- the report writing, bundle, merge, and the predict stage's second pass
+    # that computes the same numbers again for merge's array file. On the
+    # fixture that was 0.8 s for a prediction that takes 0.7, under a circuit
+    # column reading `-`; asked for instead: the prediction time, on screen,
+    # for the circuit and temperature that was run.
 
     # Per-circuit accumulator for the stages that run per model. The line is
     # written when that circuit's last temperature finishes, not at the end of
@@ -3829,11 +3841,12 @@ def main(argv=None):
             return fn()
         finally:
             a = acc.setdefault((stage, m["design"]),
-                               {"wall": 0.0, "cpu": 0.0, "temps": 0,
+                               {"wall": 0.0, "cpu": 0.0, "temps": 0, "tags": [],
                                 "paths": None, "corners": 0, "extra": extra})
             a["wall"] += time.time() - t0
             a["cpu"] += memlog.cpu_seconds() - c0
             a["temps"] += 1
+            a["tags"].append(str(m["temp"]))
             n_paths, n_corners = _scale_of(m)
             if n_paths is not None:
                 a["paths"] = max(a["paths"] or 0, n_paths)
@@ -3844,7 +3857,8 @@ def main(argv=None):
         if a is None:
             return
         note = dict(a)
-        _runtime_note(p, stage, {"design": design, "temp": "-",
+        _runtime_note(p, stage, {"design": design,
+                                 "temp": ",".join(note["tags"]) or "-",
                                  "_scale": (note["paths"], note["corners"])},
                       note["wall"], note["cpu"], note["extra"], note["temps"])
 
@@ -3852,15 +3866,14 @@ def main(argv=None):
         if stage == "bundle":
             print(f"\n===== bundle: one weight file per circuit =====", flush=True)
             try:
-                timed_inference(lambda: stage_bundle(models), "bundle")
+                stage_bundle(models)
             except Exception as e:
                 failed.append(("bundle", repr(e)))
                 traceback.print_exc()
             continue
         if stage == "merge":
             try:
-                timed_inference(lambda: stage_merge(models, p, args.corners),
-                                "merge")
+                stage_merge(models, p, args.corners)
             except Exception as e:
                 failed.append(("merge", repr(e)))
                 traceback.print_exc()
@@ -3881,10 +3894,9 @@ def main(argv=None):
                     # they carry the per-path truth and error the report sums up
                     for i, m in enumerate(models):
                         try:
-                            timed_inference(
-                                lambda m=m: stage_predict(
-                                    m, args.corners, args.weights),
-                                _timing_note(args))
+                            # untimed: the same numbers as the report pass
+                            # below, computed again for merge's array file
+                            stage_predict(m, args.corners, args.weights)
                         except Exception as e:
                             failed.append((f"predict:{m['name']}", repr(e)))
                             traceback.print_exc()
@@ -3895,11 +3907,22 @@ def main(argv=None):
                     args.design, args.temp, args.at, args.sweep, args.level, req,
                     args.weights, args.period, args.freq,
                     corners=None if (args.at or args.sweep) else args.corners)
-                _, fails = timed_inference(
-                    lambda: stage_predict_at(models, p, req, name, args.weights,
-                                             args.period, only),
-                    _timing_note(args))
+                note = _timing_note(args)
+                # Interpreter start-up, not prediction: importing the trainer
+                # pulls in torch, ~0.8 s here, paid once per process. In the
+                # default flow the array pass above has already paid it; with
+                # --at it would land inside the first model's time. Paid here
+                # instead, so both flows time the same thing.
+                for t in dict.fromkeys(m.get("task", "slack") for m in models):
+                    _trainer_class(t)
+                _, fails = stage_predict_at(
+                    models, p, req, name, args.weights, args.period, only,
+                    timer=lambda m, fn: timed_model("inference", m, fn, note))
                 failed += fails
+                # one line per circuit, its temperatures summed -- the same
+                # shape as build and train
+                for d in dict.fromkeys(m["design"] for m in models):
+                    flush_models("inference", d)
             except Exception as e:
                 failed.append(("predict", repr(e)))
                 traceback.print_exc()
@@ -3938,7 +3961,6 @@ def main(argv=None):
                 failed.append(("base:report", repr(e)))
                 traceback.print_exc()
 
-    flush_inference()
     print("\n" + "=" * 60)
     if failed:
         print(f"done, but {len(failed)} failed:")

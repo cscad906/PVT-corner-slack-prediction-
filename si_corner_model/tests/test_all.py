@@ -1189,7 +1189,7 @@ def test_predict_at_new_corners(real_tree, tmp_path, monkeypatch):
 
 
 def test_predict_writes_the_report_for_the_declared_hidden_corners(
-        real_tree, tmp_path, monkeypatch):
+        real_tree, tmp_path, monkeypatch, capsys):
     """`run.sh predict` with no --at: the same report, for the corners the
     config already holds out.
 
@@ -1230,7 +1230,22 @@ def test_predict_writes_the_report_for_the_declared_hidden_corners(
     monkeypatch.setenv("SI_STAGE", "")            # restored on teardown
     monkeypatch.setattr(run, "REPO_ROOT", str(tmp_path))
     monkeypatch.setattr(run, "load_project", lambda *a, **k: project())
+    capsys.readouterr()
     assert run.main(["predict"]) == 0
+
+    # How long the prediction took, on screen, for the circuit that was run:
+    # one line per circuit, its temperatures named and summed -- not one
+    # `inference -` line for the whole run with the circuit column empty, which
+    # also added up the report writing and the second pass that recomputes the
+    # same numbers for merge's array file.
+    said = [l for l in capsys.readouterr().out.splitlines() if "[TIME]" in l]
+    assert len(said) == 1, said
+    assert "inference boomcore (125,m25):" in said[0], said
+    assert ", cpu" not in said[0], "one number on screen; cpu is in the file"
+    rt = [l.split() for l in open(os.path.join("runs", "setup", "_all",
+                                                "runtime.rpt")).read().splitlines()
+          if " inference " in l]
+    assert len(rt) == 1 and rt[0][3] == "boomcore" and rt[0][5] == "2", rt
 
     req, only = _split_request(models, "hidden")
     for m in models:
