@@ -1790,7 +1790,8 @@ def stage_build(m: dict) -> None:
     build(m["cfg"])
 
 
-def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
+def _save_base_predictions(m, ds, split, native, loo_native, measured,
+                           off=None) -> str:
     """Write the OLS base's own predictions, so the base can be read and
     plotted exactly like a trained run.
 
@@ -1823,6 +1824,27 @@ def _save_base_predictions(m, ds, split, native, loo_native, measured) -> str:
         t_ref = _mode_gap(gap[:, ref]) if gap.shape[1] > ref else None
         if t_ref:
             ncyc = np.where(np.isfinite(gap[:, ref]), gap[:, ref] / t_ref, 0.0)
+            # A corner with no report (base --at) has no clock edges and so no
+            # period of its own. Its value is the fit evaluated there, and the
+            # fit is of slack at the ANCHOR's period whenever the grid was
+            # normalised (period_offset adds nothing back for it) -- or at the
+            # one period every measured corner shares. Record that, so whoever
+            # compares the number knows which clock it is the slack at: on a
+            # DVFS grid 0.52 V comes out at 1.25 ns, the 0.685 V anchor's
+            # period, while a PrimeTime run at 0.52 V is at its own -- and
+            # comparing the two directly differs by N*(T_pt - 1.25 ns) per
+            # path, a clock-plan difference that is not an error at all.
+            have = [clock[c] for c in range(len(clock))
+                    if measured[c] and np.isfinite(clock[c])]
+            same = bool(have) and max(have) - min(have) <= 1e-9
+            for c in range(len(clock)):
+                if measured[c] or np.isfinite(clock[c]):
+                    continue
+                if off is not None or same:
+                    clock[c] = t_ref
+                    print("  [AT] %s has no report and no clock of its own: its "
+                          "slack is quoted at the anchor's period %.4f ns"
+                          % (split.corners[c], t_ref), flush=True)
     keys = [str(x) for x in ds["path_keys"]]
     pidx = ds.get("path_idx")
     pidx = np.arange(len(keys)) if pidx is None else np.asarray(pidx, np.int64)
@@ -2085,7 +2107,7 @@ def stage_base(m: dict, save: bool = False, at: list = None) -> None:
     # not a diagnostic, and it used to sit after the gate: under `all` the
     # stage returned early and `all --save` wrote nothing at all, in silence.
     if save:
-        _save_base_predictions(m, ds, split, native, loo_native, measured)
+        _save_base_predictions(m, ds, split, native, loo_native, measured, off)
     if not _base_loud():
         # The DIAGNOSTICS are what this gate is for: the stage still runs under
         # `all` (the fit is unchanged) but stays quiet, so build is followed

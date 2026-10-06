@@ -456,3 +456,38 @@ def test_base_predicts_a_corner_that_was_never_measured(tmp_path, monkeypatch,
     # column would throw away the data the fit is built on
     stage_base(m, at=[(0.54, "rcmax")])
     assert "already in the grid" in capsys.readouterr().out
+
+
+def test_a_query_corner_records_the_period_its_slack_is_quoted_at(
+        tmp_path, monkeypatch, capsys):
+    """`base --save --at 0.52:rcmax` on a grid measured at one period per
+    voltage. 0.52 V has no report, so no clock of its own; the base fits slack
+    at the anchor's period and adds nothing back for it, so that IS the period
+    its number is the slack at -- and the file must say so. Without it, a
+    comparison against a PrimeTime run at 0.52 V could not tell a clock-plan
+    difference of N * (T_pt - T_anchor) from a prediction error."""
+    import numpy as np
+    from si_model.run import stage_base
+
+    levels = ["rcmax", "cmax"]
+    dvfs = {0.5: 5.952, 0.54: 2.985, 0.6: 1.87, 0.685: 1.25}
+    p = _project(tmp_path, levels, [[0.54, "rcmax"]])
+    cfg_fp = tmp_path / "config.yaml"
+    cfg_fp.write_text(yaml.safe_dump(p), encoding="utf-8")
+    monkeypatch.setenv("SI_STAGE", "base")
+    monkeypatch.chdir(tmp_path)
+    m = expand(load_project(str(cfg_fp)))[0]
+    _write_cache_with_clock(m["cfg"]["data"]["cache"], levels, dvfs)
+    capsys.readouterr()
+    stage_base(m, save=True, at=[(0.52, "rcmax")])
+    out = capsys.readouterr().out
+    assert ("SSPG_0p52V_rcmax has no report and no clock of its own: its slack "
+            "is quoted at the anchor's period 1.2500 ns") in out, out
+
+    z = np.load(os.path.join(m["cfg"]["train"]["out_dir"],
+                             "predictions_base.npz"), allow_pickle=False)
+    lab = [str(c) for c in z["corners"]]
+    clk = dict(zip(lab, np.asarray(z["clock_ns"], float)))
+    assert abs(clk["SSPG_0p52V_rcmax"] - 1.25) < 1e-6, clk
+    # a measured held-out corner keeps its OWN period
+    assert abs(clk["SSPG_0p54V_rcmax"] - 2.985) < 1e-6, clk

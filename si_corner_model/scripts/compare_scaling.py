@@ -265,6 +265,41 @@ def read_pt(fp):
     return {}, read_plain(fp), {}, "plain report_timing"
 
 
+def pt_clock(fp):
+    """(period ns or None, {idx: N}, {key: N}) from a PrimeTime report's own
+    clock edge lines.
+
+    The period PrimeTime ran this corner at, and how many periods each path
+    spans (capture edge minus launch edge, over the period: 1 for single-cycle
+    setup, k for a multicycle, 0 for hold). The period is the most common
+    positive gap, so multicycle paths do not move it. Read from the report, not
+    assumed: the prediction is quoted at whatever period the base was fitted
+    at, and the two have to be put at the same one before they can be compared.
+    """
+    from si_model.parsing.annotated import parse_annotated
+
+    try:
+        paths = parse_annotated(fp)
+    except Exception:                               # noqa: BLE001
+        return None, {}, {}
+    gaps = {}
+    for i, pa in paths.items():
+        g = getattr(pa, "capture_edge", float("nan")) - getattr(
+            pa, "launch_edge", float("nan"))
+        if g == g:
+            gaps[int(i)] = (g, _norm(getattr(pa, "key", "") or ""))
+    pos = [round(g, 6) for g, _ in gaps.values() if g > 1e-12]
+    if not gaps:
+        return None, {}, {}
+    if not pos:                                     # hold: same edge, N = 0
+        return 0.0, {i: 0.0 for i in gaps}, {k: 0.0 for _, k in gaps.values() if k}
+    vals, cnt = np.unique(pos, return_counts=True)
+    T = float(vals[int(np.argmax(cnt))])
+    by_i = {i: g / T for i, (g, _) in gaps.items()}
+    by_k = {k: g / T for g, k in gaps.values() if k}
+    return T, by_i, by_k
+
+
 def read_plain(fp):
     """{start->end: ps} from a report with no FIXED_PATH headers.
 
@@ -380,9 +415,13 @@ def read_npz(runs, design, temp, v, lv, tag="base"):
             mod = np.asarray(z["model_ps"], float)[:, ci]
             ids = ([int(x) for x in np.asarray(z["path_idx"], np.int64)]
                    if "path_idx" in z.files else None)
+            t_q = None
+            if "clock_ns" in z.files:
+                c = float(np.asarray(z["clock_ns"], float)[ci])
+                t_q = c if np.isfinite(c) and c > 0 else None
             return (dict(zip(ids, mod)) if ids else {},
                     dict(zip(keys, mod)),
-                    labels[ci], os.path.join(dsg, str(temp), f))
+                    labels[ci], os.path.join(dsg, str(temp), f), t_q)
     return None
 
 
@@ -404,7 +443,7 @@ def read_predict_rpt(fp, design, v, lv):
         lines = f.read().splitlines()
     cur, want = None, (design or None)
     label, col, spans, idx_s, key_s = None, None, None, None, None
-    by_idx, by_key = {}, {}
+    by_idx, by_key, t_q = {}, {}, None
     for i, line in enumerate(lines):
         if line.startswith("Design: ") or line.startswith("\nDesign: "):
             cur = line.split(":", 1)[1].strip()
@@ -430,6 +469,13 @@ def read_predict_rpt(fp, design, v, lv):
             continue
         if want and not same_design(want, cur):
             continue
+        if line.strip().startswith("clock period (ns)") and t_q is None:
+            # the summary row lines up under the same columns as the paths
+            try:
+                t_q = float(line[col[0]:col[1]].strip())
+            except ValueError:
+                pass
+            continue
         raw_i = line[idx_s[0]:idx_s[1]].strip()
         if not raw_i.lstrip("-").isdigit():
             continue                                 # summary rows, blanks
@@ -444,7 +490,7 @@ def read_predict_rpt(fp, design, v, lv):
         k = _norm(line[key_s[0]:key_s[1]])
         if k:
             by_key.setdefault(k, val)
-    return by_idx, by_key, label
+    return by_idx, by_key, label, t_q
 
 
 def find_predict_rpt(runs, temp, design, v, lv, tag="base"):
@@ -464,11 +510,11 @@ def find_predict_rpt(runs, temp, design, v, lv, tag="base"):
                               -os.path.getmtime(f)))
     for fp in cands:
         try:
-            bi, bk, lab = read_predict_rpt(fp, design, v, lv)
+            bi, bk, lab, t_q = read_predict_rpt(fp, design, v, lv)
         except Exception:                           # noqa: BLE001
             continue
         if bi or bk:
-            return bi, bk, lab, os.path.relpath(fp, runs)
+            return bi, bk, lab, os.path.relpath(fp, runs), t_q
     return None
 
 
@@ -487,7 +533,7 @@ def join(pt, mod):
     def _out(common, a, b, x, how):
         return (np.asarray(x, float),
                 np.asarray([a[k] for k in common], float),
-                np.asarray([b[k] for k in common], float), how)
+                np.asarray([b[k] for k in common], float), how, list(common))
 
     if pt_idx and m_idx:
         common = sorted(set(pt_idx) & set(m_idx))
@@ -660,7 +706,7 @@ def main(argv=None):
                   "predict_%s_%s.rpt under %s"
                   % (v, lv, t, mode, args.source, t, args.source, runs))
             continue
-        m_idx, m_key, label, src = got
+        m_idx, m_key, label, src, t_q = got
         pt_idx, pt_key, k2i, how_read = read_pt(fp)
         if not (pt_idx or pt_key):
             print("  [unreadable] %s -- no slack lines found in it"
@@ -673,11 +719,48 @@ def main(argv=None):
                   % (v, lv, t, max(len(pt_idx), len(pt_key)),
                      max(len(m_idx), len(m_key))))
             continue
-        x, y_pt, y_me, how = j
+        x, y_pt, y_me, how, ids = j
         print("  [matched] %.3fV %-7s %sC %-5s : %d paths joined on %s "
               "(PT read as %s; %s %s <- %s)"
               % (v, lv, t, mode, len(x), how, how_read, LABEL.lower(), label,
                  src))
+        # The SAME clock period on both sides, before anything is compared.
+        # slack(T') = slack(T) + N * (T' - T) is exact -- no delay depends on
+        # the period -- and the two sides need not be at the same T: a corner
+        # with no report, like 0.52 V, is predicted at the anchor's period
+        # (1.25 ns on the company grid), while PrimeTime ran it at its own.
+        # Compared as they come, the gap is N * (T_pt - T_pred) per path: a
+        # clock-plan difference that reads as a prediction error of thousands
+        # of ps. So the prediction is moved to PrimeTime's period, using the
+        # cycle count PrimeTime's own edges give each path.
+        t_pt, n_i, n_k = pt_clock(fp)
+        if t_pt is None:
+            print("            (!) the PT report has no clock edge lines, so its "
+                  "period is unknown: the prediction is left at %s. If the two "
+                  "periods differ the comparison is off by N x the difference."
+                  % ("%.4f ns" % t_q if t_q else "its own period"))
+        elif t_q is None:
+            print("            (!) the prediction does not record its clock "
+                  "period, so it cannot be moved to PT's %.4f ns. Re-run "
+                  "`base --save --at ...` with this version." % t_pt)
+        elif t_pt == 0.0:
+            print("            clock: hold check (launch and capture on the same "
+                  "edge) -- the period does not enter, nothing to move")
+        elif abs(t_pt - t_q) <= 1e-9:
+            print("            clock: both at %.4f ns" % t_pt)
+        else:
+            n_of = n_i if how == "idx" else n_k
+            n = np.asarray([n_of.get(k, np.nan) for k in ids], float)
+            if not np.isfinite(n).all():
+                # a path PT gave no edges for: single-cycle is the usual case,
+                # but say how many were assumed
+                print("            (!) %d path(s) without clock edges in the PT "
+                      "report -- taken as single-cycle" % int((~np.isfinite(n)).sum()))
+                n = np.where(np.isfinite(n), n, 1.0)
+            y_me = y_me + n * (t_pt - t_q) * 1000.0
+            print("            clock: prediction moved from %.4f ns to PT's "
+                  "%.4f ns  (slack + N x %+.4f ns per path, exact)"
+                  % (t_q, t_pt, t_pt - t_q))
         # Mean predicted slack, and nothing else. This corner has no library
         # and so no measurement: there is no error to quote, and a screen full
         # of statistics about the GAP between two predictions reads like
@@ -686,7 +769,7 @@ def main(argv=None):
         print("            mean predicted slack:  PT scaling %8.1f ps    "
               "%s %8.1f ps"
               % (float(np.nanmean(y_pt)), LABEL.lower(), float(np.nanmean(y_me))))
-        pairs.append((v, t, lv, mode, x, y_pt, y_me, how, len(x)))
+        pairs.append((v, t, lv, mode, x, y_pt, y_me, how, len(x), t_pt))
 
     if missing:
         print("\nto produce the missing ones:")
@@ -722,7 +805,7 @@ def main(argv=None):
         return 1
 
     made = []
-    for v, t, lv, mode, x, y_pt, y_me, how, n in pairs:
+    for v, t, lv, mode, x, y_pt, y_me, how, n, t_pt in pairs:
         out_dir = args.out or os.path.join(_runs_for(mode), "_all", "plots")
         try:
             os.makedirs(out_dir)
@@ -733,8 +816,9 @@ def main(argv=None):
             short_name(design or "design"), args.source, mode, t or "temp", v, lv)
         fp = os.path.join(out_dir, name)
         draw(plt, x, y_pt, y_me,
-             "PT scaling vs %s -- %s  %.3fV %s %sC %s   (%d paths)"
-             % (LABEL, short_name(design or ""), v, lv, t or "?", mode, n),
+             "PT scaling vs %s -- %s  %.3fV %s %sC %s%s   (%d paths)"
+             % (LABEL, short_name(design or ""), v, lv, t or "?", mode,
+                ("  @ %.3f ns" % t_pt) if t_pt else "", n),
              "Path (report order)" if "no idx" in how else "Path index",
              fp, LABEL)
         made.append(fp)

@@ -131,7 +131,7 @@ def test_a_plain_report_falls_back_to_the_path_key_not_to_row_order(tmp_path):
 
     m = cs.read_npz(runs, "PERIC0", 125, 0.52, "rcmax")
     j = cs.join((got[0], got[1], got[2]), m[:2])
-    x, y_pt, y_me, how = j
+    x, y_pt, y_me, how, _ = j
     assert len(x) == 4, "only the paths both reported"
     assert "no idx" in how
     assert list(y_pt) == pt
@@ -154,11 +154,11 @@ def test_nothing_measured_is_drawn_even_when_the_file_carries_a_column(tmp_path)
          truth=truth[:, None])
 
     m = cs.read_npz(runs, "PERIC0", 125, 0.5, "rcmax")
-    assert len(m) == 4, "model by idx, model by key, label, source -- no truth"
+    assert len(m) == 5, "model by idx, model by key, label, source, period -- no truth"
     pt = cs.read_pt(str(sc / "SSPG_0p5V_125C_rcmax_setup.rpt"))
     out = cs.join(pt[:3], m[:2])
-    assert len(out) == 4, "x, pt, model, how"
-    x, y_pt, y_me, how = out
+    assert len(out) == 5, "x, pt, model, how, ids"
+    x, y_pt, y_me, how, _ = out
     assert how == "idx"
     assert np.allclose(y_me, truth + 5.0) and np.allclose(y_pt, truth + 40.0)
 
@@ -221,12 +221,12 @@ def test_an_unmeasured_corner_is_read_out_of_the_predict_report(tmp_path):
     with open(os.path.join(alld, "predict_125_at.rpt"), "w") as f:
         f.write("\n".join(body) + "\n")
 
-    bi, bk, lab = cs.read_predict_rpt(os.path.join(alld, "predict_125_at.rpt"),
+    bi, bk, lab, _ = cs.read_predict_rpt(os.path.join(alld, "predict_125_at.rpt"),
                                       "PERIC0", 0.52, "rcmax")
     assert lab == "0.520V_rcmax"
     assert bi == {0: 111.0, 1: 121.0, 2: 131.0}
     # the blank cell belongs to the OTHER column and must not pull 242.0 left
-    bi2, _, lab2 = cs.read_predict_rpt(os.path.join(alld, "predict_125_at.rpt"),
+    bi2, _, lab2, _ = cs.read_predict_rpt(os.path.join(alld, "predict_125_at.rpt"),
                                        "PERIC0", 0.52, "cmax")
     assert lab2 == "0.520V_cmax" and bi2 == {0: 222.0, 2: 242.0}
 
@@ -445,3 +445,99 @@ def test_the_series_is_called_prediction_whatever_made_it(tmp_path, capsys):
     assert sorted(os.listdir(out)) == [
         "ptscale_PERIC0_base_setup_125_0.52V_rcmax.png",
         "ptscale_PERIC0_hidden_setup_125_0.52V_rcmax.png"]
+
+
+def _clocked_report(slacks, period, cycles=None):
+    """A report WITH the clock edge lines PrimeTime prints: the launch edge at
+    0 and the capture edge N periods later (N = 0 for a hold check)."""
+    L = []
+    for i, s in enumerate(slacks):
+        n = 1 if cycles is None else cycles[i]
+        a, b = "u_a/reg_%d_" % i, "u_b/reg_%d_" % i
+        L += ["### FIXED_PATH idx=%d key=%s->%s_#%d" % (i, a, b, i),
+              "  Startpoint: %s" % a, "  Endpoint: %s" % b,
+              "  clock clk (rise edge)                    0.0000    0.0000",
+              "  data arrival time                     1.0000",
+              "  clock clk (rise edge)                 %9.4f %9.4f" % (n * period, n * period),
+              "  data required time                    2.0000",
+              "  slack (MET)                        %9.4f" % (s / 1000.0), ""]
+    return "\n".join(L)
+
+
+def _npz_at(runs, period, model, n_cycles):
+    d = os.path.join(runs, "PERIC0", "125")
+    os.makedirs(d, exist_ok=True)
+    n = len(model)
+    np.savez_compressed(
+        os.path.join(d, "predictions_base.npz"),
+        path_keys=np.asarray(["u_a/reg_%d_->u_b/reg_%d__#%d" % (i, i, i)
+                              for i in range(n)]),
+        path_idx=np.arange(n), corners=np.asarray(["SSPG_0p52V_rcmax"]),
+        seen=np.zeros(1, bool), measured=np.zeros(1, bool),
+        model_ps=np.asarray(model, float)[:, None],
+        truth_ps=np.full((n, 1), np.nan), clock_ns=np.asarray([period]),
+        n_cycles=np.asarray(n_cycles, float))
+
+
+def test_the_prediction_is_moved_to_the_period_primetime_ran_at(tmp_path, capsys):
+    """0.52 V has no report, so its base value is the slack at the ANCHOR's
+    period (1.25 ns on the company grid). PrimeTime ran 0.52 V at its own, read
+    here from the report's clock edges. Compared as they come the gap is
+    N * (T_pt - 1.25 ns) per path -- a clock-plan difference, not an error --
+    so the prediction is moved to PrimeTime's period first, exactly:
+    slack(T') = slack(T) + N * (T' - T), with N from PrimeTime's own edges.
+    A multicycle path moves by N times as much."""
+    sc = tmp_path / "s" / "PERIC0" / "setup"
+    sc.mkdir(parents=True)
+    cycles = [1, 1, 2, 1]
+    (sc / "SSPG_0p52V_125C_rcmax_setup.rpt").write_text(
+        _clocked_report([100.0, 200.0, 300.0, 400.0], 3.0, cycles))
+    runs = str(tmp_path / "runs" / "setup")
+    _npz_at(runs, 1.25, [-1650.0, -1550.0, -3200.0, -1350.0], [1, 1, 2, 1])
+
+    got = {}
+    real = cs.draw
+
+    def spy(plt, x, pt, mine, *a, **k):
+        got["pt"], got["mine"] = list(pt), list(mine)
+        return real(plt, x, pt, mine, *a, **k)
+    cs.draw = spy
+    try:
+        pytest.importorskip("matplotlib")
+        assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"),
+                        "--runs", runs, "--out", str(tmp_path / "p")]) == 0
+    finally:
+        cs.draw = real
+    o = capsys.readouterr().out
+    assert "prediction moved from 1.2500 ns to PT's 3.0000 ns" in o, o
+    # +1750 ps per cycle; the 2-cycle path moves 3500
+    assert np.allclose(got["mine"], [100.0, 200.0, 300.0, 400.0]), got
+
+
+def test_no_move_when_the_periods_agree_or_the_check_is_hold(tmp_path, capsys):
+    for period, n, say in ((1.25, 1, "clock: both at 1.2500 ns"),
+                           (2.0, 0, "hold check")):
+        sc = tmp_path / ("s%g" % period) / "PERIC0" / "setup"
+        sc.mkdir(parents=True)
+        (sc / "SSPG_0p52V_125C_rcmax_setup.rpt").write_text(
+            _clocked_report([10.0, 20.0], period, [n, n]))
+        runs = str(tmp_path / ("r%g" % period) / "runs" / "setup")
+        _npz_at(runs, 1.25, [11.0, 21.0], [n, n])
+        assert cs.main(["--scaling", str(sc.parent), "--runs", runs,
+                        "--list"]) == 0
+        o = capsys.readouterr().out
+        assert say in o, o
+        assert "mean predicted slack:  PT scaling     15.0 ps    prediction     16.0 ps" in o, o
+
+
+def test_a_report_without_clock_edges_is_said_not_guessed(tmp_path, capsys):
+    sc = tmp_path / "s" / "PERIC0" / "setup"
+    sc.mkdir(parents=True)
+    (sc / "SSPG_0p52V_125C_rcmax_setup.rpt").write_text(
+        _fixed_path_report([10.0, 20.0]))
+    runs = str(tmp_path / "runs" / "setup")
+    _npz_at(runs, 1.25, [11.0, 21.0], [1, 1])
+    assert cs.main(["--scaling", str(tmp_path / "s" / "PERIC0"), "--runs", runs,
+                    "--list"]) == 0
+    o = capsys.readouterr().out
+    assert "no clock edge lines" in o and "left at 1.2500 ns" in o, o
