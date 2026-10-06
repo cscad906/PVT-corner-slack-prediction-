@@ -302,3 +302,52 @@ def test_rank_legend_averages_over_every_corner(tmp_path, monkeypatch):
     # |rank err|: 0, 1, 1 -> 0.667; |slack err|: 0, 15, 1 -> 5.333 ps
     assert labels == ["p1: start 1, mean rank True/Prediction 1.7/1.7, "
                       "mean |rank err| 0.7, |err| 5.3 ps"], labels
+
+def test_mode_and_tag_find_the_tree_and_a_miss_says_where_it_is(
+        tmp_path, monkeypatch, capsys):
+    """`--mode hold` / `--tag extrapolation` read the same tree run.sh wrote,
+    from any working directory. And when nothing is found where it looked, it
+    says where the files ARE and the exact command -- it used to tell someone
+    drawing the base to run `predict`, and to name only runs/setup, so hold
+    results made earlier looked missing."""
+    pytest.importorskip("matplotlib")
+    import plot
+
+    proj = tmp_path / "si_corner_model"
+    rng = np.random.RandomState(3)
+    t = rng.rand(10, 2) * 100.0
+    for tree in ("runs/hold", "runs/extrapolation/hold"):
+        _write(str(proj / tree), "PERIC0_Timing_Report", "125", ["A", "B"], t, t + 1)
+        d = proj / tree / "PERIC0_Timing_Report" / "125"
+        os.rename(str(d / "predictions_hidden.npz"), str(d / "predictions_base.npz"))
+    monkeypatch.setattr(plot, "REPO", str(proj))
+    monkeypatch.chdir(tmp_path)                    # not the project directory
+
+    assert plot.main(["--corners", "base"]) == 1   # default: runs/setup
+    err = capsys.readouterr().err
+    assert "run.sh predict" not in err, err
+    assert "python3 scripts/plot.py --corners base --mode hold" in err, err
+    assert ("python3 scripts/plot.py --corners base --tag extrapolation "
+            "--mode hold") in err, err
+
+    out = str(tmp_path / "p")
+    assert plot.main(["--corners", "base", "--mode", "hold", "--out", out,
+                      "--only", "scatter"]) == 0
+    assert len(os.listdir(out)) == 2
+    out2 = str(tmp_path / "q")
+    assert plot.main(["--corners", "base", "--tag", "extrapolation", "--mode",
+                      "hold", "--out", out2, "--only", "scatter"]) == 0
+    assert len(os.listdir(out2)) == 2
+
+
+def test_nothing_anywhere_names_the_command_that_writes_it(tmp_path, monkeypatch,
+                                                           capsys):
+    import plot
+
+    monkeypatch.setattr(plot, "REPO", str(tmp_path / "empty"))
+    monkeypatch.chdir(tmp_path)
+    pytest.importorskip("matplotlib")
+    assert plot.main(["--corners", "base", "--mode", "hold"]) == 1
+    assert "bash scripts/run.sh base --save --mode hold" in capsys.readouterr().err
+    assert plot.main(["--mode", "hold"]) == 1
+    assert "bash scripts/run.sh predict --mode hold" in capsys.readouterr().err

@@ -625,6 +625,17 @@ python3 scripts/plot.py --design MFC_Timing_Report --temp 125
 python3 scripts/plot.py --corners all --only rank         # seen 까지, rank 만
 ```
 
+**hold · 외삽은 `run.sh` 와 같은 옵션으로 고른다** (plot.py 기본은 `runs/setup`):
+
+```csh
+python3 scripts/plot.py --corners base --mode hold                      # runs/hold
+python3 scripts/plot.py --corners base --tag extrapolation              # runs/extrapolation/setup
+python3 scripts/plot.py --corners base --tag extrapolation --mode hold  # runs/extrapolation/hold
+```
+
+못 찾으면 `runs/` 아래 **어디에 그 파일이 있는지 찾아서** 그릴 명령을 찍어준다. 아무 데도
+없을 때만 만드는 명령(`base --save` 또는 `predict`)을 알려준다. 어느 디렉토리에서 돌려도 된다.
+
 **그림은 그 결과 폴더 안에** 들어간다 (`--out` 으로 바꿀 수 있다):
 
 ```

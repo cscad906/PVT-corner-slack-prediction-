@@ -8,7 +8,7 @@
 #   bash scripts/run.sh base                # OLS base check (numpy only, no GPU)
 #   bash scripts/run.sh train --design cpu  # one circuit / one temperature
 #   bash scripts/run.sh predict --corners all
-#   python3 scripts/plot.py                 # scatter (per corner) + rank (per circuit)
+#   python3 scripts/plot.py [--mode hold] [--tag extrapolation] [--corners base]
 #   python3 scripts/compare_scaling.py --scaling <dir> --list
 #                                           # PT voltage scaling vs this model
 #

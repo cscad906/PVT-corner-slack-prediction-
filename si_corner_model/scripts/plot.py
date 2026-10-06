@@ -34,6 +34,8 @@ import sys
 
 import numpy as np
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def _load(fp):
     """(path_keys, corners, seen[C], truth[N,C], model[N,C]) from a npz.
@@ -305,11 +307,62 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
     return [fp]
 
 
+def _say_where(args):
+    """Nothing to draw: say where the files ARE, and what writes them.
+
+    It used to tell everyone to run `predict` -- including someone drawing the
+    base (`--corners base`), whose files `base --save` writes -- and to name
+    only the one tree it had looked in. Files made earlier under runs/hold or
+    runs/extrapolation/hold then looked missing, and the advice was to redo
+    work that was already done.
+    """
+    want = "predictions_%s.npz" % args.corners
+    print("no %s under %s%s." % (want, args.runs,
+                                 "" if not args.design else " for " + args.design),
+          file=sys.stderr)
+    roots = []
+    for base in (os.path.join(REPO, "runs"), "runs"):
+        if not os.path.isdir(base):
+            continue
+        for d, _, files in os.walk(base):
+            if want in files:
+                # <runs tree>/<circuit>/<temp>/<file> -> the tree
+                tree = os.path.dirname(os.path.dirname(d))
+                rel = os.path.relpath(tree, REPO) if tree.startswith(REPO) else tree
+                if rel not in roots:
+                    roots.append(rel)
+    if roots:
+        print("  it IS here -- draw it with:", file=sys.stderr)
+        for r in sorted(roots):
+            parts = r.split(os.sep)
+            flag = ("--mode %s" % parts[1] if len(parts) == 2 and parts[0] == "runs"
+                    else "--tag %s --mode %s" % (parts[1], parts[2])
+                    if len(parts) == 3 and parts[0] == "runs" else "--runs %s" % r)
+            print("    python3 scripts/plot.py %s%s"
+                  % ("" if args.corners == "hidden" else "--corners %s " % args.corners,
+                     flag), file=sys.stderr)
+        return
+    mode = " --mode hold" if args.mode == "hold" else ""
+    tag = " --config <that experiment's config>" if args.tag else ""
+    if args.corners == "base":
+        print("  write it with:  bash scripts/run.sh base --save%s%s"
+              % (mode, tag), file=sys.stderr)
+    else:
+        print("  write it with:  bash scripts/run.sh predict%s%s"
+              % (mode, tag), file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--runs", default="runs/setup",
-                    help="the tree to read (default runs/setup; an experiment "
-                         "is runs/<tag>/<mode>)")
+    ap.add_argument("--runs", default=None,
+                    help="the tree to read. Default runs/<mode>, or "
+                         "runs/<tag>/<mode> with --tag -- the same place run.sh "
+                         "writes to")
+    ap.add_argument("--mode", default="setup", choices=["setup", "hold"],
+                    help="setup (default) or hold, as for run.sh")
+    ap.add_argument("--tag", default=None,
+                    help="an experiment's out.tag, e.g. extrapolation -> "
+                         "runs/extrapolation/<mode>")
     ap.add_argument("--corners", default="hidden",
                     help="which prediction file: hidden (default), seen, all, "
                          "or hidden_from_<circuit> for a borrowed model")
@@ -342,14 +395,16 @@ def main(argv=None):
               "    pip install matplotlib" % e, file=sys.stderr)
         return 1
 
+    if args.runs is None:
+        args.runs = os.path.join("runs", *([args.tag] if args.tag else []),
+                                 args.mode)
+    # run.sh writes under the project, whatever directory this is started from
+    if not os.path.isdir(args.runs) and not os.path.isabs(args.runs) \
+            and os.path.isdir(os.path.join(REPO, args.runs)):
+        args.runs = os.path.join(REPO, args.runs)
     found = _find(args.runs, args.corners, args.design, args.temp)
     if not found:
-        print("no predictions_%s.npz under %s%s.\n"
-              "  Run `bash scripts/run.sh predict` first, or point --runs at the\n"
-              "  right tree (an experiment writes to runs/<tag>/<mode>)."
-              % (args.corners, args.runs,
-                 "" if not args.design else " for " + args.design),
-              file=sys.stderr)
+        _say_where(args)
         return 1
 
     # Beside the predictions by default. With a fixed `plots/` in the working
