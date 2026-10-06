@@ -275,3 +275,30 @@ def test_one_rank_figure_per_circuit_across_its_temperatures(tmp_path, capsys):
     assert plot.main(["--runs", runs, "--out", out2, "--only", "rank",
                       "--temp", "125"]) == 0
     assert os.listdir(out2) == ["rank_PERIC0_125.png"]
+
+
+def test_rank_legend_averages_over_every_corner(tmp_path, monkeypatch):
+    """The legend gives the MEAN rank over the plotted corners (true and
+    predicted) and the mean |rank error|, not the rank at the last corner."""
+    pytest.importorskip("matplotlib")
+    import plot
+    import matplotlib.pyplot as mplt
+
+    # 3 paths x 3 held-out corners; path 0 moves 1 -> 3 -> 1 (true) but the
+    # prediction keeps it at 1, 2, 2.
+    truth = np.array([[1.0, 30.0, 1.0], [2.0, 10.0, 3.0], [3.0, 20.0, 2.0]])
+    model = np.array([[1.0, 15.0, 2.0], [2.0, 10.0, 1.0], [3.0, 20.0, 3.0]])
+    labels = []
+    real = mplt.Axes.plot
+
+    def spy(self, *a, **k):
+        if "label" in k:
+            labels.append(k["label"])
+        return real(self, *a, **k)
+    monkeypatch.setattr(mplt.Axes, "plot", spy)
+    plot.rank_movement(mplt, ["a", "b", "c"], ["X", "Y", "Z"], [False] * 3,
+                       truth, model, "MIF", "", str(tmp_path), n_track=1)
+    # true ranks of path 0: 1, 3, 1 -> mean 1.667; predicted: 1, 2, 2 -> 1.667
+    # |rank err|: 0, 1, 1 -> 0.667; |slack err|: 0, 15, 1 -> 5.333 ps
+    assert labels == ["p1: start 1, mean rank True/Prediction 1.7/1.7, "
+                      "mean |rank err| 0.7, |err| 5.3 ps"], labels

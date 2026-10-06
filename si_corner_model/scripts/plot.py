@@ -268,10 +268,17 @@ def rank_movement(plt, keys, corners, seen, truth, model, circuit, temp,
     for pi, p in enumerate(track):
         c = colors[pi % len(colors)]
         err = float(np.nanmean(np.abs(model[p, ok_cols] - truth[p, ok_cols])))
+        # Rank summaries average over EVERY corner on the axis, not the last
+        # one: the figure is about the whole trajectory, and a single end
+        # point hides a path that wanders off and comes back.
+        mean_true = float(np.nanmean(rt[p]))
+        mean_pred = float(np.nanmean(rp[p]))
+        rank_err = float(np.nanmean(np.abs(rp[p] - rt[p])))
         # "start", not "base": with --corners base the figure is OF the base,
         # and a legend saying "base 12" read as the OLS base's rank
-        lab = ("p%d: start %d, end True/Prediction %d/%d, |err| %.1f ps"
-               % (pi + 1, rt[p, 0], rt[p, -1], rp[p, -1], err))
+        lab = ("p%d: start %d, mean rank True/Prediction %.1f/%.1f, "
+               "mean |rank err| %.1f, |err| %.1f ps"
+               % (pi + 1, rt[p, 0], mean_true, mean_pred, rank_err, err))
         axes[0].plot(range(len(cn)), rt[p], "-o", color=c, ms=5, label=lab)
         axes[1].plot(range(len(cn)), rp[p], "-o", color=c, ms=5)
         for ax, r in ((axes[0], rt), (axes[1], rp)):
